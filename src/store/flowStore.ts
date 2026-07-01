@@ -1,8 +1,9 @@
 import { create } from 'zustand';
-import type { FlowIR, FlowEdge } from '../ir/types';
+import type { FlowIR, FlowEdge, FlowNode, NodeType } from '../ir/types';
 import { fromYaml } from '../ir/fromYaml';
 import { toYaml } from '../ir/toYaml';
 import { layout } from '../ir/layout';
+import { NODE_CONFIG } from '../ui/nodeConfig';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Zustand store: giữ FlowIR (source of truth) + các action cập nhật IR.
@@ -25,6 +26,9 @@ interface FlowState {
   setNodePositions: (positions: Record<string, { x: number; y: number }>) => void;
   // Sửa label / data của 1 node (panel setting).
   updateNode: (id: string, patch: { label?: string; data?: Record<string, unknown> }) => void;
+
+  // Thêm 1 module (node) mới vào flow tại vị trí cho trước; trả về id vừa tạo.
+  addNode: (type: NodeType, position: { x: number; y: number }) => string;
 
   // Nối / xoá dây.
   addEdge: (edge: FlowEdge) => void;
@@ -87,6 +91,33 @@ export const useFlowStore = create<FlowState>((set, get) => ({
         ),
       },
     });
+  },
+
+  addNode: (type, position) => {
+    const { ir } = get();
+    if (!ir) return '';
+    // id duy nhất theo loại: announce_1, announce_2, …
+    const existing = new Set(ir.nodes.map((n) => n.id));
+    let i = 1;
+    let id = `${type}_${i}`;
+    while (existing.has(id)) id = `${type}_${++i}`;
+
+    const node: FlowNode = {
+      id,
+      type,
+      label: `${NODE_CONFIG[type].typeLabel} ${i}`,
+      position,
+      data: { description: '' }, // mô tả rỗng — người dùng nhập ở panel setting
+    };
+    set({
+      ir: {
+        ...ir,
+        meta: { ...ir.meta, updatedAt: new Date().toISOString() },
+        nodes: [...ir.nodes, node],
+      },
+      selectedNodeId: id,
+    });
+    return id;
   },
 
   addEdge: (edge) => {

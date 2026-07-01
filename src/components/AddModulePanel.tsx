@@ -1,0 +1,84 @@
+import { useState } from 'react';
+import { useReactFlow } from '@xyflow/react';
+import { useFlowStore } from '../store/flowStore';
+import { NODE_CONFIG, ADDABLE_NODE_TYPES } from '../ui/nodeConfig';
+import { Icon } from '../ui/icons';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// "Thêm module": nút + mở palette liệt kê các loại node có thể thêm (icon + tên).
+// Click 1 loại -> tạo node mới tại giữa vùng nhìn hiện tại rồi chọn nó (mở setting).
+// Đặt trong <Panel> của React Flow nên dùng được useReactFlow (screenToFlowPosition).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function AddModulePanel() {
+  const [open, setOpen] = useState(false);
+  const addNode = useFlowStore((s) => s.addNode);
+  const nodeCount = useFlowStore((s) => s.ir?.nodes.length ?? 0);
+  const { screenToFlowPosition } = useReactFlow();
+
+  const handleAdd = (type: (typeof ADDABLE_NODE_TYPES)[number]) => {
+    // Giữa vùng nhìn, lệch nhẹ theo số node để các node mới không đè khít lên nhau.
+    const stagger = (nodeCount % 6) * 28;
+    const center = screenToFlowPosition({
+      x: window.innerWidth / 2,
+      y: window.innerHeight / 2,
+    });
+    addNode(type, { x: center.x + stagger, y: center.y + stagger });
+    setOpen(false);
+  };
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 rounded-xl border border-[var(--bk-border)] bg-[var(--bk-surface)] px-3 py-2 text-sm font-semibold text-[var(--bk-text)] shadow-[var(--bk-shadow)] transition hover:border-[var(--bk-accent)] hover:text-[var(--bk-accent)]"
+        aria-expanded={open}
+        aria-haspopup="menu"
+      >
+        <Icon icon="lucide:plus" className="text-[var(--bk-accent)]" width={17} height={17} />
+        <span>Thêm module</span>
+        <Icon
+          icon="lucide:chevron-down"
+          width={15}
+          height={15}
+          className={`text-[var(--bk-text-faint)] transition-transform ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          className="absolute left-0 top-full z-20 mt-2 w-60 overflow-hidden rounded-2xl border border-[var(--bk-border)] bg-[var(--bk-surface)] p-1.5 shadow-[var(--bk-shadow)]"
+        >
+          <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-[var(--bk-text-faint)]">
+            Chọn loại module
+          </div>
+          {ADDABLE_NODE_TYPES.map((type) => {
+            const cfg = NODE_CONFIG[type];
+            return (
+              <button
+                key={type}
+                type="button"
+                role="menuitem"
+                onClick={() => handleAdd(type)}
+                className="flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition hover:bg-[var(--bk-surface-2)]"
+              >
+                <span
+                  className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-[17px]"
+                  style={{
+                    color: cfg.color,
+                    background: `color-mix(in srgb, ${cfg.color} 15%, transparent)`,
+                  }}
+                >
+                  <Icon icon={cfg.icon} />
+                </span>
+                <span className="text-sm font-medium text-[var(--bk-text)]">{cfg.typeLabel}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

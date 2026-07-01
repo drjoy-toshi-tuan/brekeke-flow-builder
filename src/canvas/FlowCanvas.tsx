@@ -2,8 +2,10 @@ import { useCallback, useEffect } from 'react';
 import {
   ReactFlow,
   Background,
+  BackgroundVariant,
   Controls,
   MiniMap,
+  Panel,
   addEdge as rfAddEdge,
   useNodesState,
   useEdgesState,
@@ -13,9 +15,11 @@ import {
   type NodeMouseHandler,
 } from '@xyflow/react';
 import { useFlowStore } from '../store/flowStore';
+import { useTheme } from '../ui/theme';
 import { irToReactFlow } from './irAdapter';
 import { nodeTypes } from './nodes';
 import { edgeTypes } from './edges/DeletableEdge';
+import { AddModulePanel } from '../components/AddModulePanel';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Canvas React Flow. IR là source of truth:
@@ -24,11 +28,15 @@ import { edgeTypes } from './edges/DeletableEdge';
 //     rồi commit các thay đổi có nghĩa (kéo xong, nối, xoá) trở lại IR store.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Cữ (grid) khi kéo node — bắt điểm theo lưới 16px giống n8n, tránh lệch tự do.
+const SNAP_GRID: [number, number] = [16, 16];
+
 export function FlowCanvas() {
   const ir = useFlowStore((s) => s.ir);
   const setNodePositions = useFlowStore((s) => s.setNodePositions);
   const addEdge = useFlowStore((s) => s.addEdge);
   const selectNode = useFlowStore((s) => s.selectNode);
+  const theme = useTheme((s) => s.theme);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -76,18 +84,25 @@ export function FlowCanvas() {
       edges={edges}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
+      colorMode={theme}
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onNodeDragStop={onNodeDragStop}
       onConnect={onConnect}
       onNodeDoubleClick={onNodeDoubleClick}
       onPaneClick={() => selectNode(null)}
+      defaultEdgeOptions={{ type: 'deletable' }}
+      snapToGrid
+      snapGrid={SNAP_GRID}
       selectionOnDrag
       multiSelectionKeyCode={['Meta', 'Shift']}
       fitView
       proOptions={{ hideAttribution: true }}
     >
-      <Background gap={16} />
+      <Panel position="top-left">
+        <AddModulePanel />
+      </Panel>
+      <Background variant={BackgroundVariant.Dots} gap={16} size={1.5} />
       <Controls />
       <MiniMap pannable zoomable />
     </ReactFlow>
