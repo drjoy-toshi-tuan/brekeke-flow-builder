@@ -1,49 +1,54 @@
+import type { CSSProperties } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import type { RFNodeData } from '../irAdapter';
+import type { NodeType } from '../../ir/types';
+import { NODE_CONFIG } from '../../ui/nodeConfig';
+import { Icon } from '../../ui/icons';
 
-// Cấu hình hiển thị cho từng NodeType (màu/icon/nhãn loại).
-export interface BaseNodeConfig {
-  icon: string;
-  typeLabel: string;
-  // Tailwind classes cho viền + nền nhạt để phân biệt loại node.
-  accent: string;
-  showTarget?: boolean; // node 'start' không có input
-  showSource?: boolean; // node 'hangup'/'end' không có output
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Node card. Bố cục theo yêu cầu:
+//   - Bên phải: icon của loại node (tile màu accent).
+//   - Bên trái xếp dọc: (trên) tên LOẠI module · (giữa) TÊN module · (dưới) mô tả.
+// Màu accent lấy từ NODE_CONFIG, truyền vào CSS qua biến --accent.
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Factory tạo 1 component node cho mỗi NodeType từ config — tránh lặp code.
-export function makeNode(config: BaseNodeConfig) {
-  const showTarget = config.showTarget !== false;
-  const showSource = config.showSource !== false;
+// Factory tạo 1 component node cho mỗi NodeType — tránh lặp markup.
+export function makeNode(nodeType: NodeType) {
+  const cfg = NODE_CONFIG[nodeType];
+  const showTarget = cfg.showTarget !== false;
+  const showSource = cfg.showSource !== false;
 
   function TypedNode({ data, selected }: NodeProps) {
     const d = data as unknown as RFNodeData;
-    const subtitle = pickSubtitle(d.nodeData);
+    const description = pickDescription(d.nodeData);
 
     return (
       <div
-        className={[
-          'rounded-lg border-2 bg-white shadow-sm px-3 py-2 min-w-[180px] max-w-[240px]',
-          config.accent,
-          selected ? 'ring-2 ring-offset-1 ring-blue-500' : '',
-        ].join(' ')}
+        className={['bk-node', selected ? 'bk-node--selected' : ''].join(' ')}
+        style={{ '--accent': cfg.color } as CSSProperties}
       >
-        {showTarget && <Handle type="target" position={Position.Top} />}
-        <div className="flex items-center gap-2">
-          <span className="text-lg leading-none">{config.icon}</span>
-          <div className="min-w-0">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-              {config.typeLabel}
+        {showTarget && <Handle type="target" position={Position.Top} className="bk-handle" />}
+
+        <div className="bk-node-body">
+          <div className="bk-node-text">
+            <div className="bk-node-type">{cfg.typeLabel}</div>
+            <div className="bk-node-name" title={d.label}>
+              {d.label}
             </div>
-            <div className="truncate text-sm font-medium text-gray-800">{d.label}</div>
+            {description ? (
+              <div className="bk-node-desc" title={description}>
+                {description}
+              </div>
+            ) : (
+              <div className="bk-node-desc bk-node-desc--empty">Chưa có mô tả</div>
+            )}
+          </div>
+          <div className="bk-node-icon">
+            <Icon icon={cfg.icon} />
           </div>
         </div>
-        {subtitle && (
-          <div className="mt-1 line-clamp-2 border-t border-gray-100 pt-1 text-[11px] text-gray-500">
-            {subtitle}
-          </div>
-        )}
-        {showSource && <Handle type="source" position={Position.Bottom} />}
+
+        {showSource && <Handle type="source" position={Position.Bottom} className="bk-handle" />}
       </div>
     );
   }
@@ -51,11 +56,9 @@ export function makeNode(config: BaseNodeConfig) {
   return TypedNode;
 }
 
-// Lấy một dòng preview ngắn từ data (text/prompt/…) để hiển thị dưới label.
-function pickSubtitle(data: Record<string, unknown>): string | null {
-  for (const key of ['text', 'prompt', 'condition', 'mode', 'to']) {
-    const value = data[key];
-    if (typeof value === 'string' && value.trim()) return value;
-  }
-  return null;
+// Mô tả là field do người dùng tự nhập (data.description). Không lấy text/prompt
+// làm mô tả — những field đó chỉ sửa trong panel setting.
+function pickDescription(data: Record<string, unknown>): string | null {
+  const value = data.description;
+  return typeof value === 'string' && value.trim() ? value : null;
 }

@@ -2,14 +2,16 @@ import { useState } from 'react';
 import {
   BaseEdge,
   EdgeLabelRenderer,
-  getBezierPath,
+  getSmoothStepPath,
   type EdgeProps,
 } from '@xyflow/react';
 import { useFlowStore } from '../../store/flowStore';
+import { Icon } from '../../ui/icons';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Custom edge có nút xoá (thùng rác) hiện khi hover vào dây — hành vi giống n8n.
-// Hover vùng dây (path trong suốt dày) -> hiện icon 🗑 -> click để xoá edge khỏi IR.
+// Dùng smooth-step: dây gấp khúc (chữ S), các góc gấp được bo tròn; nếu source &
+// target thẳng hàng thì tự động là đường thẳng. Hover -> hiện icon xoá edge.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function DeletableEdge({
@@ -27,13 +29,14 @@ export function DeletableEdge({
   const [hovered, setHovered] = useState(false);
   const removeEdge = useFlowStore((s) => s.removeEdge);
 
-  const [edgePath, labelX, labelY] = getBezierPath({
+  const [edgePath, labelX, labelY] = getSmoothStepPath({
     sourceX,
     sourceY,
     sourcePosition,
     targetX,
     targetY,
     targetPosition,
+    borderRadius: 14, // bo tròn tại các điểm gấp khúc
   });
 
   return (
@@ -70,7 +73,7 @@ export function DeletableEdge({
               removeEdge(id);
             }}
           >
-            🗑
+            <Icon icon="lucide:trash-2" />
           </button>
         </div>
       </EdgeLabelRenderer>

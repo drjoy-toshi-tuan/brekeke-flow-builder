@@ -3,6 +3,7 @@ import { GoogleLogin } from '@react-oauth/google';
 import { useAuth } from './useAuth';
 import { ALLOWED_DOMAIN, GOOGLE_CLIENT_ID } from './config';
 import { decodeJwt } from './jwt';
+import { Icon } from '../ui/icons';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Màn hình đăng nhập. Chỉ tài khoản @drjoy.jp (claim hd) và email_verified mới vào.
@@ -14,12 +15,14 @@ export function LoginScreen() {
   const [error, setError] = useState<string | null>(null);
 
   return (
-    <div className="flex h-full items-center justify-center bg-gradient-to-br from-slate-50 to-slate-200 p-6">
-      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 shadow-lg">
+    <div className="flex h-full items-center justify-center bg-[var(--bk-bg)] p-6">
+      <div className="w-full max-w-md rounded-2xl border border-[var(--bk-border)] bg-[var(--bk-surface)] p-8 shadow-[var(--bk-shadow)]">
         <div className="mb-6 text-center">
-          <div className="text-3xl">📞</div>
-          <h1 className="mt-2 text-xl font-bold text-slate-800">AI電話 Flow Builder</h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--bk-accent-soft)] text-3xl text-[var(--bk-accent)]">
+            <Icon icon="lucide:phone" />
+          </div>
+          <h1 className="mt-3 text-xl font-bold text-[var(--bk-text)]">AI電話 Flow Builder</h1>
+          <p className="mt-1 text-sm text-[var(--bk-text-muted)]">
             Đăng nhập bằng tài khoản <span className="font-medium">@{ALLOWED_DOMAIN}</span>
           </p>
         </div>

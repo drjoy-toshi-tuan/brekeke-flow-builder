@@ -1,6 +1,45 @@
 @import 'tailwindcss';
 @import '@xyflow/react/dist/style.css';
 
+/* Bật dark mode dạng class (.dark trên <html>) thay vì chỉ theo prefers-color-scheme. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Design tokens — 1 nguồn màu duy nhất cho cả Light & Dark mode.
+   Brand accent: cam (#ff7a1a) dùng cho chrome của app; node giữ màu theo loại.
+   ────────────────────────────────────────────────────────────────────────── */
+:root {
+  --bk-accent: #ff7a1a;
+  --bk-accent-soft: rgba(255, 122, 26, 0.14);
+  --bk-bg: #eef1f6;
+  --bk-surface: #ffffff;
+  --bk-surface-2: #f6f8fb;
+  --bk-border: #e2e8f0;
+  --bk-text: #1e293b;
+  --bk-text-muted: #64748b;
+  --bk-text-faint: #94a3b8;
+  --bk-canvas: #f4f6fa;
+  --bk-dot: #cbd5e1;
+  --bk-edge: #94a3b8;
+  --bk-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 6px 20px rgba(15, 23, 42, 0.08);
+}
+
+.dark {
+  --bk-accent: #ff8c30;
+  --bk-accent-soft: rgba(255, 122, 26, 0.18);
+  --bk-bg: #0f1117;
+  --bk-surface: #1a1c23;
+  --bk-surface-2: #22252e;
+  --bk-border: #2c2f3a;
+  --bk-text: #e8e8ec;
+  --bk-text-muted: #9a9aa2;
+  --bk-text-faint: #6f6f77;
+  --bk-canvas: #14161d;
+  --bk-dot: #2b2e38;
+  --bk-edge: #4b5060;
+  --bk-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
 html,
 body,
 #root {
@@ -11,9 +50,160 @@ body,
 body {
   font-family: system-ui, -apple-system, 'Segoe UI', 'Hiragino Kaku Gothic ProN',
     'Noto Sans JP', sans-serif;
+  background: var(--bk-bg);
+  color: var(--bk-text);
 }
 
-/* Toolbar nổi trên dây (custom edge có nút xoá) */
+/* ──────────────────────────────────────────────────────────────────────────
+   Canvas React Flow — nền + lưới + controls theo token (đồng bộ 2 theme).
+   ────────────────────────────────────────────────────────────────────────── */
+.react-flow {
+  background: var(--bk-canvas);
+}
+.react-flow__background {
+  color: var(--bk-dot);
+}
+
+/* Dây nối: dùng token màu; nhánh được chọn/hover đổi sang accent. */
+.react-flow__edge-path {
+  stroke: var(--bk-edge);
+  stroke-width: 2;
+  transition: stroke 0.15s ease;
+}
+.react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--bk-accent);
+}
+.react-flow__arrowhead {
+  fill: var(--bk-edge);
+}
+
+/* Controls + MiniMap: bo góc, đổ bóng, nền theo token. */
+.react-flow__controls {
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: var(--bk-shadow);
+  border: 1px solid var(--bk-border);
+}
+.react-flow__controls-button {
+  background: var(--bk-surface);
+  border-bottom: 1px solid var(--bk-border);
+  color: var(--bk-text-muted);
+}
+.react-flow__controls-button:hover {
+  background: var(--bk-surface-2);
+  color: var(--bk-accent);
+}
+.react-flow__controls-button svg {
+  fill: currentColor;
+}
+.react-flow__minimap {
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: var(--bk-shadow);
+  border: 1px solid var(--bk-border);
+  background: var(--bk-surface);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Node card — icon bên phải, (loại · tên · mô tả) xếp dọc bên trái.
+   Màu accent riêng theo loại node truyền qua biến --accent (inline style).
+   ────────────────────────────────────────────────────────────────────────── */
+.bk-node {
+  position: relative;
+  width: 244px;
+  border-radius: 14px;
+  background: var(--bk-surface);
+  border: 1px solid var(--bk-border);
+  box-shadow: var(--bk-shadow);
+  padding: 12px 14px 12px 16px;
+  overflow: hidden;
+  transition: box-shadow 0.18s ease, border-color 0.18s ease, transform 0.12s ease;
+}
+.bk-node::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--accent);
+}
+.bk-node:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--bk-border));
+}
+.bk-node--selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent), var(--bk-shadow);
+}
+.bk-node-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.bk-node-text {
+  min-width: 0;
+  flex: 1;
+}
+.bk-node-type {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--accent);
+  line-height: 1.2;
+}
+.bk-node-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--bk-text);
+  line-height: 1.3;
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bk-node-desc {
+  font-size: 11.5px;
+  color: var(--bk-text-muted);
+  line-height: 1.35;
+  margin-top: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.bk-node-desc--empty {
+  color: var(--bk-text-faint);
+  font-style: italic;
+}
+.bk-node-icon {
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 21px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* Handle (điểm nối dây) — chấm tròn viền accent. */
+.react-flow__handle.bk-handle {
+  width: 10px;
+  height: 10px;
+  background: var(--bk-surface);
+  border: 2px solid var(--accent);
+  border-radius: 9999px;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Toolbar nổi trên dây (custom edge có nút xoá).
+   ────────────────────────────────────────────────────────────────────────── */
 .edge-toolbar {
   position: absolute;
   display: flex;
@@ -22,16 +212,15 @@ body {
   font-size: 11px;
   pointer-events: all;
 }
-
 .edge-label {
-  background: #fff;
-  padding: 0 4px;
-  border-radius: 4px;
-  border: 1px solid #e5e7eb;
-  color: #475569;
+  background: var(--bk-surface);
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--bk-border);
+  color: var(--bk-text-muted);
   white-space: nowrap;
+  font-weight: 500;
 }
-
 .edge-trash {
   display: inline-flex;
   align-items: center;
@@ -40,21 +229,20 @@ body {
   height: 22px;
   line-height: 1;
   font-size: 12px;
-  background: #fff;
-  border: 1px solid #e5e7eb;
+  color: var(--bk-text-muted);
+  background: var(--bk-surface);
+  border: 1px solid var(--bk-border);
   border-radius: 9999px;
   cursor: pointer;
-  transition: opacity 0.15s ease;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
 .edge-trash:hover {
   background: #fee2e2;
   border-color: #fca5a5;
+  color: #dc2626;
 }
-
-/* line-clamp cho subtitle node (không phụ thuộc plugin) */
-.line-clamp-2 {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+.dark .edge-trash:hover {
+  background: rgba(220, 38, 38, 0.2);
+  border-color: rgba(248, 113, 113, 0.5);
+  color: #f87171;
 }

@@ -1,9 +1,15 @@
 import { useFlowStore } from '../store/flowStore';
+import { NODE_CONFIG } from '../ui/nodeConfig';
+import { Icon } from '../ui/icons';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Panel setting (phase 1): sửa `label` và các field chuỗi trong `data`.
-// Mở khi double-click node. Mọi thay đổi cập nhật thẳng vào IR store.
+// Panel setting: sửa tên module (label), MÔ TẢ (data.description — hiện trên node)
+// và các field chuỗi khác trong `data`. Mở khi double-click node.
+// Mọi thay đổi cập nhật thẳng vào IR store.
 // ─────────────────────────────────────────────────────────────────────────────
+
+const inputClass =
+  'mt-1 w-full rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-3 py-2 text-sm text-[var(--bk-text)] outline-none transition focus:border-[var(--bk-accent)]';
 
 export function NodeSettingsPanel() {
   const ir = useFlowStore((s) => s.ir);
@@ -14,54 +20,87 @@ export function NodeSettingsPanel() {
   const node = ir?.nodes.find((n) => n.id === selectedNodeId);
   if (!node) return null;
 
-  // Chỉ cho sửa các field data có giá trị chuỗi (đủ cho phase demo).
+  const cfg = NODE_CONFIG[node.type];
+  const description = typeof node.data.description === 'string' ? node.data.description : '';
+
+  // Field data chuỗi khác (bỏ 'description' vì đã có ô riêng bên trên).
   const editableEntries = Object.entries(node.data).filter(
-    ([, v]) => typeof v === 'string',
+    ([key, v]) => key !== 'description' && typeof v === 'string',
   ) as [string, string][];
 
   return (
-    <aside className="absolute right-0 top-0 z-10 flex h-full w-80 flex-col border-l border-slate-200 bg-white shadow-xl">
-      <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-            {node.type}
+    <aside className="absolute right-0 top-0 z-10 flex h-full w-80 flex-col border-l border-[var(--bk-border)] bg-[var(--bk-surface)] shadow-[var(--bk-shadow)]">
+      <header className="flex items-center justify-between border-b border-[var(--bk-border)] px-4 py-3">
+        <div className="flex items-center gap-3">
+          <span
+            className="flex h-9 w-9 flex-none items-center justify-center rounded-xl text-lg"
+            style={{
+              color: cfg.color,
+              background: `color-mix(in srgb, ${cfg.color} 15%, transparent)`,
+            }}
+          >
+            <Icon icon={cfg.icon} />
+          </span>
+          <div>
+            <div
+              className="text-[11px] font-bold uppercase tracking-wide"
+              style={{ color: cfg.color }}
+            >
+              {cfg.typeLabel}
+            </div>
+            <div className="text-sm font-semibold text-[var(--bk-text)]">{node.id}</div>
           </div>
-          <div className="text-sm font-semibold text-slate-800">Node: {node.id}</div>
         </div>
         <button
           type="button"
-          className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--bk-text-faint)] transition hover:bg-[var(--bk-surface-2)] hover:text-[var(--bk-text)]"
           onClick={() => selectNode(null)}
           aria-label="Đóng"
         >
-          ✕
+          <Icon icon="lucide:x" width={16} height={16} />
         </button>
       </header>
 
       <div className="flex-1 space-y-4 overflow-y-auto p-4">
         <label className="block">
-          <span className="text-xs font-medium text-slate-600">Label</span>
+          <span className="text-xs font-medium text-[var(--bk-text-muted)]">Tên module</span>
           <input
-            className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            className={inputClass}
             value={node.label}
             onChange={(e) => updateNode(node.id, { label: e.target.value })}
           />
         </label>
 
-        {editableEntries.length === 0 ? (
-          <p className="text-xs text-slate-400">Node này không có field data để sửa.</p>
-        ) : (
-          editableEntries.map(([key, value]) => (
-            <label key={key} className="block">
-              <span className="text-xs font-medium text-slate-600">{key}</span>
-              <textarea
-                className="mt-1 w-full resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-                rows={key === 'text' || key === 'prompt' ? 3 : 1}
-                value={value}
-                onChange={(e) => updateNode(node.id, { data: { [key]: e.target.value } })}
-              />
-            </label>
-          ))
+        <label className="block">
+          <span className="text-xs font-medium text-[var(--bk-text-muted)]">Mô tả</span>
+          <textarea
+            className={`${inputClass} resize-y`}
+            rows={3}
+            placeholder="Mô tả ngắn hiển thị trên node…"
+            value={description}
+            onChange={(e) => updateNode(node.id, { data: { description: e.target.value } })}
+          />
+        </label>
+
+        {editableEntries.length > 0 && (
+          <div className="border-t border-[var(--bk-border)] pt-3">
+            <div className="mb-2 text-[10px] font-bold uppercase tracking-wide text-[var(--bk-text-faint)]">
+              Tham số
+            </div>
+            <div className="space-y-3">
+              {editableEntries.map(([key, value]) => (
+                <label key={key} className="block">
+                  <span className="text-xs font-medium text-[var(--bk-text-muted)]">{key}</span>
+                  <textarea
+                    className={`${inputClass} resize-y`}
+                    rows={key === 'text' || key === 'prompt' ? 3 : 1}
+                    value={value}
+                    onChange={(e) => updateNode(node.id, { data: { [key]: e.target.value } })}
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
         )}
       </div>
     </aside>
