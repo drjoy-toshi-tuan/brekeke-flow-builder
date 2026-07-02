@@ -35,7 +35,7 @@ function FlowApp() {
   return (
     <div className="flex h-full flex-col">
       <Toolbar />
-      <main className="relative flex-1">
+      <main className="relative flex-1 overflow-hidden">
         <ReactFlowProvider>
           <FlowCanvas />
           <NodeSettingsPanel />
