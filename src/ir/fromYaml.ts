@@ -90,13 +90,15 @@ export function fromYaml(text: string): FlowIR {
       if (!STRUCTURAL_KEYS.has(key)) data[key] = value;
     }
 
-    nodes.push({
+    const nodeType = coerceNodeType(raw.type);
+    const node: FlowNode = {
       id: raw.id,
-      type: coerceNodeType(raw.type),
+      type: nodeType,
       label: raw.id,
       position: { x: 0, y: 0 }, // ELK sẽ điền lại ở layout.ts
       data,
-    });
+    };
+    nodes.push(node);
 
     // next -> edge default
     if (typeof raw.next === 'string') {
@@ -108,19 +110,25 @@ export function fromYaml(text: string): FlowIR {
       });
     }
 
-    // branches -> mỗi nhánh là 1 edge
+    // branches -> mỗi nhánh là 1 edge; đồng thời dựng danh sách nhánh tự do (data.branches)
+    // để các chấm nối ở đáy node hiển thị đúng số lượng kể cả khi chưa nối dây.
     if (Array.isArray(raw.branches)) {
+      const dataBranches: { id: string; value: string }[] = [];
       raw.branches.forEach((branch, index) => {
         if (branch.when && branch.to) {
+          const handle = `b${index}`;
+          dataBranches.push({ id: handle, value: branch.when });
           edges.push({
-            id: edgeId(raw.id, branch.to, `b${index}`),
+            id: edgeId(raw.id, branch.to, handle),
             source: raw.id,
             target: branch.to,
-            sourceHandle: `b${index}`,
+            sourceHandle: handle,
             condition: branch.when,
             label: branch.when,
           });
         } else if (branch.default) {
+          // Nhánh mặc định (else) -> handle 'default', giá trị rỗng.
+          dataBranches.push({ id: 'default', value: '' });
           edges.push({
             id: edgeId(raw.id, branch.default, 'default'),
             source: raw.id,
@@ -130,6 +138,9 @@ export function fromYaml(text: string): FlowIR {
           });
         }
       });
+      if (nodeType === 'condition' && dataBranches.length > 0) {
+        node.data.branches = dataBranches;
+      }
     }
   }
 

@@ -1,5 +1,6 @@
 import type { Edge, Node } from '@xyflow/react';
 import type { FlowIR, FlowNode, NodeType } from '../ir/types';
+import { sourceHandlesFor, BRANCH_SCHEMA } from '../ui/nodeSchema';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Adapter 2 chiều giữa IR và React Flow. 2 hàm thuần, KHÔNG chứa logic UI.
@@ -38,47 +39,54 @@ function conditionOutputLabel(raw?: string): string | undefined {
 }
 
 export function irToReactFlow(ir: FlowIR): { nodes: Node[]; edges: Edge[] } {
-  // Gom các nhánh output cho node 'condition' (mỗi edge đi ra = 1 handle ở đáy).
-  const branchHandles = new Map<string, { id: string; label?: string }[]>();
+  // Handle output ở đáy mỗi node suy ra từ schema/nhánh (không còn phụ thuộc edge)
+  // -> thêm/bớt nhánh trong panel làm số chấm nối tăng/giảm ngay, kể cả khi chưa nối dây.
+  const handlesByNode = new Map<string, { id: string; label?: string }[]>();
   for (const n of ir.nodes) {
-    if (n.type !== 'condition') continue;
-    const outs = ir.edges.filter((e) => e.source === n.id);
-    branchHandles.set(
-      n.id,
-      outs.map((e, i) => ({
-        id: e.sourceHandle ?? `b${i}`,
-        label: conditionOutputLabel(e.condition ?? e.label),
-      })),
-    );
+    handlesByNode.set(n.id, sourceHandlesFor(n));
   }
 
-  const nodes: Node[] = ir.nodes.map((n) => ({
-    id: n.id,
-    type: n.type, // khớp key trong nodeTypes map
-    position: n.position,
-    data: {
-      label: n.label,
-      nodeType: n.type,
-      nodeData: n.data,
-      ...(branchHandles.has(n.id) ? { sourceHandles: branchHandles.get(n.id) } : {}),
-    } satisfies RFNodeData,
-  }));
+  const nodes: Node[] = ir.nodes.map((n) => {
+    const handles = handlesByNode.get(n.id) ?? [];
+    return {
+      id: n.id,
+      type: n.type, // khớp key trong nodeTypes map
+      position: n.position,
+      data: {
+        label: n.label,
+        nodeType: n.type,
+        nodeData: n.data,
+        // Gắn sourceHandles khi node có >1 output để BaseNode chia đều các chấm;
+        // node 1 output dùng chấm mặc định (id 'default').
+        ...(handles.length > 1 ? { sourceHandles: handles } : {}),
+      } satisfies RFNodeData,
+    };
+  });
 
-  const conditionIds = new Set(branchHandles.keys());
-  const edges: Edge[] = ir.edges.map((e) => ({
-    id: e.id,
-    source: e.source,
-    target: e.target,
-    // Chỉ node 'condition' có nhiều handle nên mới cần gắn sourceHandle để dây
-    // xuất phát đúng chấm; node thường dùng 1 handle mặc định (bỏ sourceHandle).
-    sourceHandle: conditionIds.has(e.source) ? e.sourceHandle : undefined,
-    type: 'deletable',
-    // Node condition: chỉ hiện giá trị output (1/2/default…). Node khác giữ label sẵn có.
-    label: conditionIds.has(e.source) ? conditionOutputLabel(e.condition ?? e.label) : e.label,
-    data: { condition: e.condition } satisfies RFEdgeData,
-  }));
+  const edges: Edge[] = ir.edges.map((e) => {
+    const handles = handlesByNode.get(e.source) ?? [];
+    // Nhãn trên dây = nhãn của handle mà dây xuất phát (FAILED/NEXT hoặc giá trị nhánh).
+    const handleLabel =
+      handles.length > 1
+        ? handles.find((h) => h.id === (e.sourceHandle ?? 'default'))?.label
+        : undefined;
+    return {
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      sourceHandle: e.sourceHandle ?? undefined,
+      type: 'deletable',
+      label: handleLabel ?? conditionOutputLabel(e.condition ?? e.label),
+      data: { condition: e.condition } satisfies RFEdgeData,
+    };
+  });
 
   return { nodes, edges };
+}
+
+// Loại node có nhánh tự do (condition/script) — dùng ở nơi cần biết edge mang condition.
+export function isEditableBranchNode(type: NodeType): boolean {
+  return BRANCH_SCHEMA[type].mode === 'editable';
 }
 
 export function reactFlowToIr(nodes: Node[], edges: Edge[], prev: FlowIR): FlowIR {
