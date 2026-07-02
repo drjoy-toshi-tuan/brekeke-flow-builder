@@ -18,8 +18,8 @@ export const NODE_CONFIG: Record<NodeType, NodeVisual> = {
   announce: { icon: 'lucide:volume-2', typeLabel: 'Announce', color: '#0ea5e9' },
   input: { icon: 'mingcute:voice-fill', typeLabel: 'Input', color: '#8b5cf6' },
   condition: { icon: 'lucide:git-fork', typeLabel: 'Condition', color: '#f59e0b' },
-  script: { icon: 'lucide:file-code', typeLabel: 'Script', color: '#22c55e' },
-  llm: { icon: 'lucide:bot', typeLabel: 'LLM', color: '#d946ef' },
+  script: { icon: 'tabler:file-code-filled', typeLabel: 'Script', color: '#22c55e' },
+  llm: { icon: 'mingcute:ai-fill', typeLabel: 'LLM', color: '#d946ef' },
   transfer: { icon: 'lucide:phone-forwarded', typeLabel: 'Transfer', color: '#06b6d4' },
   hangup: { icon: 'lucide:phone-off', typeLabel: 'Hangup', color: '#f43f5e', showSource: false },
 };
