@@ -3,6 +3,7 @@ import { fromYaml } from './fromYaml';
 import { toYaml } from './toYaml';
 import { parse } from 'yaml';
 import { SYNTHETIC_START_ID } from './types';
+import { defaultDataFor, sourceHandlesFor, readBranches } from '../ui/nodeSchema';
 
 const SAMPLE = `
 flow:
@@ -102,5 +103,60 @@ describe('toYaml round-trip', () => {
     expect(classify.branches).toHaveLength(3);
     expect(classify.branches[0]).toEqual({ when: "input == '1'", to: 'reserve' });
     expect(classify.branches[2]).toEqual({ default: 'fallback' });
+  });
+});
+
+describe('nhánh (branch) model mới', () => {
+  it('fromYaml dựng data.branches cho node condition (kèm nhánh default)', () => {
+    const ir = fromYaml(SAMPLE);
+    const classify = ir.nodes.find((n) => n.id === 'classify');
+    const branches = readBranches(classify!.data);
+    expect(branches).toEqual([
+      { id: 'b0', value: "input == '1'" },
+      { id: 'b1', value: "input == '2'" },
+      { id: 'default', value: '' },
+    ]);
+  });
+
+  it('sourceHandlesFor: condition theo data.branches, hangup không có, input FAILED+NEXT', () => {
+    const ir = fromYaml(SAMPLE);
+    const classify = ir.nodes.find((n) => n.id === 'classify')!;
+    expect(sourceHandlesFor(classify).map((h) => h.id)).toEqual(['b0', 'b1', 'default']);
+
+    const end = ir.nodes.find((n) => n.id === 'end')!;
+    expect(sourceHandlesFor(end)).toEqual([]);
+
+    const input = ir.nodes.find((n) => n.id === 'main_menu')!;
+    expect(sourceHandlesFor(input).map((h) => h.label)).toEqual(['FAILED', 'NEXT']);
+  });
+
+  it('toYaml lấy điều kiện từ data.branches (round-trip qua sửa giá trị nhánh)', () => {
+    const ir = fromYaml(SAMPLE);
+    // Giả lập panel sửa giá trị nhánh b0 -> biểu thức khác.
+    const classify = ir.nodes.find((n) => n.id === 'classify')!;
+    classify.data.branches = [
+      { id: 'b0', value: "input == '9'" },
+      { id: 'b1', value: "input == '2'" },
+      { id: 'default', value: '' },
+    ];
+    const parsed = parse(toYaml(ir)) as {
+      flow: { nodes: Array<{ id: string; branches?: Array<{ when?: string; default?: string }> }> };
+    };
+    const out = parsed.flow.nodes.find((n) => n.id === 'classify')!;
+    expect(out.branches![0]).toEqual({ when: "input == '9'", to: 'reserve' });
+    expect(out.branches![2]).toEqual({ default: 'fallback' });
+  });
+
+  it('defaultDataFor: seed tham số mặc định + 1 nhánh cho node editable', () => {
+    const input = defaultDataFor('input');
+    expect(input.inputType).toBe('STT');
+    expect(input.retryCount).toBe('2');
+    expect(input.branches).toBeUndefined(); // input là fixed, không có nhánh tự do
+
+    const script = defaultDataFor('script');
+    expect(script.branches).toEqual([{ id: 'b0', value: '' }]);
+
+    const start = defaultDataFor('start');
+    expect(start.acceptanceTime).toBe('yes');
   });
 });

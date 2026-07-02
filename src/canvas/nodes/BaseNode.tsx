@@ -100,7 +100,8 @@ export function makeNode(nodeType: NodeType) {
               />
             ))
           ) : (
-            <Handle type="source" position={Position.Bottom} className="bk-handle" />
+            // 1 output: chấm mặc định id 'default' (khớp sourceHandle của edge `next`).
+            <Handle id="default" type="source" position={Position.Bottom} className="bk-handle" />
           ))}
       </div>
     );

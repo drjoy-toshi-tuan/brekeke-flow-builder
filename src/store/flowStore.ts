@@ -4,6 +4,7 @@ import { fromYaml } from '../ir/fromYaml';
 import { toYaml } from '../ir/toYaml';
 import { layout } from '../ir/layout';
 import { NODE_CONFIG } from '../ui/nodeConfig';
+import { defaultDataFor, readBranches, type DataBranch } from '../ui/nodeSchema';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Zustand store: giữ FlowIR (source of truth) + các action cập nhật IR.
@@ -38,6 +39,11 @@ interface FlowState {
   // Nối / xoá dây.
   addEdge: (edge: FlowEdge) => void;
   removeEdge: (id: string) => void;
+
+  // Nhánh tự do (condition/script): thêm / sửa giá trị / xoá 1 nhánh.
+  addBranch: (nodeId: string) => void;
+  updateBranch: (nodeId: string, branchId: string, value: string) => void;
+  removeBranch: (nodeId: string, branchId: string) => void;
 
   // Chọn node để mở panel setting (double-click).
   selectNode: (id: string | null) => void;
@@ -116,7 +122,8 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       type,
       label: `${NODE_CONFIG[type].typeLabel} ${i}`,
       position,
-      data: { description: '' }, // mô tả rỗng — người dùng nhập ở panel setting
+      // Tham số + nhánh mặc định theo loại node (xem nodeSchema.defaultDataFor).
+      data: defaultDataFor(type),
     };
     set({
       ir: {
@@ -165,4 +172,81 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   },
 
   selectNode: (id) => set({ selectedNodeId: id }),
+
+  addBranch: (nodeId) => {
+    const { ir } = get();
+    if (!ir) return;
+    set({
+      ir: {
+        ...ir,
+        meta: { ...ir.meta, updatedAt: new Date().toISOString() },
+        nodes: ir.nodes.map((n) => {
+          if (n.id !== nodeId) return n;
+          const branches = readBranches(n.data);
+          // id nhánh duy nhất theo node: b<max+1> để không đụng handle/edge cũ.
+          const used = new Set(branches.map((b) => b.id));
+          let i = branches.length;
+          let id = `b${i}`;
+          while (used.has(id)) id = `b${++i}`;
+          const next: DataBranch[] = [...branches, { id, value: '' }];
+          return { ...n, data: { ...n.data, branches: next } };
+        }),
+      },
+    });
+  },
+
+  updateBranch: (nodeId, branchId, value) => {
+    const { ir } = get();
+    if (!ir) return;
+    set({
+      ir: {
+        ...ir,
+        meta: { ...ir.meta, updatedAt: new Date().toISOString() },
+        nodes: ir.nodes.map((n) => {
+          if (n.id !== nodeId) return n;
+          const branches = readBranches(n.data).map((b) =>
+            b.id === branchId ? { ...b, value } : b,
+          );
+          return { ...n, data: { ...n.data, branches } };
+        }),
+      },
+      // Đồng bộ giá trị nhánh -> condition của các edge xuất phát từ handle này
+      // (để export YAML giữ đúng biểu thức when).
+    });
+    const cur = get().ir;
+    if (!cur) return;
+    set({
+      ir: {
+        ...cur,
+        edges: cur.edges.map((e) =>
+          e.source === nodeId && (e.sourceHandle ?? 'default') === branchId
+            ? { ...e, condition: value || undefined, label: value || undefined }
+            : e,
+        ),
+      },
+    });
+  },
+
+  removeBranch: (nodeId, branchId) => {
+    const { ir } = get();
+    if (!ir) return;
+    set({
+      ir: {
+        ...ir,
+        meta: { ...ir.meta, updatedAt: new Date().toISOString() },
+        nodes: ir.nodes.map((n) => {
+          if (n.id !== nodeId) return n;
+          // Không cho xoá nhánh đầu tiên (idx 0).
+          const next = readBranches(n.data).filter(
+            (b, idx) => idx === 0 || b.id !== branchId,
+          );
+          return { ...n, data: { ...n.data, branches: next } };
+        }),
+        // Xoá luôn các dây xuất phát từ handle nhánh bị xoá.
+        edges: ir.edges.filter(
+          (e) => !(e.source === nodeId && (e.sourceHandle ?? 'default') === branchId),
+        ),
+      },
+    });
+  },
 }));

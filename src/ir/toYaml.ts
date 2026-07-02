@@ -29,6 +29,20 @@ function outgoing(edges: FlowEdge[], nodeId: string): FlowEdge[] {
   return edges.filter((e) => e.source === nodeId);
 }
 
+// Map handleId -> giá trị điều kiện, đọc từ node.data.branches (nhánh tự do).
+function readDataBranches(data: Record<string, unknown>): Map<string, string> {
+  const map = new Map<string, string>();
+  const raw = data.branches;
+  if (Array.isArray(raw)) {
+    for (const b of raw) {
+      if (b && typeof b.id === 'string') {
+        map.set(b.id, typeof b.value === 'string' ? b.value : '');
+      }
+    }
+  }
+  return map;
+}
+
 export function toYaml(ir: FlowIR): string {
   // Điểm bắt đầu = target của edge đi ra từ node 'start' tổng hợp (nếu có).
   const startEdge = ir.edges.find((e) => e.source === SYNTHETIC_START_ID);
@@ -40,20 +54,24 @@ export function toYaml(ir: FlowIR): string {
     if (node.id === SYNTHETIC_START_ID) continue; // start là field, không phải node YAML
 
     const out: OutNode = { id: node.id, type: node.type };
-    // Trải phẳng data (text/prompt/mode/…) trở lại cấp node.
+    // Trải phẳng data (text/prompt/mode/…) trở lại cấp node. Bỏ 'branches' vì đó là
+    // dữ liệu cấu trúc (nhánh tự do), sẽ được dựng lại thành field branches bên dưới.
     for (const [key, value] of Object.entries(node.data)) {
+      if (key === 'branches') continue;
       out[key] = value;
     }
 
     const edges = outgoing(ir.edges, node.id);
 
     if (node.type === 'condition') {
-      // Dựng lại branches theo thứ tự edge: có condition -> when/to; không -> default.
-      const branches: OutBranch[] = edges.map((e) =>
-        e.condition
-          ? { when: e.condition, to: e.target }
-          : { default: e.target },
-      );
+      // Giá trị điều kiện lấy TỪ node.data.branches (nguồn sự thật) theo sourceHandle;
+      // fallback về edge.condition cho dữ liệu cũ.
+      const dataBranches = readDataBranches(node.data);
+      const branches: OutBranch[] = edges.map((e) => {
+        const handle = e.sourceHandle ?? 'default';
+        const value = dataBranches.get(handle) ?? e.condition ?? '';
+        return value ? { when: value, to: e.target } : { default: e.target };
+      });
       if (branches.length > 0) out.branches = branches;
     } else {
       // Node thường: lấy edge default đầu tiên làm next.
