@@ -113,7 +113,7 @@ export function Toolbar() {
           </span>
           <button
             type="button"
-            className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-[var(--bk-text-faint)] transition hover:bg-[var(--bk-surface-2)] hover:text-[var(--bk-text)]"
+            className="flex items-center gap-1.5 rounded-lg bg-[#ef4444] px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#dc2626]"
             onClick={signOut}
           >
             <Icon icon="lucide:log-out" width={14} height={14} />
