@@ -23,6 +23,20 @@ export interface RFEdgeData {
   [key: string]: unknown;
 }
 
+// Nhãn hiển thị trên dây của node condition: CHỈ lấy giá trị output mà nhánh trả
+// ra (vd "input == '1'" -> "1"), không hiện cả biểu thức điều kiện.
+function conditionOutputLabel(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  if (raw === 'default') return raw; // giữ nhánh mặc định
+  // Lấy vế phải của phép so sánh: == '1' | === "a" | == 2  -> 1 | a | 2
+  const cmp = raw.match(/===?\s*['"]?([^'"\s)]+)['"]?\s*$/);
+  if (cmp) return cmp[1];
+  // Hoặc bất kỳ literal trong nháy đầu tiên.
+  const quoted = raw.match(/['"]([^'"]+)['"]/);
+  if (quoted) return quoted[1];
+  return raw;
+}
+
 export function irToReactFlow(ir: FlowIR): { nodes: Node[]; edges: Edge[] } {
   // Gom các nhánh output cho node 'condition' (mỗi edge đi ra = 1 handle ở đáy).
   const branchHandles = new Map<string, { id: string; label?: string }[]>();
@@ -33,7 +47,7 @@ export function irToReactFlow(ir: FlowIR): { nodes: Node[]; edges: Edge[] } {
       n.id,
       outs.map((e, i) => ({
         id: e.sourceHandle ?? `b${i}`,
-        label: e.label ?? e.condition,
+        label: conditionOutputLabel(e.condition ?? e.label),
       })),
     );
   }
@@ -59,7 +73,8 @@ export function irToReactFlow(ir: FlowIR): { nodes: Node[]; edges: Edge[] } {
     // xuất phát đúng chấm; node thường dùng 1 handle mặc định (bỏ sourceHandle).
     sourceHandle: conditionIds.has(e.source) ? e.sourceHandle : undefined,
     type: 'deletable',
-    label: e.label ?? e.condition,
+    // Node condition: chỉ hiện giá trị output (1/2/default…). Node khác giữ label sẵn có.
+    label: conditionIds.has(e.source) ? conditionOutputLabel(e.condition ?? e.label) : e.label,
     data: { condition: e.condition } satisfies RFEdgeData,
   }));
 
