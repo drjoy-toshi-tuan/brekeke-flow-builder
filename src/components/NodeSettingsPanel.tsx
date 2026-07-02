@@ -123,12 +123,23 @@ function PanelContent({ node, t, onClose, onUpdate }: PanelContentProps) {
 
         <label className="block">
           <span className="text-xs font-medium text-[var(--bk-text-muted)]">{t('description')}</span>
+          
+          const MAX_H = 58;
+          
           <textarea
-            className={`${inputClass} resize-y`}
-            rows={3}
+            className={inputClass}
             placeholder={t('descriptionPlaceholder')}
             value={description}
-            onChange={(e) => onUpdate(node.id, { data: { description: e.target.value } })}
+            onChange={(e) => {
+              const el = e.currentTarget;
+              const keep = el.style.height;
+              el.style.height = 'auto';
+              const tooTall = el.scrollHeight > MAX_H + 1;
+              el.style.height = keep;
+              if (tooTall && e.target.value.length > description.length) return;
+              onUpdate(node.id, { data: { description: e.target.value } });
+            }}
+            style={{ minHeight: '38px', maxHeight: '58px', overflowY: 'hidden' } as React.CSSProperties}
           />
         </label>
 
