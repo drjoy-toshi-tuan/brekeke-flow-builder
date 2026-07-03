@@ -14,8 +14,8 @@ export interface NodeVisual {
 }
 
 export const NODE_CONFIG: Record<NodeType, NodeVisual> = {
-  start: { icon: 'lucide:play', typeLabel: 'Start', color: '#10b981', showTarget: false },
-  announce: { icon: 'lucide:volume-2', typeLabel: 'Announce', color: '#15803d' },
+  start: { icon: 'lucide:play', typeLabel: 'Start', color: '#0ac4ab', showTarget: false },
+  announce: { icon: 'lucide:volume-2', typeLabel: 'Announce', color: '#10b981' },
   input: { icon: 'mingcute:voice-fill', typeLabel: 'Input', color: '#0ea5e9' },
   condition: { icon: 'lucide:git-fork', typeLabel: 'Condition', color: '#f59e0b' },
   script: { icon: 'tabler:file-code-filled', typeLabel: 'Script', color: '#22c55e' },
