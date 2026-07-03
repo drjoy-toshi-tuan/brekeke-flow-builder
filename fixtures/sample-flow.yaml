@@ -1,37 +1,371 @@
 flow:
-  name: "予約確認フロー"
-  start: greet
+  name: "健診予約AI電話フロー"
+  facility: "中部徳洲会病院"
+  start: check_hours
   nodes:
-    - id: greet
-      type: announce
-      text: "お電話ありがとうございます。ご用件をお選びください。"
-      next: main_menu
-    - id: main_menu
-      type: input
-      inputType: STT_DTMF
-      voiceType: NUMBER
-      retryCount: 2
-      announce: "予約は1、変更は2を押してください。"
-      next: classify
-    - id: classify
+    # ── 受付時間チェック ─────────────────────────────────────────────
+    - id: check_hours
+      type: script
+      description: "現在時刻が受付時間内(月〜土 9:00-17:00、祝日除く)かどうかをチェックする"
+      script: |
+        // 受付時間チェック（月〜土 9:00-17:00、祝日は別途カレンダー連携を想定）
+        var now = new Date();
+        var day = now.getDay(); // 0:日 1:月 ... 6:土
+        var hour = now.getHours();
+        var isHoliday = false; // TODO: 祝日カレンダーAPIと連携
+        var isBusinessDay = day >= 1 && day <= 6 && !isHoliday;
+        var isBusinessHour = hour >= 9 && hour < 17;
+        context.businessHours = (isBusinessDay && isBusinessHour) ? 'OPEN' : 'CLOSED';
+      next: business_hours_gate
+
+    - id: business_hours_gate
       type: condition
       branches:
-        - when: "input == '1'"
-          to: reserve
-        - when: "input == '2'"
-          to: change
-        - default: fallback
-    - id: reserve
+        - when: "OPEN"
+          to: greet
+        - default: closed_announce
+
+    - id: closed_announce
       type: announce
-      text: "予約受付に進みます。"
-      next: end
-    - id: change
+      text: |
+        お電話ありがとうございます。中部徳洲会病院の、AI電話です。ただいまの時間は受付時間外です。恐れ入りますが、祝日を除く月曜から土曜の午前〇時から午後〇時の間にかけ直しくださいませ。お電話ありがとうございました。それでは失礼いたします。
+      next: hangup
+
+    # ── 冒頭アナウンス ───────────────────────────────────────────────
+    - id: greet
       type: announce
-      text: "変更受付に進みます。"
-      next: end
-    - id: fallback
+      text: "お電話ありがとうございます。中部徳洲会病院の、健診専用、AI電話です。"
+      next: ask_name
+
+    # ── 氏名 ────────────────────────────────────────────────────────
+    - id: ask_name
+      type: input
+      announce: "続いて、受診される方のお名前を、フルネームでお話しください。"
+      repeat: "no"
+      inputType: STT
+      voiceType: KANA_NAME
+      retryCount: 1
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: save_name
+
+    - id: save_name
+      type: condition
+      saveContext: "yes"
+      contextName: name
+      contextType: TEXT
+      next: ask_dob
+
+    # ── 生年月日（復唱確認あり） ─────────────────────────────────────
+    - id: ask_dob
+      type: input
+      announce: "続いて、受診される方の生年月日をお話しください。"
+      repeat: "yes"
+      repeatAnnounce: "ご回答いただいた生年月日は〇〇でよろしいでしょうか。「はい」または「いいえ」でお答えください。"
+      inputType: STT
+      voiceType: DATETIME
+      retryCount: 1
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: save_dob
+
+    - id: save_dob
+      type: condition
+      saveContext: "yes"
+      contextName: dob
+      contextType: DATE_OF_BIRTH
+      next: ask_phone_confirm
+
+    # ── 連絡先電話番号（発信番号の確認 → 復唱ループ） ─────────────────
+    - id: ask_phone_confirm
+      type: input
+      announce: |
+        ご連絡先のお電話番号は、今おかけいただいている〇〇〇－〇〇〇〇－〇〇〇〇でよろしいですか？はい、そうです、または、いいえ、違います、のようにお答えください。
+      inputType: STT_DTMF
+      retryCount: 2
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: phone_confirm_gate
+
+    - id: phone_confirm_gate
+      type: condition
+      branches:
+        - when: "はい|そうです"
+          to: ask_purpose
+        - default: ask_new_phone
+
+    - id: ask_new_phone
+      type: input
+      announce: "それでは、ご連絡先のお電話番号を、市外局番からお話しください。"
+      inputType: DTMF
+      retryCount: 2
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: save_new_phone
+
+    - id: save_new_phone
+      type: condition
+      saveContext: "yes"
+      contextName: phone
+      contextType: PHONE_NUMBER
+      next: ask_phone_readback
+
+    - id: ask_phone_readback
+      type: input
+      announce: |
+        ご連絡先は〇〇でよろしいでしょうか。「はい、そうです。」または、「いいえ、違います。」でお答えください。
+      inputType: STT_DTMF
+      retryCount: 1
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: phone_readback_gate
+
+    - id: phone_readback_gate
+      type: condition
+      branches:
+        - when: "はい|そうです"
+          to: ask_purpose
+        - default: ask_new_phone
+
+    # ── 用件確認（4分岐） ────────────────────────────────────────────
+    - id: ask_purpose
+      type: input
+      announce: |
+        ご用件を、次の4つのうちの、いずれかでお話しください。
+        「健診の予約」「予約の変更」「予約のキャンセル」「その他お問合せ」、それでは、お話しください。
+      inputType: STT
+      retryCount: 1
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: purpose_gate
+
+    - id: purpose_gate
+      type: condition
+      branches:
+        - when: "変更"
+          to: ask_current_date_change
+        - when: "キャンセル"
+          to: ask_current_date_cancel
+        - when: "健診|予約"
+          to: ask_first_visit
+        - default: ask_inquiry
+
+    # ── ① 健診の予約（新規） ────────────────────────────────────────
+    - id: ask_first_visit
+      type: input
+      announce: "かしこまりました。当院の受診は初めてですか？"
+      inputType: STT_DTMF
+      retryCount: 1
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: save_first_visit
+
+    - id: save_first_visit
+      type: condition
+      saveContext: "yes"
+      contextName: isFirstVisit
+      contextType: TEXT
+      next: ask_company
+
+    - id: ask_company
+      type: input
+      announce: "次に、企業・団体名をお話しください。"
+      inputType: STT
+      retryCount: 1
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: save_company
+
+    - id: save_company
+      type: condition
+      saveContext: "yes"
+      contextName: company
+      contextType: TEXT
+      next: ask_course
+
+    - id: ask_course
+      type: input
+      announce: "それでは、ご希望される健診の内容をお話しください。"
+      inputType: STT
+      retryCount: 1
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: save_course
+
+    - id: save_course
+      type: condition
+      saveContext: "yes"
+      contextName: course
+      contextType: TEXT
+      next: ask_desired_time_new
+
+    - id: ask_desired_time_new
+      type: input
+      announce: "次に、受診を希望される時期をおはなしください。"
+      inputType: STT
+      voiceType: DATETIME
+      retryCount: 1
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: save_desired_time_new
+
+    - id: save_desired_time_new
+      type: condition
+      saveContext: "yes"
+      contextName: desiredTime
+      contextType: DATE
+      next: llm_new_reservation_summary
+
+    - id: llm_new_reservation_summary
+      type: llm
+      description: "聴取した項目から新規予約の依頼内容を要約し、担当者引き継ぎメモを作成する"
+      prompt: |
+        以下の情報から、新規の健診予約依頼の内容を要約してください。
+        受診歴(初めてか): {{isFirstVisit}}
+        企業・団体名: {{company}}
+        健診コース: {{course}}
+        希望時期: {{desiredTime}}
+      retryCount: 2
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: end_announce
+
+    # ── ② 予約の変更 ────────────────────────────────────────────────
+    - id: ask_current_date_change
+      type: input
+      announce: |
+        それでは、現在の予約日を教えてください。わからない場合には、「わからない」、とお話しください。
+      inputType: STT
+      voiceType: DATETIME
+      retryCount: 1
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: save_current_date_change
+
+    - id: save_current_date_change
+      type: condition
+      saveContext: "yes"
+      contextName: currentReservationDate
+      contextType: DATE
+      next: ask_change_details
+
+    - id: ask_change_details
+      type: input
+      announce: "変更内容を簡潔にお話しください。"
+      inputType: STT
+      retryCount: 1
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: save_change_details
+
+    - id: save_change_details
+      type: condition
+      saveContext: "yes"
+      contextName: changeDetails
+      contextType: TEXT
+      next: llm_change_summary
+
+    - id: llm_change_summary
+      type: llm
+      description: "予約変更の依頼内容を要約し、担当者引き継ぎメモを作成する"
+      prompt: |
+        以下の変更依頼内容を要約し、担当者へ引き継ぐメモを作成してください。
+        現在の予約日: {{currentReservationDate}}
+        変更内容: {{changeDetails}}
+      retryCount: 2
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: end_announce
+
+    # ── ③ 予約のキャンセル ──────────────────────────────────────────
+    - id: ask_current_date_cancel
+      type: input
+      announce: |
+        それでは、現在の予約日を教えてください。わからない場合には、「わからない」、とお話しください。
+      inputType: STT
+      voiceType: DATETIME
+      retryCount: 1
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: save_current_date_cancel
+
+    - id: save_current_date_cancel
+      type: condition
+      saveContext: "yes"
+      contextName: currentReservationDateCancel
+      contextType: DATE
+      next: ask_desired_time_cancel
+
+    - id: ask_desired_time_cancel
+      type: input
+      announce: "次に、受診を希望される時期をおはなしください。"
+      inputType: STT
+      voiceType: DATETIME
+      retryCount: 1
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: save_desired_time_cancel
+
+    - id: save_desired_time_cancel
+      type: condition
+      saveContext: "yes"
+      contextName: desiredTimeCancel
+      contextType: DATE
+      next: script_cancel_summary
+
+    - id: script_cancel_summary
+      type: script
+      description: "担当者引き継ぎ用に、キャンセル内容を1つのメモ文字列に整形する"
+      script: |
+        // キャンセル依頼の内容を担当者引き継ぎ用メモに整形
+        var currentDate = context.currentReservationDateCancel || '未回答';
+        var desiredTime = context.desiredTimeCancel || '未回答';
+        context.cancelMemo = '現在の予約日: ' + currentDate + ' / 変更希望時期: ' + desiredTime;
+      next: flag_cancel
+
+    - id: flag_cancel
+      type: flag
+      statusFlag: 2
+      smsFlag: 1
+      next: end_announce
+
+    # ── ④ その他お問合せ ────────────────────────────────────────────
+    - id: ask_inquiry
+      type: input
+      announce: "それでは、お問い合わせ内容を簡潔にお話しください。"
+      inputType: STT
+      retryCount: 1
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: save_inquiry
+
+    - id: save_inquiry
+      type: condition
+      saveContext: "yes"
+      contextName: inquiryContent
+      contextType: TEXT
+      next: llm_inquiry_classify
+
+    - id: llm_inquiry_classify
+      type: llm
+      description: "お問い合わせ内容を分類し、緊急度と担当部署への引き継ぎメモを作成する"
+      prompt: |
+        次のお問い合わせ内容を分類し、緊急度(緊急/通常)と担当部署への引き継ぎメモを作成してください。
+        お問い合わせ内容: {{inquiryContent}}
+      retryCount: 2
+      retryAnnounce: "恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。"
+      next: inquiry_urgency_gate
+
+    - id: inquiry_urgency_gate
+      type: condition
+      branches:
+        - when: "緊急|至急"
+          to: transfer_to_staff
+        - default: flag_inquiry
+
+    - id: transfer_to_staff
+      type: transfer
+      transferNumber: "0120-000-000"
+      transferType: ATTENDED
+      announce: "担当者におつなぎします。少々お待ちください。"
+      failedAnnounce: "只今担当者にお繋ぎできません。後ほど改めておかけ直しください。"
+      next: hangup
+
+    - id: flag_inquiry
+      type: flag
+      statusFlag: 9
+      smsFlag: 1
+      next: end_announce
+
+    # ── 終話 ────────────────────────────────────────────────────────
+    - id: end_announce
       type: announce
-      text: "もう一度お選びください。"
-      next: main_menu
-    - id: end
+      text: |
+        かしこまりました。3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+      next: hangup
+
+    - id: hangup
       type: hangup
