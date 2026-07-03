@@ -5,6 +5,7 @@ import { toYaml } from '../ir/toYaml';
 import { layout } from '../ir/layout';
 import { NODE_CONFIG } from '../ui/nodeConfig';
 import { defaultDataFor, readBranches, BRANCH_SCHEMA, CATCH_ALL_ID, type DataBranch } from '../ui/nodeSchema';
+import { DEFAULT_IVR_SETTINGS, formatDateTime, type IvrSettings } from '../ir/ivrProperty';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Zustand store: giữ FlowIR (source of truth) + các action cập nhật IR.
@@ -33,6 +34,13 @@ interface FlowState {
   isPanning: boolean;
   setPanning: (value: boolean) => void;
 
+  // Cấu hình IVR Property (施設名 / Office ID / môi trường / TTS / STT) — dùng cho
+  // modal "Cài đặt IVR Property". Giữ độc lập với ir để không bị reset khi nạp lại YAML.
+  ivr: IvrSettings;
+  setIvr: (patch: Partial<IvrSettings>) => void;
+  // Thời điểm import YAML (yyyy-MM-dd HH:mm) -> điền vào 作成日時 của IVR Property.
+  ivrCreatedAt: string;
+
   // Nạp YAML -> IR -> auto-layout, rồi set vào store.
   loadYaml: (text: string) => Promise<void>;
   // Chạy lại ELK trên IR hiện tại.
@@ -47,6 +55,19 @@ interface FlowState {
   addNode: (type: NodeType, position: { x: number; y: number }) => string;
   // Xoá 1 module (node) + mọi dây nối tới/từ nó.
   removeNode: (id: string) => void;
+
+  // Xoá node có xác nhận: nút "Xoá" chỉ đặt pendingDelete -> modal hỏi lại;
+  // confirm mới thực sự removeNode, cancel thì bỏ ý định.
+  pendingDelete: string | null;
+  requestDeleteNode: (id: string) => void;
+  confirmDeleteNode: () => void;
+  cancelDeleteNode: () => void;
+
+  // Lịch sử Undo/Redo (snapshot IR). past = trạng thái trước, future = đã undo.
+  past: FlowIR[];
+  future: FlowIR[];
+  undo: () => void;
+  redo: () => void;
 
   // Nối / xoá dây.
   addEdge: (edge: FlowEdge) => void;
@@ -83,7 +104,18 @@ function draftFromNode(node: FlowNode): NodeDraft {
   return { label: node.label, data: JSON.parse(JSON.stringify(node.data)) as Record<string, unknown> };
 }
 
+// Số bước Undo tối đa giữ trong bộ nhớ.
+const HISTORY_LIMIT = 50;
+
 export const useFlowStore = create<FlowState>((set, get) => {
+  // Chụp IR hiện tại vào `past` (xoá `future`) — gọi TRƯỚC mỗi thay đổi có thể undo.
+  // Trả về mảnh state để trộn vào set({...}).
+  const snapshot = (): Partial<FlowState> => {
+    const { ir, past } = get();
+    if (!ir) return {};
+    return { past: [...past, ir].slice(-HISTORY_LIMIT), future: [] };
+  };
+
   // Áp dụng lựa chọn node ngay (khởi tạo draft). Không kiểm tra dirty ở đây.
   const applySelect = (id: string | null) => {
     const { ir } = get();
@@ -100,20 +132,45 @@ export const useFlowStore = create<FlowState>((set, get) => {
     selectedNodeId: null,
     draft: null,
     pendingSelect: null,
+    pendingDelete: null,
+    past: [],
+    future: [],
     isPanning: false,
     setPanning: (value) => set({ isPanning: value }),
+
+    ivr: { ...DEFAULT_IVR_SETTINGS },
+    setIvr: (patch) => set({ ivr: { ...get().ivr, ...patch } }),
+    ivrCreatedAt: formatDateTime(new Date()),
 
     loadYaml: async (text) => {
       const ir = fromYaml(text);
       const laidOut = await layout(ir);
-      set({ ir: laidOut, selectedNodeId: null, draft: null, pendingSelect: null });
+      // Seed 施設名 từ meta.facility nếu người dùng chưa nhập.
+      const { ivr } = get();
+      const nextIvr =
+        !ivr.facilityName && laidOut.meta.facility
+          ? { ...ivr, facilityName: laidOut.meta.facility }
+          : ivr;
+      set({
+        ir: laidOut,
+        selectedNodeId: null,
+        draft: null,
+        pendingSelect: null,
+        pendingDelete: null,
+        // Nạp file mới -> reset lịch sử Undo/Redo.
+        past: [],
+        future: [],
+        ivr: nextIvr,
+        // Mốc 作成日時 = thời điểm import file YAML này.
+        ivrCreatedAt: formatDateTime(new Date()),
+      });
     },
 
     autoLayout: async () => {
       const { ir } = get();
       if (!ir) return;
       const laidOut = await layout(ir);
-      set({ ir: laidOut });
+      set({ ...snapshot(), ir: laidOut });
     },
 
     exportYaml: () => {
@@ -125,6 +182,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
       const { ir } = get();
       if (!ir) return;
       set({
+        ...snapshot(),
         ir: {
           ...ir,
           nodes: ir.nodes.map((n) => (positions[n.id] ? { ...n, position: positions[n.id] } : n)),
@@ -152,6 +210,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
         data: defaultDataFor(type),
       };
       set({
+        ...snapshot(),
         ir: {
           ...ir,
           meta: { ...ir.meta, updatedAt: new Date().toISOString() },
@@ -169,6 +228,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
       if (!ir) return;
       const closing = selectedNodeId === id;
       set({
+        ...snapshot(),
         ir: {
           ...ir,
           meta: { ...ir.meta, updatedAt: new Date().toISOString() },
@@ -179,8 +239,16 @@ export const useFlowStore = create<FlowState>((set, get) => {
         selectedNodeId: closing ? null : selectedNodeId,
         draft: closing ? null : get().draft,
         pendingSelect: closing ? null : get().pendingSelect,
+        pendingDelete: null,
       });
     },
+
+    requestDeleteNode: (id) => set({ pendingDelete: id }),
+    confirmDeleteNode: () => {
+      const { pendingDelete, removeNode } = get();
+      if (pendingDelete) removeNode(pendingDelete);
+    },
+    cancelDeleteNode: () => set({ pendingDelete: null }),
 
     addEdge: (edge) => {
       const { ir } = get();
@@ -193,13 +261,44 @@ export const useFlowStore = create<FlowState>((set, get) => {
           (e.sourceHandle ?? '') === (edge.sourceHandle ?? ''),
       );
       if (exists) return;
-      set({ ir: { ...ir, edges: [...ir.edges, edge] } });
+      set({ ...snapshot(), ir: { ...ir, edges: [...ir.edges, edge] } });
     },
 
     removeEdge: (id) => {
       const { ir } = get();
       if (!ir) return;
-      set({ ir: { ...ir, edges: ir.edges.filter((e) => e.id !== id) } });
+      set({ ...snapshot(), ir: { ...ir, edges: ir.edges.filter((e) => e.id !== id) } });
+    },
+
+    undo: () => {
+      const { past, future, ir } = get();
+      if (past.length === 0) return;
+      const prev = past[past.length - 1];
+      set({
+        ir: prev,
+        past: past.slice(0, -1),
+        future: ir ? [ir, ...future].slice(0, HISTORY_LIMIT) : future,
+        // Đóng panel/ý định đang mở để tránh tham chiếu node không còn tồn tại.
+        selectedNodeId: null,
+        draft: null,
+        pendingSelect: null,
+        pendingDelete: null,
+      });
+    },
+
+    redo: () => {
+      const { past, future, ir } = get();
+      if (future.length === 0) return;
+      const next = future[0];
+      set({
+        ir: next,
+        future: future.slice(1),
+        past: ir ? [...past, ir].slice(-HISTORY_LIMIT) : past,
+        selectedNodeId: null,
+        draft: null,
+        pendingSelect: null,
+        pendingDelete: null,
+      });
     },
 
     selectNode: (id) => {
@@ -273,6 +372,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
       const valueByHandle = new Map(branches.map((b) => [b.id, b.value]));
 
       set({
+        ...snapshot(),
         ir: {
           ...ir,
           meta: { ...ir.meta, updatedAt: new Date().toISOString() },

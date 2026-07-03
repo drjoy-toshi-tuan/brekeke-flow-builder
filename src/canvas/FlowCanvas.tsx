@@ -4,6 +4,7 @@ import {
   Background,
   BackgroundVariant,
   Controls,
+  ControlButton,
   MiniMap,
   Panel,
   SelectionMode,
@@ -20,6 +21,8 @@ import {
 } from '@xyflow/react';
 import { useFlowStore } from '../store/flowStore';
 import { useTheme } from '../ui/theme';
+import { useT } from '../ui/i18n';
+import { Icon } from '../ui/icons';
 import type { NodeType } from '../ir/types';
 import { irToReactFlow } from './irAdapter';
 import { nodeTypes } from './nodes';
@@ -52,7 +55,12 @@ export function FlowCanvas() {
   const removeEdge = useFlowStore((s) => s.removeEdge);
   const setPanning = useFlowStore((s) => s.setPanning);
   const selectNode = useFlowStore((s) => s.selectNode);
+  const undo = useFlowStore((s) => s.undo);
+  const redo = useFlowStore((s) => s.redo);
+  const canUndo = useFlowStore((s) => s.past.length > 0);
+  const canRedo = useFlowStore((s) => s.future.length > 0);
   const theme = useTheme((s) => s.theme);
+  const t = useT();
   const { screenToFlowPosition } = useReactFlow();
   const store = useStoreApi();
 
@@ -85,6 +93,26 @@ export function FlowCanvas() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [store]);
+
+  // Ctrl/⌘ + Z: undo · Ctrl/⌘ + Y (hoặc Shift+Z): redo. Bỏ qua khi đang gõ trong
+  // ô nhập (input/textarea/contenteditable) để không cướp undo của trình soạn text.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      const key = e.key.toLowerCase();
+      if (key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undo, redo]);
 
   // Kéo xong 1 node -> commit vị trí vào IR (để auto-layout/re-derive không mất chỗ).
   const onNodeDragStop = useCallback(() => {
@@ -215,7 +243,15 @@ export function FlowCanvas() {
         <AddModulePanel />
       </Panel>
       <Background variant={BackgroundVariant.Dots} gap={16} size={1.5} />
-      <Controls />
+      <Controls>
+        {/* Undo / Redo cùng thanh với zoom/fit/lock. */}
+        <ControlButton onClick={() => undo()} disabled={!canUndo} title={t('undo')} aria-label={t('undo')}>
+          <Icon icon="fa7-solid:undo-alt" />
+        </ControlButton>
+        <ControlButton onClick={() => redo()} disabled={!canRedo} title={t('redo')} aria-label={t('redo')}>
+          <Icon icon="fa7-solid:redo-alt" />
+        </ControlButton>
+      </Controls>
       <MiniMap pannable zoomable />
     </ReactFlow>
   );

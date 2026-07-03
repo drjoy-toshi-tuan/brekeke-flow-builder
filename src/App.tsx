@@ -8,6 +8,7 @@ import { useFlowStore } from './store/flowStore';
 import { FlowCanvas } from './canvas/FlowCanvas';
 import { Toolbar } from './components/Toolbar';
 import { NodeSettingsPanel } from './components/NodeSettingsPanel';
+import { ConfirmDeleteModal } from './components/ConfirmDeleteModal';
 
 export default function App() {
   return (
@@ -39,6 +40,7 @@ function FlowApp() {
         <ReactFlowProvider>
           <FlowCanvas />
           <NodeSettingsPanel />
+          <ConfirmDeleteModal />
         </ReactFlowProvider>
       </main>
     </div>

@@ -26,6 +26,7 @@ export type NodeType =
   | 'llm' // gọi OpenAI / LLM
   | 'faq' // hỏi-đáp (FAQ)
   | 'transfer' // chuyển máy
+  | 'flag' // đặt cờ (ステータスフラグ / SMSフラグ)
   | 'hangup';
 
 export const NODE_TYPES: readonly NodeType[] = [
@@ -37,6 +38,7 @@ export const NODE_TYPES: readonly NodeType[] = [
   'llm',
   'faq',
   'transfer',
+  'flag',
   'hangup',
 ] as const;
 
