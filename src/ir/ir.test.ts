@@ -3,7 +3,7 @@ import { fromYaml } from './fromYaml';
 import { toYaml } from './toYaml';
 import { parse } from 'yaml';
 import { SYNTHETIC_START_ID } from './types';
-import { defaultDataFor, sourceHandlesFor, readBranches } from '../ui/nodeSchema';
+import { defaultDataFor, sourceHandlesFor, readBranches, catchAllDisplay } from '../ui/nodeSchema';
 
 const SAMPLE = `
 flow:
@@ -154,9 +154,21 @@ describe('nhánh (branch) model mới', () => {
     expect(input.branches).toBeUndefined(); // input là fixed, không có nhánh tự do
 
     const script = defaultDataFor('script');
-    expect(script.branches).toEqual([{ id: 'b0', value: '' }]);
+    // Mặc định chỉ có nhánh catch-all (id 'default').
+    expect(script.branches).toEqual([{ id: 'default', value: '' }]);
 
     const start = defaultDataFor('start');
     expect(start.acceptanceTime).toBe('yes');
+  });
+
+  it('catchAllDisplay: ^.*$ khi 1 nhánh, phủ định khi có nhánh khác', () => {
+    expect(catchAllDisplay([{ id: 'default', value: '' }])).toBe('^.*$');
+    expect(
+      catchAllDisplay([
+        { id: 'default', value: '' },
+        { id: 'b0', value: '1' },
+        { id: 'b1', value: '2' },
+      ]),
+    ).toBe('^(?!(?:1|2)$).*$');
   });
 });
