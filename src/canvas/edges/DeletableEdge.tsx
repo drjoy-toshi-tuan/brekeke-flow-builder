@@ -26,10 +26,13 @@ export function DeletableEdge({
   label,
   markerEnd,
   style,
+  data,
 }: EdgeProps) {
   const [hovered, setHovered] = useState(false);
   const removeEdge = useFlowStore((s) => s.removeEdge);
   const t = useT();
+  // Nhãn nhánh cố định (FAILED/NEXT): chỉ hiện khi hover, đặt ngay dưới chấm output.
+  const sourceLabel = typeof data?.sourceLabel === 'string' ? data.sourceLabel : undefined;
 
   const [edgePath, labelX, labelY] = getSmoothStepPath({
     sourceX,
@@ -54,6 +57,17 @@ export function DeletableEdge({
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       />
+      {/* Nhãn nhánh cố định: hiện khi hover, ngay dưới chấm output (cách 1 đoạn nhỏ). */}
+      {sourceLabel && hovered && (
+        <EdgeLabelRenderer>
+          <div
+            className="nodrag nopan edge-src-label"
+            style={{ transform: `translate(-50%, 0) translate(${sourceX}px, ${sourceY + 14}px)` }}
+          >
+            {sourceLabel}
+          </div>
+        </EdgeLabelRenderer>
+      )}
       <EdgeLabelRenderer>
         <div
           className="nodrag nopan edge-toolbar"

@@ -167,16 +167,37 @@ export interface DataBranch {
   value: string; // biểu thức regex (không kèm ^ $ — chỉ thêm khi hiển thị)
 }
 
-// Đọc mảng nhánh tự do trong data (an toàn kiểu). Không có -> mặc định 1 nhánh.
+// Nhánh "catch-all" (else) của node có nhánh tự do: LUÔN có, không sửa/không xoá.
+// Giá trị hiển thị tự tính: khớp mọi thứ TRỪ các nhánh còn lại.
+export const CATCH_ALL_ID = 'default';
+
+// Đọc mảng nhánh tự do trong data (an toàn kiểu). Luôn đảm bảo có nhánh catch-all.
 export function readBranches(data: Record<string, unknown>): DataBranch[] {
   const raw = data.branches;
+  let list: DataBranch[] = [];
   if (Array.isArray(raw)) {
-    const list = raw
+    list = raw
       .filter((b): b is DataBranch => !!b && typeof (b as DataBranch).id === 'string')
       .map((b) => ({ id: b.id, value: typeof b.value === 'string' ? b.value : '' }));
-    if (list.length > 0) return list;
   }
-  return [{ id: 'b0', value: '' }];
+  if (list.length === 0) return [{ id: CATCH_ALL_ID, value: '' }];
+  // Thiếu catch-all -> thêm vào đầu (giữ nguyên các nhánh sẵn có).
+  if (!list.some((b) => b.id === CATCH_ALL_ID)) {
+    list = [{ id: CATCH_ALL_ID, value: '' }, ...list];
+  }
+  return list;
+}
+
+// Regex hiển thị (đã bọc ^ $) cho nhánh catch-all: khớp mọi thứ trừ các nhánh khác.
+//   - không có nhánh nào khác  -> ^.*$
+//   - có nhánh v1, v2, …       -> ^(?!(?:v1|v2)$).*$
+export function catchAllDisplay(branches: DataBranch[]): string {
+  const others = branches
+    .filter((b) => b.id !== CATCH_ALL_ID)
+    .map((b) => b.value.trim())
+    .filter((v) => v.length > 0);
+  if (others.length === 0) return '^.*$';
+  return `^(?!(?:${others.join('|')})$).*$`;
 }
 
 // Handle output (chấm nối dây ở đáy node) suy ra TỪ IR:
@@ -198,7 +219,8 @@ export function defaultDataFor(type: NodeType): Record<string, unknown> {
     if (f.default != null) data[f.key] = f.default;
   }
   if (BRANCH_SCHEMA[type].mode === 'editable') {
-    data.branches = [{ id: 'b0', value: '' }];
+    // Mặc định chỉ có nhánh catch-all (^.*$), không sửa/không xoá.
+    data.branches = [{ id: CATCH_ALL_ID, value: '' }];
   }
   return data;
 }

@@ -4,7 +4,7 @@ import { fromYaml } from '../ir/fromYaml';
 import { toYaml } from '../ir/toYaml';
 import { layout } from '../ir/layout';
 import { NODE_CONFIG } from '../ui/nodeConfig';
-import { defaultDataFor, readBranches, BRANCH_SCHEMA, type DataBranch } from '../ui/nodeSchema';
+import { defaultDataFor, readBranches, BRANCH_SCHEMA, CATCH_ALL_ID, type DataBranch } from '../ui/nodeSchema';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Zustand store: giữ FlowIR (source of truth) + các action cập nhật IR.
@@ -238,8 +238,9 @@ export const useFlowStore = create<FlowState>((set, get) => {
       const { draft } = get();
       if (!draft) return;
       const branches = readBranches(draft.data);
+      // id duy nhất b0, b1, … (không đụng nhánh catch-all 'default').
       const used = new Set(branches.map((b) => b.id));
-      let i = branches.length;
+      let i = 0;
       let id = `b${i}`;
       while (used.has(id)) id = `b${++i}`;
       const next: DataBranch[] = [...branches, { id, value: '' }];
@@ -248,16 +249,15 @@ export const useFlowStore = create<FlowState>((set, get) => {
 
     draftUpdateBranch: (branchId, value) => {
       const { draft } = get();
-      if (!draft) return;
+      if (!draft || branchId === CATCH_ALL_ID) return; // catch-all không sửa
       const branches = readBranches(draft.data).map((b) => (b.id === branchId ? { ...b, value } : b));
       set({ draft: { ...draft, data: { ...draft.data, branches } } });
     },
 
     draftRemoveBranch: (branchId) => {
       const { draft } = get();
-      if (!draft) return;
-      // Không cho xoá nhánh đầu tiên (idx 0).
-      const branches = readBranches(draft.data).filter((b, idx) => idx === 0 || b.id !== branchId);
+      if (!draft || branchId === CATCH_ALL_ID) return; // catch-all không xoá
+      const branches = readBranches(draft.data).filter((b) => b.id !== branchId);
       set({ draft: { ...draft, data: { ...draft.data, branches } } });
     },
 

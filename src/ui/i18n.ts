@@ -69,6 +69,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     showField: 'Hiện',
     hideField: 'Ẩn',
     branchTargetNone: 'chưa nối',
+    branchElse: 'Nhánh mặc định (else) — tự khớp phần còn lại, không sửa được.',
     // Nút lưu/huỷ + cảnh báo thay đổi chưa lưu
     btnSave: 'LƯU',
     btnCancel: 'HỦY',
@@ -153,6 +154,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     showField: '表示',
     hideField: '非表示',
     branchTargetNone: '未接続',
+    branchElse: 'デフォルト分岐（その他）— 残り全部に自動一致・編集不可。',
     // Nút lưu/huỷ + cảnh báo thay đổi chưa lưu
     btnSave: '保存',
     btnCancel: 'キャンセル',

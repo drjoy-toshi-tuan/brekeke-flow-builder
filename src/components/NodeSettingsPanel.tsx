@@ -1,8 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { useFlowStore } from '../store/flowStore';
 import type { FlowNode, NodeType } from '../ir/types';
 import { NODE_CONFIG } from '../ui/nodeConfig';
-import { PROPERTY_FIELDS, BRANCH_SCHEMA, readBranches, type PropertyField } from '../ui/nodeSchema';
+import {
+  PROPERTY_FIELDS,
+  BRANCH_SCHEMA,
+  readBranches,
+  catchAllDisplay,
+  CATCH_ALL_ID,
+  type PropertyField,
+} from '../ui/nodeSchema';
 import { Icon } from '../ui/icons';
 import { useT, type TKey } from '../ui/i18n';
 import { CodeEditor } from './CodeEditor';
@@ -81,7 +88,7 @@ function PanelContent({ node, onClose }: { node: FlowNode; onClose: () => void }
 
   return (
     <div className="bk-panel-content flex h-full flex-col">
-      <header className="border-b border-[var(--bk-border)]">
+      <header className="bk-panel-header border-b border-[var(--bk-border)]">
         <div className="flex items-center justify-between px-4 py-3">
           <div className="flex items-center gap-3">
             <span
@@ -404,6 +411,11 @@ function CollapsibleField({
 }
 
 // ── Branch ────────────────────────────────────────────────────────────────────
+interface TargetInfo {
+  label: string;
+  color: string;
+}
+
 function BranchTab({ node, data }: { node: FlowNode; data: Record<string, unknown> }) {
   const t = useT();
   const schema = BRANCH_SCHEMA[node.type];
@@ -413,10 +425,14 @@ function BranchTab({ node, data }: { node: FlowNode; data: Record<string, unknow
   const draftRemoveBranch = useFlowStore((s) => s.draftRemoveBranch);
 
   // Đích jump của 1 nhánh = target của edge xuất phát từ handle đó (IR đã commit).
-  const targetLabel = (handleId: string): string | null => {
+  const targetInfo = (handleId: string): TargetInfo | null => {
     const edge = ir?.edges.find((e) => e.source === node.id && (e.sourceHandle ?? 'default') === handleId);
     if (!edge) return null;
-    return ir?.nodes.find((n) => n.id === edge.target)?.label ?? edge.target;
+    const target = ir?.nodes.find((n) => n.id === edge.target);
+    return {
+      label: target?.label ?? edge.target,
+      color: target ? NODE_CONFIG[target.type].color : 'var(--bk-text-faint)',
+    };
   };
 
   if (schema.mode === 'none') {
@@ -424,19 +440,20 @@ function BranchTab({ node, data }: { node: FlowNode; data: Record<string, unknow
   }
 
   if (schema.mode === 'fixed') {
-    // Nhánh cố định (FAILED / NEXT …): chỉ xem, kèm đích jump bên phải.
+    // Nhánh cố định (FAILED / NEXT …): chỉ xem nhãn + đích jump (cùng UI như node tự do).
     return (
       <div className="space-y-3">
         <p className="text-xs text-[var(--bk-text-faint)]">{t('branchFixedNote')}</p>
-        <div className="space-y-2">
+        <div className="space-y-2.5">
           {(schema.fixed ?? []).map((b) => (
-            <div
-              key={b.id}
-              className="flex items-center gap-2 rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-3 py-2 text-sm"
-            >
-              <span className="h-2 w-2 flex-none rounded-full bg-[var(--bk-text-faint)]" />
-              <span className="font-medium text-[var(--bk-text-muted)]">{b.label ?? b.id}</span>
-              <BranchTarget label={targetLabel(b.id)} />
+            <div key={b.id} className="bk-branch-row">
+              <div className="bk-branch-cond">
+                <span className="bk-branch-fixed">{b.label ?? b.id}</span>
+              </div>
+              <Icon icon="fluent:flow-dot-20-filled" width={18} height={18} className="bk-branch-arrow" />
+              <div className="bk-branch-target">
+                <BranchTarget info={targetInfo(b.id)} />
+              </div>
             </div>
           ))}
         </div>
@@ -444,40 +461,61 @@ function BranchTab({ node, data }: { node: FlowNode; data: Record<string, unknow
     );
   }
 
-  // Nhánh tự do (condition/script): thêm/sửa/xoá. Nhánh đầu không xoá được.
+  // Nhánh tự do (condition/script): nhánh catch-all (^.*$) đứng đầu, không sửa/xoá;
+  // các nhánh còn lại thêm/sửa/xoá tuỳ ý. "+ Thêm nhánh" để thêm.
   const branches = readBranches(data);
+  const catchAllValue = catchAllDisplay(branches);
+  // catch-all luôn hiển thị trước, các nhánh khác theo sau.
+  const ordered = [
+    ...branches.filter((b) => b.id === CATCH_ALL_ID),
+    ...branches.filter((b) => b.id !== CATCH_ALL_ID),
+  ];
+
   return (
     <div className="space-y-3">
-      <div className="space-y-2">
-        {branches.map((b, i) => (
-          <div key={b.id} className="flex items-center gap-2">
-            <RegexBranchInput
-              className={`${inputClass} !mt-0 min-w-0 flex-1 font-mono`}
-              value={b.value}
-              placeholder={t('branchConditionPlaceholder')}
-              onChange={(v) => draftUpdateBranch(b.id, v)}
-            />
-            <div className="flex w-28 flex-none items-center gap-1">
-              <span className="flex-none text-[var(--bk-text-faint)]" aria-hidden>→</span>
-              <BranchTarget label={targetLabel(b.id)} />
+      <div className="space-y-2.5">
+        {ordered.map((b) => {
+          const isCatchAll = b.id === CATCH_ALL_ID;
+          return (
+            <div key={b.id} className="bk-branch-row">
+              <div className="bk-branch-cond">
+                {isCatchAll ? (
+                  <input
+                    className={`${inputClass} !mt-0 w-full font-mono bk-branch-catchall`}
+                    value={catchAllValue}
+                    readOnly
+                    tabIndex={-1}
+                    title={t('branchElse')}
+                  />
+                ) : (
+                  <RegexBranchInput
+                    className={`${inputClass} !mt-0 w-full font-mono`}
+                    value={b.value}
+                    placeholder={t('branchConditionPlaceholder')}
+                    onChange={(v) => draftUpdateBranch(b.id, v)}
+                  />
+                )}
+              </div>
+              <Icon icon="fluent:flow-dot-20-filled" width={18} height={18} className="bk-branch-arrow" />
+              <div className="bk-branch-target">
+                <BranchTarget info={targetInfo(b.id)} />
+              </div>
+              {isCatchAll ? (
+                <span className="bk-branch-del-spacer" aria-hidden />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => draftRemoveBranch(b.id)}
+                  title={t('deleteBranch')}
+                  aria-label={t('deleteBranch')}
+                  className="bk-branch-del"
+                >
+                  <Icon icon="lucide:trash-2" width={16} height={16} />
+                </button>
+              )}
             </div>
-            <button
-              type="button"
-              disabled={i === 0}
-              onClick={() => draftRemoveBranch(b.id)}
-              title={t('deleteBranch')}
-              aria-label={t('deleteBranch')}
-              className={[
-                'flex h-9 w-9 flex-none items-center justify-center rounded-lg border border-[var(--bk-border)] transition',
-                i === 0
-                  ? 'cursor-not-allowed opacity-30'
-                  : 'text-[var(--bk-text-muted)] hover:border-[#fca5a5] hover:bg-[#fee2e2] hover:text-[#dc2626]',
-              ].join(' ')}
-            >
-              <Icon icon="lucide:trash-2" width={15} height={15} />
-            </button>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <button
         type="button"
@@ -491,15 +529,15 @@ function BranchTab({ node, data }: { node: FlowNode; data: Record<string, unknow
   );
 }
 
-// Nhãn đích jump: tên node tiếp theo, hoặc "chưa nối" nếu handle chưa có dây.
-function BranchTarget({ label }: { label: string | null }) {
+// Đích jump hiển thị dạng "tag" nền = màu đại diện của node đích; "chưa nối" nếu chưa có dây.
+function BranchTarget({ info }: { info: TargetInfo | null }) {
   const t = useT();
-  if (!label) {
-    return <span className="truncate text-xs italic text-[var(--bk-text-faint)]">{t('branchTargetNone')}</span>;
+  if (!info) {
+    return <span className="bk-branch-none">{t('branchTargetNone')}</span>;
   }
   return (
-    <span className="truncate text-xs font-medium text-[var(--bk-text)]" title={label}>
-      {label}
+    <span className="bk-branch-tag" style={{ '--tagc': info.color } as CSSProperties} title={info.label}>
+      {info.label}
     </span>
   );
 }
