@@ -34,11 +34,11 @@ export function IvrPropertyModal({ onClose }: { onClose: () => void }) {
     { value: 'master', labelKey: 'ivrEnvMaster', icon: 'material-symbols:contacts-product', color: '#f97316' },
   ];
   const ttsOptions: OptionDef[] = [
-    { value: 'amivoice', labelKey: 'ivrTtsAmivoice', icon: 'hugeicons:voice', color: 'var(--bk-accent)' },
-    { value: 'aitalk', labelKey: 'ivrTtsAiTalk', icon: 'hugeicons:ai-voice', color: 'var(--bk-accent)' },
+    { value: 'amivoice', labelKey: 'ivrTtsAmivoice', icon: 'mingcute:voice-fill', color: 'var(--bk-accent)' },
+    { value: 'aitalk', labelKey: 'ivrTtsAiTalk', icon: 'mingcute:chat-1-ai-fill', color: 'var(--bk-accent)' },
   ];
   const sttOptions: OptionDef[] = [
-    { value: 'amivoice', labelKey: 'ivrSttAmivoice', icon: 'mingcute:voice-line', color: 'var(--bk-accent)' },
+    { value: 'amivoice', labelKey: 'ivrSttAmivoice', icon: 'mingcute:voice-fill', color: 'var(--bk-accent)' },
     { value: 'soniox', labelKey: 'ivrSttSoniox', icon: 'noto:letter-s', color: 'var(--bk-accent)' },
   ];
 
@@ -109,15 +109,69 @@ export function IvrPropertyModal({ onClose }: { onClose: () => void }) {
             />
           </div>
 
-          {/* IVR Property — read-only, liên động các setting trên + announce trong flow. */}
+          {/* IVR Property — read-only + tô sáng cú pháp; liên động setting + announce. */}
           <div className="block">
             <span className="text-xs font-medium text-[var(--bk-text-muted)]">{t('ivrPropertyText')}</span>
-            <textarea className="bk-ivr-textarea" value={text} readOnly spellCheck={false} />
+            <pre className="bk-ivr-code">
+              {text.split('\n').map((line, i) => (
+                <IvrLine key={i} line={line} />
+              ))}
+            </pre>
           </div>
         </div>
       </div>
     </div>
   );
+}
+
+// ── Tô sáng cú pháp 1 dòng IVR Property (read-only) ──────────────────────────
+//   - dòng bắt đầu bằng '#'         -> comment
+//   - dòng key=value               -> key (property) · '=' · value (string)
+//   - value dạng {tts_g:…}/{tts_ai:…} -> tô token trong ngoặc nhọn
+function IvrLine({ line }: { line: string }) {
+  if (line.trim() === '') return <div className="bk-ivr-ln">{'\n'}</div>;
+
+  // Comment nguyên dòng.
+  if (line.trimStart().startsWith('#')) {
+    return (
+      <div className="bk-ivr-ln">
+        <span className="tok-comment">{line}</span>
+      </div>
+    );
+  }
+
+  const eq = line.indexOf('=');
+  if (eq === -1) {
+    return <div className="bk-ivr-ln">{line}</div>;
+  }
+
+  const key = line.slice(0, eq);
+  const value = line.slice(eq + 1);
+
+  return (
+    <div className="bk-ivr-ln">
+      <span className="tok-property">{key}</span>
+      <span className="tok-punct">=</span>
+      {renderValue(value)}
+    </div>
+  );
+}
+
+// value: tô sáng token {tts_g:…} / {tts_ai:…}; còn lại coi như chuỗi.
+function renderValue(value: string) {
+  const m = value.match(/^\{(tts_g|tts_ai):([\s\S]*)\}$/);
+  if (m) {
+    return (
+      <>
+        <span className="tok-punct">{'{'}</span>
+        <span className="tok-keyword">{m[1]}</span>
+        <span className="tok-punct">:</span>
+        <span className="tok-string">{m[2]}</span>
+        <span className="tok-punct">{'}'}</span>
+      </>
+    );
+  }
+  return <span className="tok-string">{value}</span>;
 }
 
 // 1 cột cấu hình: nhãn trên cùng + các option xếp DỌC (compact).

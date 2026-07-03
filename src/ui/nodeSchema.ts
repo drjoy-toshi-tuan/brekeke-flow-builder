@@ -114,7 +114,6 @@ export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
     // Repeat (復唱): ngay dưới Announce; bật -> hiện Repeat Announce (復唱アナウンス).
     { key: 'repeat', labelKey: 'fRepeat', kind: 'yesno', options: YESNO_OPTIONS, default: 'no' },
     { key: 'repeatAnnounce', labelKey: 'fRepeatAnnounce', kind: 'autoText', showIf: repeatOn },
-    { key: 'retryAnnounce', labelKey: 'fRetryAnnounce', kind: 'autoText' },
     { key: 'inputType', labelKey: 'fInputType', kind: 'select', options: INPUT_TYPE_OPTIONS, default: 'STT' },
     {
       key: 'voiceType',
@@ -125,6 +124,8 @@ export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
       showIf: inputHasStt,
     },
     { key: 'retryCount', labelKey: 'fRetryCount', kind: 'number', default: '2' },
+    // Retry Announce luôn nằm ngay dưới Retry Count.
+    { key: 'retryAnnounce', labelKey: 'fRetryAnnounce', kind: 'autoText' },
   ],
   condition: [
     { key: 'saveContext', labelKey: 'fSaveContext', kind: 'yesno', options: YESNO_OPTIONS, default: 'no' },
@@ -140,8 +141,9 @@ export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
   ],
   script: [{ key: 'script', labelKey: 'fScript', kind: 'code', rows: 18 }],
   llm: [
-    { key: 'retryAnnounce', labelKey: 'fRetryAnnounce', kind: 'autoText' },
     { key: 'retryCount', labelKey: 'fRetryCount', kind: 'number', default: '2' },
+    // Retry Announce luôn nằm ngay dưới Retry Count.
+    { key: 'retryAnnounce', labelKey: 'fRetryAnnounce', kind: 'autoText' },
     { key: 'prompt', labelKey: 'fPrompt', kind: 'textarea', rows: 6 },
   ],
   faq: [{ key: 'announce', labelKey: 'fAnnounce', kind: 'autoText' }],

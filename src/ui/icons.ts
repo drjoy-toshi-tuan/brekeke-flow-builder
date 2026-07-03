@@ -14,6 +14,7 @@ import {
   fluentMdl2Subset,
   hugeiconsSubset,
   notoSubset,
+  materialSymbolsLightSubset,
 } from './iconData';
 
 addCollection(lucideSubset);
@@ -27,6 +28,7 @@ addCollection(materialSymbolsSubset);
 addCollection(fluentMdl2Subset);
 addCollection(hugeiconsSubset);
 addCollection(notoSubset);
+addCollection(materialSymbolsLightSubset);
 
 // Re-export để cả app import 1 chỗ (đảm bảo addCollection đã chạy trước khi render).
 export { Icon };

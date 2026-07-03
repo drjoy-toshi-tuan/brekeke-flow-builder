@@ -1,11 +1,12 @@
-import type { CSSProperties } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { Handle, NodeToolbar, Position, type NodeProps } from '@xyflow/react';
 import type { RFNodeData } from '../irAdapter';
 import type { NodeType } from '../../ir/types';
 import { NODE_CONFIG } from '../../ui/nodeConfig';
+import { PROPERTY_FIELDS, type PropertyField } from '../../ui/nodeSchema';
 import { Icon } from '../../ui/icons';
 import { useFlowStore } from '../../store/flowStore';
-import { useT } from '../../ui/i18n';
+import { useT, type TKey } from '../../ui/i18n';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Node card. Bố cục theo yêu cầu:
@@ -26,15 +27,28 @@ export function makeNode(nodeType: NodeType) {
     const description = pickDescription(d.nodeData);
     const handles = d.sourceHandles;
     const selectNode = useFlowStore((s) => s.selectNode);
-    const removeNode = useFlowStore((s) => s.removeNode);
+    const requestDeleteNode = useFlowStore((s) => s.requestDeleteNode);
     const isPanning = useFlowStore((s) => s.isPanning);
     const t = useT();
+    const [hovered, setHovered] = useState(false);
 
     return (
       <div
         className={['bk-node', selected ? 'bk-node--selected' : ''].join(' ')}
         style={{ '--accent': cfg.color } as CSSProperties}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
       >
+        {/* Hover / chọn node -> xem nhanh các property đang set (bên phải node). */}
+        <NodeToolbar
+          isVisible={(hovered || selected) && !isPanning}
+          position={Position.Right}
+          offset={12}
+          align="start"
+        >
+          <NodePreview type={nodeType} data={d.nodeData} />
+        </NodeToolbar>
+
         {/* Thanh công cụ nổi phía trên node khi được chọn (bấm vào node).
             Ẩn trong lúc kéo/di chuyển canvas để không hiện lơ lửng sai chỗ. */}
         <NodeToolbar
@@ -57,7 +71,7 @@ export function makeNode(nodeType: NodeType) {
             <button
               type="button"
               className="bk-node-toolbar-btn bk-node-toolbar-btn--danger"
-              onClick={() => removeNode(id)}
+              onClick={() => requestDeleteNode(id)}
               title={t('deleteNodeTitle')}
             >
               <Icon icon="lucide:trash-2" width={14} height={14} />
@@ -115,4 +129,53 @@ export function makeNode(nodeType: NodeType) {
 function pickDescription(data: Record<string, unknown>): string | null {
   const value = data.description;
   return typeof value === 'string' && value.trim() ? value : null;
+}
+
+// ── Preview property (hover/chọn node) ──────────────────────────────────────
+// Card nhỏ bên phải node: liệt kê các property đang set. Giá trị dài (announce,
+// prompt…) cắt 1 dòng + "…" cho vừa bề rộng card (xử lý bằng CSS text-ellipsis).
+function NodePreview({ type, data }: { type: NodeType; data: Record<string, unknown> }) {
+  const t = useT();
+  const fields = PROPERTY_FIELDS[type].filter((f) => !f.showIf || f.showIf(data));
+  const description = pickDescription(data);
+
+  if (fields.length === 0 && !description) {
+    return (
+      <div className="bk-node-preview">
+        <div className="bk-node-preview-empty">{t('noPropertyNote')}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bk-node-preview">
+      {description && (
+        <div className="bk-node-preview-row">
+          <span className="bk-node-preview-key">{t('description')}</span>
+          <span className="bk-node-preview-val">{description}</span>
+        </div>
+      )}
+      {fields.map((f) => (
+        <div key={f.key} className="bk-node-preview-row">
+          <span className="bk-node-preview-key">{t(f.labelKey)}</span>
+          <span className="bk-node-preview-val">{formatFieldValue(f, data, t) || '—'}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Giá trị hiển thị của 1 field: select/yesno -> nhãn lựa chọn; còn lại -> chuỗi thô.
+function formatFieldValue(
+  field: PropertyField,
+  data: Record<string, unknown>,
+  t: (key: TKey) => string,
+): string {
+  const raw = data[field.key];
+  const value = typeof raw === 'string' ? raw : typeof raw === 'number' ? String(raw) : '';
+  if ((field.kind === 'select' || field.kind === 'yesno') && value) {
+    const opt = field.options?.find((o) => o.value === value);
+    if (opt) return opt.labelKey ? t(opt.labelKey) : opt.label ?? value;
+  }
+  return value.replace(/\s+/g, ' ').trim();
 }
