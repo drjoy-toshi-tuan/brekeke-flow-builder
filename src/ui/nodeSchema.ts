@@ -98,6 +98,11 @@ function saveContextOn(data: Record<string, unknown>): boolean {
   return data.saveContext === 'yes';
 }
 
+// Input: chỉ hiện "Repeat Announce" khi bật "Repeat" (復唱).
+function repeatOn(data: Record<string, unknown>): boolean {
+  return data.repeat === 'yes';
+}
+
 export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
   start: [
     { key: 'acceptanceTime', labelKey: 'fAcceptanceTime', kind: 'yesno', options: YESNO_OPTIONS, default: 'yes' },
@@ -106,6 +111,10 @@ export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
   announce: [{ key: 'text', labelKey: 'fAnnounce', kind: 'autoText' }],
   input: [
     { key: 'announce', labelKey: 'fAnnounce', kind: 'autoText' },
+    // Repeat (復唱): ngay dưới Announce; bật -> hiện Repeat Announce (復唱アナウンス).
+    { key: 'repeat', labelKey: 'fRepeat', kind: 'yesno', options: YESNO_OPTIONS, default: 'no' },
+    { key: 'repeatAnnounce', labelKey: 'fRepeatAnnounce', kind: 'autoText', showIf: repeatOn },
+    { key: 'retryAnnounce', labelKey: 'fRetryAnnounce', kind: 'autoText' },
     { key: 'inputType', labelKey: 'fInputType', kind: 'select', options: INPUT_TYPE_OPTIONS, default: 'STT' },
     {
       key: 'voiceType',
@@ -131,6 +140,7 @@ export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
   ],
   script: [{ key: 'script', labelKey: 'fScript', kind: 'code', rows: 18 }],
   llm: [
+    { key: 'retryAnnounce', labelKey: 'fRetryAnnounce', kind: 'autoText' },
     { key: 'retryCount', labelKey: 'fRetryCount', kind: 'number', default: '2' },
     { key: 'prompt', labelKey: 'fPrompt', kind: 'textarea', rows: 6 },
   ],
@@ -140,6 +150,11 @@ export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
     { key: 'transferType', labelKey: 'fTransferType', kind: 'select', options: TRANSFER_TYPE_OPTIONS, default: 'ATTENDED' },
     { key: 'announce', labelKey: 'fAnnounce', kind: 'autoText' },
     { key: 'failedAnnounce', labelKey: 'fFailedAnnounce', kind: 'autoText' },
+  ],
+  // Flag (フラグ): 2 tham số chỉ nhận số — Status Flag & SMS Flag.
+  flag: [
+    { key: 'statusFlag', labelKey: 'fStatusFlag', kind: 'number' },
+    { key: 'smsFlag', labelKey: 'fSmsFlag', kind: 'number' },
   ],
   hangup: [],
 };
@@ -159,6 +174,8 @@ export const BRANCH_SCHEMA: Record<NodeType, BranchSchema> = {
   llm: { mode: 'fixed', fixed: FAILED_NEXT },
   faq: { mode: 'fixed', fixed: FAILED_NEXT },
   transfer: { mode: 'fixed', fixed: [{ id: 'default', label: 'NEXT' }] },
+  // Flag: chỉ có nhánh NEXT.
+  flag: { mode: 'fixed', fixed: [{ id: 'default', label: 'NEXT' }] },
   hangup: { mode: 'none' },
 };
 

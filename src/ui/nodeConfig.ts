@@ -22,10 +22,12 @@ export const NODE_CONFIG: Record<NodeType, NodeVisual> = {
   llm: { icon: 'mingcute:ai-fill', typeLabel: 'LLM', color: '#d946ef' },
   faq: { icon: 'lucide:messages-square', typeLabel: 'FAQ', color: '#6366f1' },
   transfer: { icon: 'lucide:phone-forwarded', typeLabel: 'Transfer', color: '#06b6d4' },
+  flag: { icon: 'mingcute:flag-4-fill', typeLabel: 'Flag', color: '#eab308' },
   hangup: { icon: 'lucide:phone-off', typeLabel: 'Hangup', color: '#f43f5e', showSource: false },
 };
 
 // Loại có thể thêm qua "Thêm node". 'start' chỉ được thêm 1 lần (xem AddModulePanel).
+// Flag nằm ngay dưới Transfer trong menu thêm node.
 export const ADDABLE_NODE_TYPES: readonly NodeType[] = [
   'start',
   'announce',
@@ -35,5 +37,6 @@ export const ADDABLE_NODE_TYPES: readonly NodeType[] = [
   'llm',
   'faq',
   'transfer',
+  'flag',
   'hangup',
 ] as const;

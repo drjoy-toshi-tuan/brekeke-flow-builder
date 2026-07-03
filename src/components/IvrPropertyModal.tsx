@@ -1,0 +1,154 @@
+import { useMemo, type CSSProperties } from 'react';
+import { useFlowStore } from '../store/flowStore';
+import { buildIvrProperty, type IvrSettings } from '../ir/ivrProperty';
+import { Icon } from '../ui/icons';
+import { useT, type TKey } from '../ui/i18n';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Modal "Cài đặt IVR Property":
+//   - Header: 施設名 + Office ID (text 1 dòng) và 3 lựa chọn (環境 / TTS / STT).
+//   - Body: textarea IVR Property READ-ONLY, liên động với các setting + announce.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const inputClass =
+  'mt-1 w-full rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-3 py-2 text-sm text-[var(--bk-text)] outline-none transition focus:border-[var(--bk-accent)]';
+
+interface OptionDef {
+  value: string;
+  labelKey: TKey;
+  icon: string;
+  color: string; // màu accent khi chọn
+}
+
+export function IvrPropertyModal({ onClose }: { onClose: () => void }) {
+  const t = useT();
+  const ir = useFlowStore((s) => s.ir);
+  const ivr = useFlowStore((s) => s.ivr);
+  const setIvr = useFlowStore((s) => s.setIvr);
+
+  const text = useMemo(() => buildIvrProperty(ir, ivr), [ir, ivr]);
+
+  const envOptions: OptionDef[] = [
+    { value: 'demo', labelKey: 'ivrEnvDemo', icon: 'fluent-mdl2:test-beaker-solid', color: '#16a34a' },
+    { value: 'master', labelKey: 'ivrEnvMaster', icon: 'material-symbols:contacts-product', color: '#f97316' },
+  ];
+  const ttsOptions: OptionDef[] = [
+    { value: 'amivoice', labelKey: 'ivrTtsAmivoice', icon: 'hugeicons:voice', color: 'var(--bk-accent)' },
+    { value: 'aitalk', labelKey: 'ivrTtsAiTalk', icon: 'hugeicons:ai-voice', color: 'var(--bk-accent)' },
+  ];
+  const sttOptions: OptionDef[] = [
+    { value: 'amivoice', labelKey: 'ivrSttAmivoice', icon: 'mingcute:voice-line', color: 'var(--bk-accent)' },
+    { value: 'soniox', labelKey: 'ivrSttSoniox', icon: 'noto:letter-s', color: 'var(--bk-accent)' },
+  ];
+
+  return (
+    <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true" onClick={onClose}>
+      <div className="bk-ivr-modal" onClick={(e) => e.stopPropagation()}>
+        <header className="bk-ivr-modal-header">
+          <div className="flex items-center gap-2">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]">
+              <Icon icon="lucide:layout-dashboard" width={17} height={17} />
+            </span>
+            <span className="text-sm font-bold text-[var(--bk-text)]">{t('ivrProperty')}</span>
+          </div>
+          <button
+            type="button"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface)] text-[var(--bk-text-muted)] transition hover:border-[var(--bk-accent)] hover:text-[var(--bk-accent)]"
+            onClick={onClose}
+            aria-label={t('close')}
+          >
+            <Icon icon="lucide:x" width={16} height={16} />
+          </button>
+        </header>
+
+        <div className="bk-ivr-modal-body">
+          {/* Form: 施設名 + Office ID */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="text-xs font-medium text-[var(--bk-text-muted)]">{t('ivrFacility')}</span>
+              <input
+                type="text"
+                className={inputClass}
+                placeholder={t('ivrFacilityPlaceholder')}
+                value={ivr.facilityName}
+                onChange={(e) => setIvr({ facilityName: e.target.value.replace(/[\r\n]+/g, ' ') })}
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium text-[var(--bk-text-muted)]">{t('ivrOfficeId')}</span>
+              <input
+                type="text"
+                className={inputClass}
+                placeholder={t('ivrOfficeIdPlaceholder')}
+                value={ivr.officeId}
+                onChange={(e) => setIvr({ officeId: e.target.value.replace(/[\r\n]+/g, ' ') })}
+              />
+            </label>
+          </div>
+
+          {/* 3 lựa chọn: 環境 / TTS / STT */}
+          <OptionGroup
+            label={t('ivrEnvironment')}
+            options={envOptions}
+            value={ivr.environment}
+            onChange={(v) => setIvr({ environment: v as IvrSettings['environment'] })}
+          />
+          <OptionGroup
+            label={t('ivrTts')}
+            options={ttsOptions}
+            value={ivr.ttsEngine}
+            onChange={(v) => setIvr({ ttsEngine: v as IvrSettings['ttsEngine'] })}
+          />
+          <OptionGroup
+            label={t('ivrStt')}
+            options={sttOptions}
+            value={ivr.sttEngine}
+            onChange={(v) => setIvr({ sttEngine: v as IvrSettings['sttEngine'] })}
+          />
+
+          {/* IVR Property — read-only, liên động các setting trên + announce trong flow. */}
+          <div className="block">
+            <span className="text-xs font-medium text-[var(--bk-text-muted)]">{t('ivrPropertyText')}</span>
+            <textarea className="bk-ivr-textarea" value={text} readOnly spellCheck={false} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OptionGroup({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: OptionDef[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const t = useT();
+  return (
+    <div className="block">
+      <span className="text-xs font-medium text-[var(--bk-text-muted)]">{label}</span>
+      <div className="mt-1 flex gap-2">
+        {options.map((o) => {
+          const on = value === o.value;
+          return (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => onChange(o.value)}
+              className={`bk-ivr-opt ${on ? 'bk-ivr-opt--on' : ''}`}
+              style={{ '--optc': o.color } as CSSProperties}
+            >
+              <Icon icon={o.icon} width={18} height={18} />
+              <span>{t(o.labelKey)}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

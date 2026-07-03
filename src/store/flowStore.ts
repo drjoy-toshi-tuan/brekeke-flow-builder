@@ -5,6 +5,7 @@ import { toYaml } from '../ir/toYaml';
 import { layout } from '../ir/layout';
 import { NODE_CONFIG } from '../ui/nodeConfig';
 import { defaultDataFor, readBranches, BRANCH_SCHEMA, CATCH_ALL_ID, type DataBranch } from '../ui/nodeSchema';
+import { DEFAULT_IVR_SETTINGS, type IvrSettings } from '../ir/ivrProperty';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Zustand store: giữ FlowIR (source of truth) + các action cập nhật IR.
@@ -32,6 +33,11 @@ interface FlowState {
   // Đang kéo/di chuyển canvas (pan/zoom) -> ẩn thanh công cụ nổi trên node.
   isPanning: boolean;
   setPanning: (value: boolean) => void;
+
+  // Cấu hình IVR Property (施設名 / Office ID / môi trường / TTS / STT) — dùng cho
+  // modal "Cài đặt IVR Property". Giữ độc lập với ir để không bị reset khi nạp lại YAML.
+  ivr: IvrSettings;
+  setIvr: (patch: Partial<IvrSettings>) => void;
 
   // Nạp YAML -> IR -> auto-layout, rồi set vào store.
   loadYaml: (text: string) => Promise<void>;
@@ -103,10 +109,19 @@ export const useFlowStore = create<FlowState>((set, get) => {
     isPanning: false,
     setPanning: (value) => set({ isPanning: value }),
 
+    ivr: { ...DEFAULT_IVR_SETTINGS },
+    setIvr: (patch) => set({ ivr: { ...get().ivr, ...patch } }),
+
     loadYaml: async (text) => {
       const ir = fromYaml(text);
       const laidOut = await layout(ir);
-      set({ ir: laidOut, selectedNodeId: null, draft: null, pendingSelect: null });
+      // Seed 施設名 từ meta.facility nếu người dùng chưa nhập.
+      const { ivr } = get();
+      const nextIvr =
+        !ivr.facilityName && laidOut.meta.facility
+          ? { ...ivr, facilityName: laidOut.meta.facility }
+          : ivr;
+      set({ ir: laidOut, selectedNodeId: null, draft: null, pendingSelect: null, ivr: nextIvr });
     },
 
     autoLayout: async () => {
