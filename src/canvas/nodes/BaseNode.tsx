@@ -152,15 +152,23 @@ function NodePreview({ type, data }: { type: NodeType; data: Record<string, unkn
       {description && (
         <div className="bk-node-preview-row">
           <span className="bk-node-preview-key">{t('description')}</span>
-          <span className="bk-node-preview-val">{description}</span>
+          {/* Giá trị dài bị cắt "…" -> hover xem đầy đủ qua title. */}
+          <span className="bk-node-preview-val" title={description}>
+            {description}
+          </span>
         </div>
       )}
-      {fields.map((f) => (
-        <div key={f.key} className="bk-node-preview-row">
-          <span className="bk-node-preview-key">{t(f.labelKey)}</span>
-          <span className="bk-node-preview-val">{formatFieldValue(f, data, t) || '—'}</span>
-        </div>
-      ))}
+      {fields.map((f) => {
+        const val = formatFieldValue(f, data, t);
+        return (
+          <div key={f.key} className="bk-node-preview-row">
+            <span className="bk-node-preview-key">{t(f.labelKey)}</span>
+            <span className="bk-node-preview-val" title={val || undefined}>
+              {val || '—'}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
