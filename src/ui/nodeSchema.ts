@@ -45,7 +45,8 @@ export type BranchMode =
 
 export interface BranchDescriptor {
   id: string; // trùng với sourceHandle của edge
-  label?: string;
+  name?: string; // tên nhánh cố định (NEXT/FAILED) — cột VALUE, hiển thị ^name$
+  label?: string; // nhãn hiển thị (次へ/失敗) — cột LABEL + nhãn trên dây
 }
 
 export interface BranchSchema {
@@ -66,6 +67,7 @@ const INPUT_TYPE_OPTIONS: FieldOption[] = [
 ];
 
 const VOICE_TYPE_OPTIONS: FieldOption[] = [
+  { value: 'TEXT', label: 'TEXT' },
   { value: 'KANA_NAME', labelKey: 'vtKanaName' },
   { value: 'NUMBER', labelKey: 'vtNumber' },
   { value: 'PHONE_NUMBER', labelKey: 'vtPhone' },
@@ -86,6 +88,20 @@ const TRANSFER_TYPE_OPTIONS: FieldOption[] = [
   { value: 'ATTENDED', label: 'Attended Transfer' },
   { value: 'BLIND', label: 'Blind Transfer' },
 ];
+
+// Module cho node Logic (nguyên Script). Chọn "Script" -> hiện ô soạn code;
+// 2 module còn lại (tạm thời chưa có tham số riêng) sẽ bổ sung property sau.
+const MODULE_OPTIONS: FieldOption[] = [
+  { value: 'Clinic Day Classifier', label: 'Clinic Day Classifier' },
+  { value: 'Context Match Router', label: 'Context Match Router' },
+  { value: 'Script', label: 'Script' },
+];
+
+// Logic: chỉ hiện ô soạn code khi Module = Script (mặc định khi chưa chọn).
+function moduleIsScript(data: Record<string, unknown>): boolean {
+  const v = data.module;
+  return typeof v === 'string' ? v === 'Script' : true;
+}
 
 // Input Type có STT (STT hoặc STT & DTMF) -> mới hiện Voice Type.
 function inputHasStt(data: Record<string, unknown>): boolean {
@@ -139,7 +155,10 @@ export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
       showIf: saveContextOn,
     },
   ],
-  script: [{ key: 'script', labelKey: 'fScript', kind: 'code', rows: 18 }],
+  script: [
+    { key: 'module', labelKey: 'fModule', kind: 'select', options: MODULE_OPTIONS, default: 'Script' },
+    { key: 'script', labelKey: 'fScript', kind: 'code', rows: 18, showIf: moduleIsScript },
+  ],
   llm: [
     { key: 'retryCount', labelKey: 'fRetryCount', kind: 'number', default: '2' },
     // Retry Announce luôn nằm ngay dưới Retry Count.
@@ -151,7 +170,6 @@ export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
     { key: 'transferNumber', labelKey: 'fTransferNumber', kind: 'text' },
     { key: 'transferType', labelKey: 'fTransferType', kind: 'select', options: TRANSFER_TYPE_OPTIONS, default: 'ATTENDED' },
     { key: 'announce', labelKey: 'fAnnounce', kind: 'autoText' },
-    { key: 'failedAnnounce', labelKey: 'fFailedAnnounce', kind: 'autoText' },
   ],
   // Flag (フラグ): 2 tham số chỉ nhận số — Status Flag & SMS Flag.
   flag: [
@@ -161,23 +179,32 @@ export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
   hangup: [],
 };
 
-// FAILED + NEXT dùng chung cho input/llm/faq (NEXT = handle 'default' để khớp `next` trong YAML).
+// Nhánh cố định: VALUE (name, hiển thị ^name$) giữ nguyên NEXT/FAILED;
+// LABEL mặc định là 次へ (NEXT) / 失敗 (FAILED) — cũng là nhãn hiện trên dây.
+//   - NEXT  = handle 'default' (khớp `next` trong YAML)
+//   - FAILED = handle 'failed'
+export const NEXT_BRANCH_LABEL = '次へ';
+export const FAILED_BRANCH_LABEL = '失敗';
+
+const NEXT_ONLY: BranchDescriptor[] = [{ id: 'default', name: 'NEXT', label: NEXT_BRANCH_LABEL }];
+// FAILED + NEXT dùng chung cho input/llm/faq/transfer.
 const FAILED_NEXT: BranchDescriptor[] = [
-  { id: 'failed', label: 'FAILED' },
-  { id: 'default', label: 'NEXT' },
+  { id: 'failed', name: 'FAILED', label: FAILED_BRANCH_LABEL },
+  { id: 'default', name: 'NEXT', label: NEXT_BRANCH_LABEL },
 ];
 
 export const BRANCH_SCHEMA: Record<NodeType, BranchSchema> = {
-  start: { mode: 'fixed', fixed: [{ id: 'default', label: 'NEXT' }] },
-  announce: { mode: 'fixed', fixed: [{ id: 'default', label: 'NEXT' }] },
+  start: { mode: 'fixed', fixed: NEXT_ONLY },
+  announce: { mode: 'fixed', fixed: NEXT_ONLY },
   input: { mode: 'fixed', fixed: FAILED_NEXT },
   condition: { mode: 'editable' },
   script: { mode: 'editable' },
   llm: { mode: 'fixed', fixed: FAILED_NEXT },
   faq: { mode: 'fixed', fixed: FAILED_NEXT },
-  transfer: { mode: 'fixed', fixed: [{ id: 'default', label: 'NEXT' }] },
+  // Transfer: nhánh FAILED (nối máy thất bại) nằm trên nhánh NEXT.
+  transfer: { mode: 'fixed', fixed: FAILED_NEXT },
   // Flag: chỉ có nhánh NEXT.
-  flag: { mode: 'fixed', fixed: [{ id: 'default', label: 'NEXT' }] },
+  flag: { mode: 'fixed', fixed: NEXT_ONLY },
   hangup: { mode: 'none' },
 };
 
@@ -185,6 +212,7 @@ export const BRANCH_SCHEMA: Record<NodeType, BranchSchema> = {
 export interface DataBranch {
   id: string;
   value: string; // biểu thức regex (không kèm ^ $ — chỉ thêm khi hiển thị)
+  label?: string; // nhãn hiển thị trên dây (thay cho value); rỗng -> dùng value
 }
 
 // Nhánh "catch-all" (else) của node có nhánh tự do: LUÔN có, không sửa/không xoá.
@@ -198,7 +226,12 @@ export function readBranches(data: Record<string, unknown>): DataBranch[] {
   if (Array.isArray(raw)) {
     list = raw
       .filter((b): b is DataBranch => !!b && typeof (b as DataBranch).id === 'string')
-      .map((b) => ({ id: b.id, value: typeof b.value === 'string' ? b.value : '' }));
+      .map((b) => {
+        const branch: DataBranch = { id: b.id, value: typeof b.value === 'string' ? b.value : '' };
+        // Chỉ giữ label khi có giá trị -> không rải label rỗng khắp IR/YAML.
+        if (typeof b.label === 'string' && b.label !== '') branch.label = b.label;
+        return branch;
+      });
   }
   if (list.length === 0) return [{ id: CATCH_ALL_ID, value: '' }];
   // Thiếu catch-all -> thêm vào đầu (giữ nguyên các nhánh sẵn có).
@@ -229,7 +262,8 @@ export function sourceHandlesFor(node: FlowNode): BranchDescriptor[] {
   const schema = BRANCH_SCHEMA[node.type];
   if (schema.mode === 'none') return [];
   if (schema.mode === 'fixed') return schema.fixed ?? [];
-  return readBranches(node.data).map((b) => ({ id: b.id, label: b.value || undefined }));
+  // Nhãn trên dây/handle: ưu tiên label do người dùng đặt, fallback về value.
+  return readBranches(node.data).map((b) => ({ id: b.id, label: b.label?.trim() || b.value || undefined }));
 }
 
 // Sinh dữ liệu mặc định khi thêm node mới (tham số + nhánh tự do nếu có).

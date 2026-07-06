@@ -489,6 +489,7 @@ function BranchTab({ node, data }: { node: FlowNode; data: Record<string, unknow
   const ir = useFlowStore((s) => s.ir);
   const draftAddBranch = useFlowStore((s) => s.draftAddBranch);
   const draftUpdateBranch = useFlowStore((s) => s.draftUpdateBranch);
+  const draftSetBranchLabel = useFlowStore((s) => s.draftSetBranchLabel);
   const draftRemoveBranch = useFlowStore((s) => s.draftRemoveBranch);
 
   // Đích jump của 1 nhánh = target của edge xuất phát từ handle đó (IR đã commit).
@@ -507,23 +508,42 @@ function BranchTab({ node, data }: { node: FlowNode; data: Record<string, unknow
   }
 
   if (schema.mode === 'fixed') {
-    // Nhánh cố định (FAILED / NEXT …): chỉ xem nhãn + đích jump (cùng UI như node tự do).
+    // Nhánh cố định (FAILED / NEXT …): cùng bố cục VALUE · LABEL · NODE như nhánh tự do,
+    // chỉ khác là không sửa/không thêm/không xoá được (hiển thị read-only).
     return (
       <div className="space-y-3">
         <p className="text-xs text-[var(--bk-text-faint)]">{t('branchFixedNote')}</p>
         <div className="space-y-2.5">
-          {(schema.fixed ?? []).map((b) => (
-            <div key={b.id} className="bk-branch-row">
-              <div className="bk-branch-cond">
-                {/* Neo regex ^…$ cho khớp cách hiển thị của nhánh tự do (^FAILED$, ^NEXT$). */}
-                <span className="bk-branch-fixed">{`^${b.label ?? b.id}$`}</span>
+          <div className="bk-branch-row bk-branch-head">
+            <div className="bk-branch-cond">{t('branchColValue')}</div>
+            <div className="bk-branch-label-col">{t('branchColLabel')}</div>
+            <span className="bk-branch-arrow-spacer" aria-hidden />
+            <div className="bk-branch-target">{t('branchColNode')}</div>
+          </div>
+          {(schema.fixed ?? []).map((b) => {
+            const value = `^${b.name ?? b.id}$`;
+            const label = b.label ?? '';
+            return (
+              <div key={b.id} className="bk-branch-row">
+                <div className="bk-branch-cond">
+                  {/* VALUE: tên nhánh cố định neo ^…$ (giữ nguyên, không sửa). */}
+                  <span className="bk-branch-fixed" title={value}>
+                    {value}
+                  </span>
+                </div>
+                <div className="bk-branch-label-col">
+                  {/* LABEL: nhãn hiển thị (次へ / 失敗), read-only. */}
+                  <span className="bk-branch-fixed" title={label}>
+                    {label}
+                  </span>
+                </div>
+                <Icon icon="fluent:flow-dot-20-filled" width={18} height={18} className="bk-branch-arrow" />
+                <div className="bk-branch-target">
+                  <BranchTarget info={targetInfo(b.id)} />
+                </div>
               </div>
-              <Icon icon="fluent:flow-dot-20-filled" width={18} height={18} className="bk-branch-arrow" />
-              <div className="bk-branch-target">
-                <BranchTarget info={targetInfo(b.id)} />
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
@@ -542,6 +562,14 @@ function BranchTab({ node, data }: { node: FlowNode; data: Record<string, unknow
   return (
     <div className="space-y-3">
       <div className="space-y-2.5">
+        {/* Tiêu đề cột: VALUE · LABEL · NODE (nhãn hiển thị trên dây thay cho value). */}
+        <div className="bk-branch-row bk-branch-head">
+          <div className="bk-branch-cond">{t('branchColValue')}</div>
+          <div className="bk-branch-label-col">{t('branchColLabel')}</div>
+          <span className="bk-branch-arrow-spacer" aria-hidden />
+          <div className="bk-branch-target">{t('branchColNode')}</div>
+          <span className="bk-branch-del-spacer" aria-hidden />
+        </div>
         {ordered.map((b) => {
           const isCatchAll = b.id === CATCH_ALL_ID;
           return (
@@ -563,6 +591,15 @@ function BranchTab({ node, data }: { node: FlowNode; data: Record<string, unknow
                     onChange={(v) => draftUpdateBranch(b.id, v)}
                   />
                 )}
+              </div>
+              <div className="bk-branch-label-col">
+                <input
+                  type="text"
+                  className={`${inputClass} !mt-0 w-full`}
+                  value={b.label ?? ''}
+                  placeholder={t('branchLabelPlaceholder')}
+                  onChange={(e) => draftSetBranchLabel(b.id, e.target.value.replace(/[\r\n]+/g, ' '))}
+                />
               </div>
               <Icon icon="fluent:flow-dot-20-filled" width={18} height={18} className="bk-branch-arrow" />
               <div className="bk-branch-target">

@@ -152,15 +152,23 @@ function NodePreview({ type, data }: { type: NodeType; data: Record<string, unkn
       {description && (
         <div className="bk-node-preview-row">
           <span className="bk-node-preview-key">{t('description')}</span>
-          <span className="bk-node-preview-val">{description}</span>
+          {/* Giá trị dài bị cắt "…" -> hover xem đầy đủ qua title. */}
+          <span className="bk-node-preview-val" title={description}>
+            {description}
+          </span>
         </div>
       )}
-      {fields.map((f) => (
-        <div key={f.key} className="bk-node-preview-row">
-          <span className="bk-node-preview-key">{t(f.labelKey)}</span>
-          <span className="bk-node-preview-val">{formatFieldValue(f, data, t) || '—'}</span>
-        </div>
-      ))}
+      {fields.map((f) => {
+        const val = formatFieldValue(f, data, t);
+        return (
+          <div key={f.key} className="bk-node-preview-row">
+            <span className="bk-node-preview-key">{t(f.labelKey)}</span>
+            <span className="bk-node-preview-val" title={val || undefined}>
+              {val || '—'}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -172,7 +180,10 @@ function formatFieldValue(
   t: (key: TKey) => string,
 ): string {
   const raw = data[field.key];
-  const value = typeof raw === 'string' ? raw : typeof raw === 'number' ? String(raw) : '';
+  // Chưa lưu vào data -> lấy giá trị mặc định (giống ô nhập trong panel), tránh hiện "—"
+  // dù field vốn có default (vd Voice Type, Retry Count).
+  const value =
+    typeof raw === 'string' ? raw : typeof raw === 'number' ? String(raw) : field.default ?? '';
   if ((field.kind === 'select' || field.kind === 'yesno') && value) {
     const opt = field.options?.find((o) => o.value === value);
     if (opt) return opt.labelKey ? t(opt.labelKey) : opt.label ?? value;
