@@ -178,15 +178,22 @@ export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
   hangup: [],
 };
 
-// FAILED + NEXT dùng chung cho input/llm/faq (NEXT = handle 'default' để khớp `next` trong YAML).
+// Nhãn mặc định cho nhánh cố định (hiển thị trên dây + tab Branch).
+//   - NEXT (handle 'default', khớp `next` trong YAML) -> 次へ
+//   - FAILED (handle 'failed')                        -> 失敗
+export const NEXT_BRANCH_LABEL = '次へ';
+export const FAILED_BRANCH_LABEL = '失敗';
+
+const NEXT_ONLY: BranchDescriptor[] = [{ id: 'default', label: NEXT_BRANCH_LABEL }];
+// FAILED + NEXT dùng chung cho input/llm/faq/transfer.
 const FAILED_NEXT: BranchDescriptor[] = [
-  { id: 'failed', label: 'FAILED' },
-  { id: 'default', label: 'NEXT' },
+  { id: 'failed', label: FAILED_BRANCH_LABEL },
+  { id: 'default', label: NEXT_BRANCH_LABEL },
 ];
 
 export const BRANCH_SCHEMA: Record<NodeType, BranchSchema> = {
-  start: { mode: 'fixed', fixed: [{ id: 'default', label: 'NEXT' }] },
-  announce: { mode: 'fixed', fixed: [{ id: 'default', label: 'NEXT' }] },
+  start: { mode: 'fixed', fixed: NEXT_ONLY },
+  announce: { mode: 'fixed', fixed: NEXT_ONLY },
   input: { mode: 'fixed', fixed: FAILED_NEXT },
   condition: { mode: 'editable' },
   script: { mode: 'editable' },
@@ -195,7 +202,7 @@ export const BRANCH_SCHEMA: Record<NodeType, BranchSchema> = {
   // Transfer: nhánh FAILED (nối máy thất bại) nằm trên nhánh NEXT.
   transfer: { mode: 'fixed', fixed: FAILED_NEXT },
   // Flag: chỉ có nhánh NEXT.
-  flag: { mode: 'fixed', fixed: [{ id: 'default', label: 'NEXT' }] },
+  flag: { mode: 'fixed', fixed: NEXT_ONLY },
   hangup: { mode: 'none' },
 };
 

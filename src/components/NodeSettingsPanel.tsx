@@ -516,8 +516,10 @@ function BranchTab({ node, data }: { node: FlowNode; data: Record<string, unknow
           {(schema.fixed ?? []).map((b) => (
             <div key={b.id} className="bk-branch-row">
               <div className="bk-branch-cond">
-                {/* Neo regex ^…$ cho khớp cách hiển thị của nhánh tự do (^FAILED$, ^NEXT$). */}
-                <span className="bk-branch-fixed">{`^${b.label ?? b.id}$`}</span>
+                {/* Nhánh cố định là nhãn ngữ nghĩa (次へ / 失敗) — hiện thẳng, không bọc regex. */}
+                <span className="bk-branch-fixed" title={b.label ?? b.id}>
+                  {b.label ?? b.id}
+                </span>
               </div>
               <Icon icon="fluent:flow-dot-20-filled" width={18} height={18} className="bk-branch-arrow" />
               <div className="bk-branch-target">

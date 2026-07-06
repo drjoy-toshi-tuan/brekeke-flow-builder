@@ -127,7 +127,7 @@ describe('nhánh (branch) model mới', () => {
     expect(sourceHandlesFor(end)).toEqual([]);
 
     const input = ir.nodes.find((n) => n.id === 'main_menu')!;
-    expect(sourceHandlesFor(input).map((h) => h.label)).toEqual(['FAILED', 'NEXT']);
+    expect(sourceHandlesFor(input).map((h) => h.label)).toEqual(['失敗', '次へ']);
   });
 
   it('toYaml lấy điều kiện từ data.branches (round-trip qua sửa giá trị nhánh)', () => {
