@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { GoogleLogin } from '@react-oauth/google';
 import { useAuth } from './useAuth';
 import { ALLOWED_DOMAIN, GOOGLE_CLIENT_ID } from './config';
-import { decodeJwt } from './jwt';
+import { verifyIdToken, reasonToMessageKey } from './verifyIdToken';
+import { createNonce, clearNonce, peekNonce } from './nonce';
 import { Icon } from '../ui/icons';
-import { useLang, useT } from '../ui/i18n';
+import { useLang, useT, type TKey } from '../ui/i18n';
 import { useTheme } from '../ui/theme';
 import { SlideToggle } from '../components/SlideToggle';
 
@@ -19,6 +20,9 @@ export function LoginScreen() {
   const { theme, setTheme } = useTheme();
   const t = useT();
   const [error, setError] = useState<string | null>(null);
+
+  // Sinh nonce một lần cho mỗi lần mở màn login (chống replay). Gắn vào <GoogleLogin>.
+  const nonce = useMemo(() => createNonce(), []);
 
   return (
     <div className="relative flex h-full items-center justify-center bg-[var(--bk-bg)] p-6">
@@ -64,23 +68,31 @@ export function LoginScreen() {
         {GOOGLE_CLIENT_ID ? (
           <div className="flex justify-center">
             <GoogleLogin
+              // hint cho Google chỉ gợi ý tài khoản đúng Workspace; nonce chống replay.
+              hosted_domain={ALLOWED_DOMAIN}
+              nonce={nonce}
               onSuccess={(res) => {
                 setError(null);
-                const claims = res.credential ? decodeJwt(res.credential) : null;
-                if (!claims) {
+                if (!res.credential) {
                   setError(t('loginReadError'));
                   return;
                 }
-                // Gate chính: hd === domain cho phép & email đã xác minh.
-                if (claims.hd !== ALLOWED_DOMAIN || claims.email_verified !== true) {
-                  setError(t('loginDomainError', { domain: ALLOWED_DOMAIN }));
+                // Verify "kỹ" claim ở client (iss/aud/exp/nonce/hd/email…).
+                const result = verifyIdToken(res.credential, { expectedNonce: peekNonce() });
+                clearNonce(); // nonce dùng-một-lần dù thành công hay thất bại.
+                if (!result.ok) {
+                  const key = reasonToMessageKey(result.reason) as TKey;
+                  setError(t(key, { domain: ALLOWED_DOMAIN }));
                   return;
                 }
+                const { claims } = result;
                 authenticate({
                   name: claims.name ?? claims.email ?? 'User',
                   email: claims.email ?? '',
                   picture: claims.picture,
                   hd: claims.hd,
+                  sub: claims.sub,
+                  exp: claims.exp,
                 });
               }}
               onError={() => setError(t('loginGoogleError'))}

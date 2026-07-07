@@ -18,7 +18,8 @@ of truth duy nhất; YAML chỉ là adapter import/export.
 - 🔌 Nối dây (kéo từ output → input), **xoá dây** bằng icon 🗑 hiện khi hover.
 - ✏️ **Double-click node** mở panel sửa `label` và các field trong `data`.
 - 📤 **Export YAML** (round-trip IR ↔ YAML) để kiểm chứng.
-- 🔐 Đăng nhập Google, chỉ tài khoản `@drjoy.jp` (client-side gating — xem [Bảo mật](#-bảo-mật)).
+- 🔐 Đăng nhập Google, chỉ tài khoản `@drjoy.jp` — verify claim kỹ + nonce (xem [Bảo mật](#-bảo-mật)).
+- 📁 **Quản lý file YAML** trên repo: mở / tải lên / tạo / lưu về `flows/` qua GitHub API.
 - 🚀 Deploy GitHub Pages qua GitHub Actions.
 
 9 loại node: `start · announce · input · condition · script · llm · transfer · hangup · end`.
@@ -32,10 +33,12 @@ npm install
 npm run dev        # mở http://localhost:5173
 ```
 
-App tự nạp `fixtures/sample-flow.yaml` khi khởi động — thấy sơ đồ ngay.
+Sau khi đăng nhập, chọn/tải file từ màn **Quản lý file YAML** (xem [§Quản lý file YAML](#-quản-lý-file-yaml-github))
+để mở trên canvas. File mẫu có sẵn trong [`flows/`](flows/).
 
 > **Chế độ demo:** nếu chưa set `VITE_GOOGLE_CLIENT_ID`, màn login có nút
 > **“Vào chế độ demo (bỏ qua đăng nhập)”** để xem UI ngay mà không cần Google.
+> (Vẫn cần GitHub token để đọc/ghi file YAML.)
 
 Các lệnh khác:
 
@@ -88,18 +91,68 @@ Claude Code không làm được các bước này — bạn (Tuan) cần tự l
 
 ## 🔒 Bảo mật
 
-> ⚠️ **Kiểm tra domain ở client-side KHÔNG phải bảo mật thật.**
->
-> Bundle JS là công khai; người dùng kỹ thuật có thể fork/chạy local để bypass, và tham số
-> `hd` không đủ tin cậy nếu chỉ dựa vào nó. Cơ chế hiện tại (decode ID token, kiểm tra
-> `hd === 'drjoy.jp'` và `email_verified === true`) chỉ là **cổng UX cho nội bộ test UI**.
-> Vì phase này chỉ dùng YAML mẫu (không dữ liệu thật), mức này chấp nhận được.
->
-> **Khi có API/dữ liệu thật:** BẮT BUỘC verify claim `hd` của ID token **ở server-side**
-> (Vercel/Cloudflare Functions) trước khi trả bất kỳ dữ liệu nào. Module `auth/` được thiết
-> kế tách rời để bước nâng cấp này không phải sửa UI.
+### Đã siết ở client (defense-in-depth)
+
+Khi nhận ID token từ Google, [`src/auth/verifyIdToken.ts`](src/auth/verifyIdToken.ts) kiểm tra:
+
+- `iss` ∈ `accounts.google.com` / `https://accounts.google.com`
+- `aud` === `VITE_GOOGLE_CLIENT_ID` (token phát cho **đúng app này**)
+- `exp` còn hạn, `iat`/`nbf` không ở tương lai (có clock-skew 60s) → tự đăng xuất khi hết hạn
+- `hd` === `drjoy.jp` **và** email kết thúc bằng `@drjoy.jp` **và** `email_verified === true`
+- `nonce` khớp nonce ngẫu nhiên sinh trước mỗi lần đăng nhập (chống **replay**)
+- có `sub`
+
+> ⚠️ **Vẫn KHÔNG phải bảo mật tuyệt đối.** Client không verify **chữ ký** bằng khoá công khai
+> của Google; bundle JS là công khai nên về lý thuyết vẫn bypass được trên static site. Các
+> kiểm tra trên chặn được các kiểu bypass "rẻ" (đổi Gmail thường, dùng lại token của app khác,
+> phát lại token cũ), đủ cho **cổng nội bộ test UI** khi chưa có dữ liệu thật.
+
+### Chặn bypass mạnh nhất mà không cần backend: OAuth **Internal**
+
+Đặt **OAuth consent screen = Internal** trên Google Cloud Console (yêu cầu Google Workspace).
+Khi đó **chỉ tài khoản thuộc Workspace `drjoy.jp` mới lấy được token** — người ngoài không thể
+đăng nhập ngay từ tầng Google, không phụ thuộc code client:
+
+1. Google Cloud Console → **APIs & Services → OAuth consent screen**.
+2. **User type: Internal** → Save.
+
+### Khi có API/dữ liệu thật (BẮT BUỘC)
+
+Verify chữ ký + claim `hd`/`aud`/`exp` của ID token **ở server-side** (Vercel/Cloudflare
+Functions) trước khi trả bất kỳ dữ liệu nào. Module `auth/` tách rời để bước này chỉ cần thêm
+1 lời gọi verify, không phải sửa UI.
 
 `ALLOWED_DOMAIN` nằm ở [`src/auth/config.ts`](src/auth/config.ts).
+
+---
+
+## 📁 Quản lý file YAML (GitHub)
+
+Sau khi đăng nhập, app mở màn **"Quản lý file YAML"** trước khi vào canvas:
+
+- 📂 **Danh sách file** trong thư mục [`flows/`](flows/) của repo (đọc qua GitHub Contents API).
+- 📤 **Tải file lên** — chọn `.yaml/.yml` từ máy → kiểm tra hợp lệ → **commit thẳng vào `flows/`**.
+- ✨ **Tạo flow mới** — sinh file trống rồi commit vào `flows/`.
+- 🗑 **Xoá** file khỏi repo (có xác nhận).
+- 💾 Trong canvas: **"Lưu về repo"** (menu) commit IR hiện tại (export YAML) đè lên đúng file,
+  **"Danh sách file"** để quay lại.
+
+### Vì sao cần GitHub token?
+
+App là **static site trên GitHub Pages, không có backend**. Để **ghi** file vào repo, trình
+duyệt gọi thẳng **GitHub Contents API** bằng **fine-grained personal access token** do bạn cung cấp:
+
+1. GitHub → **Settings → Developer settings → Fine-grained tokens →
+   [Generate new token](https://github.com/settings/personal-access-tokens/new)**.
+2. **Resource owner** = `drjoy-toshi-tuan`; **Only select repositories** = `brekeke-flow-builder`.
+3. **Repository permissions → Contents: Read and write**.
+4. Dán token vào màn "Kết nối GitHub".
+
+> 🔐 Token **chỉ lưu trong `sessionStorage`** (mất khi đóng tab), không đưa vào bundle, không
+> commit. Hãy cấp **quyền tối thiểu** (đúng 1 repo, chỉ Contents). Có thể "Ngắt kết nối" bất cứ lúc nào.
+
+Cấu hình repo/nhánh/thư mục qua biến `VITE_GITHUB_OWNER` / `VITE_GITHUB_REPO` /
+`VITE_FLOWS_BRANCH` / `VITE_FLOWS_DIR` (xem `.env.example`).
 
 ---
 

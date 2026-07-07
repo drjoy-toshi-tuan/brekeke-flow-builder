@@ -30,6 +30,11 @@ declare module 'elkjs/lib/elk.bundled.js' {
 
 interface ImportMetaEnv {
   readonly VITE_GOOGLE_CLIENT_ID: string;
+  // Kho GitHub chứa file YAML (tuỳ chọn — mặc định trỏ repo hiện tại).
+  readonly VITE_GITHUB_OWNER?: string;
+  readonly VITE_GITHUB_REPO?: string;
+  readonly VITE_FLOWS_BRANCH?: string;
+  readonly VITE_FLOWS_DIR?: string;
 }
 interface ImportMeta {
   readonly env: ImportMetaEnv;

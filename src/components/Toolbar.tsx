@@ -1,4 +1,5 @@
 import { useFlowStore } from '../store/flowStore';
+import { useFileStore } from '../store/fileStore';
 import { useT } from '../ui/i18n';
 import { Icon } from '../ui/icons';
 import { HeaderMenu } from './HeaderMenu';
@@ -6,6 +7,7 @@ import { HeaderMenu } from './HeaderMenu';
 // Thanh công cụ trên cùng: tên flow bên trái, menu (icon) gom mọi chức năng bên phải.
 export function Toolbar() {
   const ir = useFlowStore((s) => s.ir);
+  const currentFile = useFileStore((s) => s.current);
   const t = useT();
 
   return (
@@ -18,8 +20,17 @@ export function Toolbar() {
           <div className="text-sm font-semibold text-[var(--bk-text)]">
             {ir?.meta.name ?? 'Brekeke Flow Builder'}
           </div>
-          <div className="text-[11px] text-[var(--bk-text-faint)]">
-            {ir ? t('stats', { n: ir.nodes.length, e: ir.edges.length }) : '…'}
+          <div className="flex items-center gap-1.5 text-[11px] text-[var(--bk-text-faint)]">
+            {currentFile && (
+              <>
+                <Icon icon="lucide:file-text" width={12} height={12} />
+                <span className="max-w-[180px] truncate" title={currentFile.name}>
+                  {currentFile.name}
+                </span>
+                <span>·</span>
+              </>
+            )}
+            <span>{ir ? t('stats', { n: ir.nodes.length, e: ir.edges.length }) : '…'}</span>
           </div>
         </div>
       </div>
