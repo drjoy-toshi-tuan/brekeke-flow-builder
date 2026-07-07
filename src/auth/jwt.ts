@@ -3,6 +3,13 @@
 // ⚠️ Không dùng cho quyết định bảo mật thật (xem README §Bảo mật).
 
 export interface GoogleIdTokenClaims {
+  iss?: string; // issuer — phải là Google
+  aud?: string | string[]; // audience — phải là client id của app
+  sub?: string; // subject — định danh ổn định của người dùng
+  exp?: number; // hết hạn (epoch giây)
+  iat?: number; // phát hành lúc (epoch giây)
+  nbf?: number; // có hiệu lực từ (epoch giây)
+  nonce?: string; // chống replay
   email?: string;
   email_verified?: boolean;
   name?: string;

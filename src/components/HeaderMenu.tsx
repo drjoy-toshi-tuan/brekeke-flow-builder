@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
+import { useFileStore } from '../store/fileStore';
+import { useGithubToken } from '../github/token';
+import { putFlow } from '../github/api';
+import { ghErrorKey } from '../github/errors';
 import { useAuth } from '../auth/useAuth';
 import { useTheme } from '../ui/theme';
-import { useLang, useT } from '../ui/i18n';
+import { useLang, useT, type TKey } from '../ui/i18n';
 import { Icon } from '../ui/icons';
 import { SlideToggle } from './SlideToggle';
 import { IvrPropertyModal } from './IvrPropertyModal';
@@ -25,11 +29,18 @@ export function HeaderMenu() {
   const ir = useFlowStore((s) => s.ir);
   const autoLayout = useFlowStore((s) => s.autoLayout);
   const exportYaml = useFlowStore((s) => s.exportYaml);
+  const currentFile = useFileStore((s) => s.current);
+  const closeFile = useFileStore((s) => s.closeFile);
+  const setSha = useFileStore((s) => s.setSha);
+  const token = useGithubToken((s) => s.token);
   const { user, signOut } = useAuth();
   const { theme, setTheme } = useTheme();
   const { lang, setLang } = useLang();
   const t = useT();
   const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // Trạng thái lưu về repo: null | 'saved' | key lỗi i18n.
+  const [saveState, setSaveState] = useState<string | null>(null);
 
   const handleAutoLayout = async () => {
     setBusy(true);
@@ -37,6 +48,29 @@ export function HeaderMenu() {
       await autoLayout();
     } finally {
       setBusy(false);
+    }
+  };
+
+  // Lưu flow hiện tại (export IR -> YAML) về đúng file trên repo (cập nhật theo sha).
+  const handleSaveToRepo = async () => {
+    if (!currentFile || !token || saving) return;
+    setSaving(true);
+    setSaveState(null);
+    try {
+      const yaml = exportYaml();
+      const res = await putFlow(
+        token,
+        currentFile.path,
+        yaml,
+        t('commitSave', { name: currentFile.name }),
+        currentFile.sha ?? undefined,
+      );
+      setSha(res.sha);
+      setSaveState('saved');
+    } catch (e) {
+      setSaveState(ghErrorKey(e));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -114,6 +148,20 @@ export function HeaderMenu() {
 
           {/* ── Cài đặt flow ── */}
           <MenuSection title={t('secFlow')} />
+          {currentFile && (
+            <button
+              type="button"
+              role="menuitem"
+              className="bk-menu-item"
+              onClick={() => {
+                closeFile();
+                setOpen(false);
+              }}
+            >
+              <Icon icon="lucide:arrow-left" width={16} height={16} className="text-[var(--bk-accent)]" />
+              <span>{t('fmBackToFiles')}</span>
+            </button>
+          )}
           <button
             type="button"
             role="menuitem"
@@ -126,6 +174,38 @@ export function HeaderMenu() {
             <Icon icon="lucide:layout-dashboard" width={16} height={16} className="text-[var(--bk-accent)]" />
             <span>{t('ivrProperty')}</span>
           </button>
+          {currentFile && (
+            <button
+              type="button"
+              role="menuitem"
+              className="bk-menu-item"
+              onClick={handleSaveToRepo}
+              disabled={!ir || !token || saving}
+            >
+              <Icon
+                icon={saving ? 'lucide:loader-circle' : 'lucide:save'}
+                width={16}
+                height={16}
+                className={`text-[var(--bk-accent)] ${saving ? 'animate-spin' : ''}`}
+              />
+              <span>
+                {saving
+                  ? t('fmSaving')
+                  : saveState === 'saved'
+                    ? t('fmSaved')
+                    : t('fmSaveToRepo')}
+              </span>
+              {saveState && saveState !== 'saved' && (
+                <Icon icon="lucide:triangle-alert" width={14} height={14} className="ml-auto text-rose-500" />
+              )}
+              {saveState === 'saved' && (
+                <Icon icon="lucide:circle-check" width={14} height={14} className="ml-auto text-emerald-500" />
+              )}
+            </button>
+          )}
+          {saveState && saveState !== 'saved' && (
+            <div className="px-3 pb-1 text-[11px] text-rose-500">{t(saveState as TKey)}</div>
+          )}
           <button
             type="button"
             role="menuitem"
