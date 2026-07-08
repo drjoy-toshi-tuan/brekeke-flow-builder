@@ -414,23 +414,20 @@ export function isPairBranchNode(type: NodeType, data: Record<string, unknown>):
 }
 
 // Danh sách nhánh "hiệu lực" của node:
-//   - CMR: sinh từ Pair (pair1, pair2, …; value Pair{n}); label giữ từ data.branches.
+//   - CMR: CHỈ các nhánh sinh từ Pair (pair1, pair2, …; value 1, 2, … hiển thị ^1$),
+//     KHÔNG có nhánh catch-all loại trừ; label giữ từ data.branches.
 //   - còn lại: đọc thẳng data.branches.
 export function effectiveBranches(type: NodeType, data: Record<string, unknown>): DataBranch[] {
   const branches = readBranches(data);
   if (!isPairBranchNode(type, data)) return branches;
   const byId = new Map(branches.map((b) => [b.id, b]));
-  const catchAll = byId.get(CATCH_ALL_ID) ?? { id: CATCH_ALL_ID, value: '' };
-  return [
-    catchAll,
-    ...readPairs(data).map((_, i) => {
-      const id = `pair${i + 1}`;
-      const old = byId.get(id);
-      const branch: DataBranch = { id, value: `Pair${i + 1}` };
-      if (old?.label) branch.label = old.label;
-      return branch;
-    }),
-  ];
+  return readPairs(data).map((_, i) => {
+    const id = `pair${i + 1}`;
+    const old = byId.get(id);
+    const branch: DataBranch = { id, value: `${i + 1}` };
+    if (old?.label) branch.label = old.label;
+    return branch;
+  });
 }
 
 // ── Option động cho searchSelect ─────────────────────────────────────────────
@@ -464,7 +461,8 @@ export function optionsForSource(source: OptionsSource, ir: FlowIR | null): stri
     case 'nodeAndContexts':
       return [...new Set([...interactionNodeNames(ir), ...savedContextNames(ir)])];
     case 'subflows':
-      return []; // cơ chế sub flow sẽ bổ sung sau
+      // Node Jump trỏ tới sub flow theo TÊN (danh sách sub flow trong cùng file).
+      return [...new Set((ir?.subflows ?? []).map((s) => s.name))];
   }
 }
 

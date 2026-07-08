@@ -119,6 +119,14 @@ const DICT: Record<Lang, Record<string, string>> = {
     // ── searchSelect ──
     searchSelectPlaceholder: 'Chọn hoặc gõ để lọc…',
     searchSelectEmpty: 'Không có lựa chọn',
+    // ── Panel Main/Sub Flow ──
+    flowsTitle: 'Main Flow / Sub Flow',
+    mainFlowSection: 'Main Flow',
+    subFlowSection: 'Sub Flow',
+    subFlowEmpty: 'Chưa có sub flow nào.',
+    createSubflow: 'Tạo Sub Flow',
+    subflowNamePlaceholder: 'Tên sub flow',
+    subFlowBadge: 'Sub Flow',
     vtKanaName: 'Tên Kana',
     vtNumber: 'Số',
     vtPhone: 'Số điện thoại',
@@ -344,6 +352,14 @@ const DICT: Record<Lang, Record<string, string>> = {
     // ── searchSelect ──
     searchSelectPlaceholder: '選択または入力で絞り込み…',
     searchSelectEmpty: '候補がありません',
+    // ── Panel Main/Sub Flow ──
+    flowsTitle: 'メインフロー / サブフロー',
+    mainFlowSection: 'メインフロー',
+    subFlowSection: 'サブフロー',
+    subFlowEmpty: 'サブフローはまだありません。',
+    createSubflow: 'サブフロー作成',
+    subflowNamePlaceholder: 'サブフロー名',
+    subFlowBadge: 'サブフロー',
     vtKanaName: '氏名カナ',
     vtNumber: '数値',
     vtPhone: '電話番号',

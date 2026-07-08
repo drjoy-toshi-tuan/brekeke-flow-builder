@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import type { FlowIR, FlowEdge, FlowNode, NodeType } from '../ir/types';
+import type { FlowIR, FlowEdge, FlowNode, NodeType, SubFlow } from '../ir/types';
+import { SYNTHETIC_START_ID } from '../ir/types';
 import { fromYaml } from '../ir/fromYaml';
 import { toYaml } from '../ir/toYaml';
 import { layout } from '../ir/layout';
@@ -31,11 +32,26 @@ export interface NodeDraft {
 }
 
 interface FlowState {
+  // ir.nodes/edges là graph ĐANG MỞ (main flow hoặc 1 sub flow — xem activeFlowId).
+  // Khi đang ở sub flow: graph main tạm cất ở mainStash; slot của sub flow trong
+  // ir.subflows có thể cũ — assembleDoc() ghép lại tài liệu đầy đủ khi cần (export).
   ir: FlowIR | null;
   selectedNodeId: string | null;
   draft: NodeDraft | null;
   // Ý định chuyển chọn (đổi node / đóng panel) đang chờ xác nhận vì draft còn dở.
   pendingSelect: { id: string | null } | null;
+
+  // Flow đang mở trên canvas: 'main' hoặc id của 1 sub flow.
+  activeFlowId: string;
+  mainStash: { nodes: FlowNode[]; edges: FlowEdge[] } | null;
+  // Chuyển sang main flow / sub flow khác (tự ELK layout lần đầu mở sub flow).
+  switchFlow: (id: string) => Promise<void>;
+  // Tạo sub flow mới (seed node Start) rồi chuyển sang nó.
+  createSubflow: (name: string) => Promise<void>;
+
+  // Panel nổi vùng canvas ('Thêm node' / 'Main-Sub Flow') — mở panel này tự đóng panel kia.
+  canvasPanel: 'addNode' | 'flows' | null;
+  setCanvasPanel: (panel: 'addNode' | 'flows' | null) => void;
 
   // Đang kéo/di chuyển canvas (pan/zoom) -> ẩn thanh công cụ nổi trên node.
   isPanning: boolean;
@@ -119,6 +135,32 @@ function draftFromNode(node: FlowNode): NodeDraft {
 // Số bước Undo tối đa giữ trong bộ nhớ.
 const HISTORY_LIMIT = 50;
 
+// Slug id cho sub flow (suy từ tên, bảo đảm khác rỗng).
+function slugifyName(name: string): string {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug || 'subflow';
+}
+
+// Graph khởi tạo của sub flow mới: chỉ có node Start (điểm bắt đầu của sub flow).
+function seedSubflowGraph(): { nodes: FlowNode[]; edges: FlowEdge[] } {
+  return {
+    nodes: [
+      {
+        id: SYNTHETIC_START_ID,
+        type: 'start',
+        label: 'Start',
+        position: { x: 0, y: 0 },
+        data: defaultDataFor('start'),
+      },
+    ],
+    edges: [],
+  };
+}
+
 export const useFlowStore = create<FlowState>((set, get) => {
   // Chụp IR hiện tại vào `past` (xoá `future`) — gọi TRƯỚC mỗi thay đổi có thể undo.
   // Trả về mảnh state để trộn vào set({...}).
@@ -126,6 +168,22 @@ export const useFlowStore = create<FlowState>((set, get) => {
     const { ir, past } = get();
     if (!ir) return {};
     return { past: [...past, ir].slice(-HISTORY_LIMIT), future: [] };
+  };
+
+  // Ghép lại TÀI LIỆU đầy đủ (main + toàn bộ sub flow) từ trạng thái hiện tại:
+  // graph đang mở nằm ở ir.nodes/edges nên phải trả về đúng slot của nó.
+  const assembleDoc = (): FlowIR | null => {
+    const { ir, activeFlowId, mainStash } = get();
+    if (!ir) return null;
+    if (activeFlowId === 'main' || !mainStash) return ir;
+    return {
+      ...ir,
+      nodes: mainStash.nodes,
+      edges: mainStash.edges,
+      subflows: (ir.subflows ?? []).map((s) =>
+        s.id === activeFlowId ? { ...s, nodes: ir.nodes, edges: ir.edges } : s,
+      ),
+    };
   };
 
   // Áp dụng lựa chọn node ngay (khởi tạo draft). Không kiểm tra dirty ở đây.
@@ -150,6 +208,85 @@ export const useFlowStore = create<FlowState>((set, get) => {
     isPanning: false,
     setPanning: (value) => set({ isPanning: value }),
 
+    activeFlowId: 'main',
+    mainStash: null,
+    canvasPanel: null,
+    setCanvasPanel: (panel) => set({ canvasPanel: panel }),
+
+    switchFlow: async (id) => {
+      const { activeFlowId } = get();
+      if (id === activeFlowId) return;
+      const doc = assembleDoc();
+      if (!doc) return;
+
+      let next: FlowIR;
+      let mainStash: FlowState['mainStash'];
+      if (id === 'main') {
+        next = doc; // doc.nodes/edges chính là main flow
+        mainStash = null;
+      } else {
+        const target = (doc.subflows ?? []).find((s) => s.id === id);
+        if (!target) return;
+        next = { ...doc, nodes: target.nodes, edges: target.edges };
+        mainStash = { nodes: doc.nodes, edges: doc.edges };
+      }
+
+      // Sub flow đọc từ YAML chưa có toạ độ (0,0 hết) -> ELK layout lần đầu mở.
+      const needsLayout =
+        next.nodes.length > 1 && next.nodes.every((n) => n.position.x === 0 && n.position.y === 0);
+      if (needsLayout) next = await layout(next);
+
+      set({
+        ir: next,
+        mainStash,
+        activeFlowId: id,
+        // Đổi flow -> đóng panel setting + reset lịch sử Undo (snapshot không theo flow).
+        selectedNodeId: null,
+        draft: null,
+        pendingSelect: null,
+        pendingDelete: null,
+        past: [],
+        future: [],
+        canvasPanel: null,
+      });
+    },
+
+    createSubflow: async (name) => {
+      const doc = assembleDoc();
+      if (!doc) return;
+      const subflows = doc.subflows ?? [];
+      // Tên duy nhất (thêm -2, -3… nếu trùng); id slug duy nhất theo tên.
+      const taken = new Set(subflows.map((s) => s.name));
+      let finalName = name.trim() || 'Sub Flow';
+      let n = 2;
+      while (taken.has(finalName)) finalName = `${name.trim() || 'Sub Flow'} ${n++}`;
+      const usedIds = new Set(subflows.map((s) => s.id));
+      let id = slugifyName(finalName);
+      let i = 2;
+      while (usedIds.has(id)) id = `${slugifyName(finalName)}-${i++}`;
+
+      const sub: SubFlow = { id, name: finalName, ...seedSubflowGraph() };
+      set({
+        ir: {
+          ...doc,
+          meta: { ...doc.meta, updatedAt: new Date().toISOString() },
+          subflows: [...subflows, sub],
+          // Chuyển thẳng sang sub flow mới (graph chỉ có node Start).
+          nodes: sub.nodes,
+          edges: sub.edges,
+        },
+        mainStash: { nodes: doc.nodes, edges: doc.edges },
+        activeFlowId: id,
+        selectedNodeId: null,
+        draft: null,
+        pendingSelect: null,
+        pendingDelete: null,
+        past: [],
+        future: [],
+        canvasPanel: null,
+      });
+    },
+
     ivr: { ...DEFAULT_IVR_SETTINGS },
     setIvr: (patch) => set({ ivr: { ...get().ivr, ...patch } }),
     ivrCreatedAt: formatDateTime(new Date()),
@@ -169,7 +306,10 @@ export const useFlowStore = create<FlowState>((set, get) => {
         draft: null,
         pendingSelect: null,
         pendingDelete: null,
-        // Nạp file mới -> reset lịch sử Undo/Redo.
+        // Nạp file mới -> về main flow + reset lịch sử Undo/Redo.
+        activeFlowId: 'main',
+        mainStash: null,
+        canvasPanel: null,
         past: [],
         future: [],
         ivr: nextIvr,
@@ -186,8 +326,9 @@ export const useFlowStore = create<FlowState>((set, get) => {
     },
 
     exportYaml: () => {
-      const { ir } = get();
-      return ir ? toYaml(ir) : '';
+      // Xuất TÀI LIỆU đầy đủ (main + sub flow), kể cả khi đang mở 1 sub flow.
+      const doc = assembleDoc();
+      return doc ? toYaml(doc) : '';
     },
 
     setMeta: (patch) => {

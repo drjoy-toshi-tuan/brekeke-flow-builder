@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import { useFlowStore } from '../store/flowStore';
 import { NODE_CONFIG, ADDABLE_NODE_TYPES } from '../ui/nodeConfig';
@@ -17,11 +17,32 @@ import { useT } from '../ui/i18n';
 export const DND_MIME = 'application/bk-node-type';
 
 export function AddModulePanel() {
-  const [open, setOpen] = useState(false);
+  // Mở/đóng qua store (canvasPanel) để loại trừ lẫn nhau với panel Main/Sub Flow.
+  const canvasPanel = useFlowStore((s) => s.canvasPanel);
+  const setCanvasPanel = useFlowStore((s) => s.setCanvasPanel);
+  const open = canvasPanel === 'addNode';
+  const setOpen = (v: boolean) => setCanvasPanel(v ? 'addNode' : null);
   // `render` giữ menu mounted trong lúc chạy animation ĐÓNG (thu nhỏ + mờ dần).
   const [render, setRender] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (open) setRender(true);
+  }, [open]);
+  // Click ra ngoài panel -> tự đóng (đồng bộ hành vi với các panel khác). Lưu ý:
+  //   - Đọc state MỚI NHẤT: nút panel Flows đổi canvasPanel ngay tại mousedown —
+  //     panel này không còn active thì đừng ghi đè về null.
+  //   - Dùng composedPath() thay vì contains(e.target): mousedown làm React
+  //     re-render có thể THAY icon svg (target bị detach) -> contains trả false sai.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (useFlowStore.getState().canvasPanel !== 'addNode') return;
+      if (wrapRef.current && !e.composedPath().includes(wrapRef.current)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+    // setOpen ổn định (từ store) — không cần vào deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   const addNode = useFlowStore((s) => s.addNode);
   const nodeCount = useFlowStore((s) => s.ir?.nodes.length ?? 0);
@@ -45,10 +66,15 @@ export function AddModulePanel() {
   };
 
   return (
-    <div className="relative">
+    <div className="relative" ref={wrapRef}>
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        // Toggle tại mousedown (tránh mất click khi panel Flows đóng cùng lúc — xem FlowsPanel);
+        // onClick giữ cho bàn phím (Enter/Space sinh click với detail === 0).
+        onMouseDown={() => setOpen(!open)}
+        onClick={(e) => {
+          if (e.detail === 0) setOpen(!open);
+        }}
         className="flex items-center gap-2 rounded-xl border border-[var(--bk-border)] bg-[var(--bk-surface)] px-3 py-2 text-sm font-semibold text-[var(--bk-text)] shadow-[var(--bk-shadow)] transition hover:border-[var(--bk-accent)] hover:text-[var(--bk-accent)]"
         aria-expanded={open}
         aria-haspopup="menu"
