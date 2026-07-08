@@ -1,4 +1,4 @@
-import { parse } from 'yaml';
+import { parse, stringify } from 'yaml';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Đọc NHANH phần metadata ở header của file YAML (không dựng cả IR) để hiển thị
@@ -31,4 +31,17 @@ export function parseFlowMeta(text: string): FlowMeta {
   } catch {
     return {};
   }
+}
+
+// Ghi đè metadata trong YAML (đổi 施設名/シナリオ名… từ màn quản lý file) mà KHÔNG
+// đụng phần nodes/subflows — parse rồi gán field và stringify lại. Field trong
+// patch là undefined -> giữ nguyên; chuỗi rỗng -> giữ nguyên (không xoá field).
+export function updateFlowMeta(text: string, patch: FlowMeta): string {
+  const doc = (parse(text) as { flow?: Record<string, unknown> } | null) ?? {};
+  const flow = doc.flow ?? {};
+  for (const key of ['facility', 'name', 'createdAt', 'updatedAt', 'author'] as const) {
+    const value = patch[key];
+    if (typeof value === 'string' && value.trim()) flow[key] = value.trim();
+  }
+  return stringify({ ...doc, flow }, { lineWidth: 0 });
 }

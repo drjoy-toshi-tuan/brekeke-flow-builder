@@ -11,7 +11,7 @@ import {
   effectiveBranches,
   optionsForSource,
 } from '../ui/nodeSchema';
-import { parseFlowMeta } from './flowMeta';
+import { parseFlowMeta, updateFlowMeta } from './flowMeta';
 
 const SAMPLE = `
 flow:
@@ -291,19 +291,19 @@ flow:
           type: hangup
 `;
 
-  it('fromYaml đọc subflows (id slug + graph riêng có start tổng hợp)', () => {
+  it('fromYaml đọc subflows (id slug + graph riêng, KHÔNG có node Start)', () => {
     const ir = fromYaml(WITH_SUB);
     expect(ir.subflows).toHaveLength(1);
     const sub = ir.subflows![0];
     expect(sub.name).toBe('Đặt lịch');
-    // 2 node YAML + 1 node start tổng hợp của sub flow.
-    expect(sub.nodes).toHaveLength(3);
-    expect(sub.edges.find((e) => e.source === SYNTHETIC_START_ID)?.target).toBe('s1');
+    // Chỉ 2 node YAML — sub flow không có node Start (kể cả file cũ còn field start).
+    expect(sub.nodes).toHaveLength(2);
+    expect(sub.nodes.some((n) => n.id === SYNTHETIC_START_ID)).toBe(false);
     // Node Jump ở main flow chọn được sub flow theo tên.
     expect(optionsForSource('subflows', ir)).toEqual(['Đặt lịch']);
   });
 
-  it('toYaml ghi lại subflows (round-trip)', () => {
+  it('toYaml ghi lại subflows (round-trip, không field start)', () => {
     const ir = fromYaml(WITH_SUB);
     const parsed = parse(toYaml(ir)) as {
       flow: {
@@ -314,7 +314,7 @@ flow:
     expect(parsed.flow.nodes.map((n) => n.id)).toEqual(['a', 'j']);
     expect(parsed.flow.subflows).toHaveLength(1);
     expect(parsed.flow.subflows![0].name).toBe('Đặt lịch');
-    expect(parsed.flow.subflows![0].start).toBe('s1');
+    expect(parsed.flow.subflows![0].start).toBeUndefined();
     expect(parsed.flow.subflows![0].nodes.map((n) => n.id)).toEqual(['s1', 's2']);
     expect(parsed.flow.subflows![0].nodes[0].type).toBe('interaction');
   });
@@ -351,6 +351,36 @@ flow:
     expect(parsed.flow.author).toBe('Tuan');
     expect(parsed.flow.createdAt).toBe('2026-07-01 09:30');
     expect(parsed.flow.updatedAt).toBe('2026-07-02 14:00');
+  });
+
+  it('updateFlowMeta: vá metadata, giữ nguyên nodes/subflows', () => {
+    const src = `flow:
+  name: "cũ"
+  facility: "viện cũ"
+  start: greet
+  nodes:
+    - id: greet
+      type: announce
+      text: "hi"
+  subflows:
+    - name: "sub"
+      start: s1
+      nodes:
+        - id: s1
+          type: hangup
+`;
+    const out = updateFlowMeta(src, { name: 'mới', facility: 'viện mới', updatedAt: '2026-07-08 10:00' });
+    const meta = parseFlowMeta(out);
+    expect(meta.name).toBe('mới');
+    expect(meta.facility).toBe('viện mới');
+    expect(meta.updatedAt).toBe('2026-07-08 10:00');
+    // Graph không suy suyển: node + subflow còn nguyên.
+    const ir = fromYaml(out);
+    expect(ir.nodes.find((n) => n.id === 'greet')?.data.text).toBe('hi');
+    expect(ir.subflows?.[0].name).toBe('sub');
+    // Field không có trong patch giữ nguyên (author không bị xoá/đổi).
+    const out2 = updateFlowMeta(out, { name: 'mới 2' });
+    expect(parseFlowMeta(out2).facility).toBe('viện mới');
   });
 
   it('parseFlowMeta trả metadata; field vắng -> undefined', () => {

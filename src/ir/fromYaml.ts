@@ -194,7 +194,8 @@ export function fromYaml(text: string): FlowIR {
 
   const { nodes, edges } = parseGraph(flow.nodes ?? [], flow.start);
 
-  // Sub Flow: mỗi entry là 1 graph riêng (name/start/nodes), id = slug duy nhất.
+  // Sub Flow: mỗi entry là 1 graph riêng (name/nodes), id = slug duy nhất.
+  // Sub flow KHÔNG có node Start (chỉ main flow có) — bỏ qua field start nếu file cũ còn.
   const usedIds = new Set<string>();
   const subflows = (flow.subflows ?? [])
     .filter((raw) => typeof raw?.name === 'string' && raw.name.trim())
@@ -204,7 +205,7 @@ export function fromYaml(text: string): FlowIR {
       let i = 2;
       while (usedIds.has(id)) id = `${slugify(name)}-${i++}`;
       usedIds.add(id);
-      return { id, name, ...parseGraph(raw.nodes ?? [], raw.start) };
+      return { id, name, ...parseGraph(raw.nodes ?? [], undefined) };
     });
 
   // Giữ nguyên 作成日時/更新日時/作成者 nếu file đã có; nếu chưa thì để trống

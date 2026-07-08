@@ -15,7 +15,7 @@ import {
 import { ghErrorKey } from '../github/errors';
 import { FLOWS_DIR } from '../github/config';
 import { fromYaml } from '../ir/fromYaml';
-import { parseFlowMeta, type FlowMeta } from '../ir/flowMeta';
+import { parseFlowMeta, updateFlowMeta, type FlowMeta } from '../ir/flowMeta';
 import { formatDateTime } from '../ir/ivrProperty';
 import { useFlowStore } from '../store/flowStore';
 import { useFileStore } from '../store/fileStore';
@@ -88,6 +88,10 @@ export function FileManagerScreen() {
   const [createErrorKey, setCreateErrorKey] = useState<TKey | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FileRow | null>(null);
   const [overwrite, setOverwrite] = useState<{ name: string; content: string; sha: string } | null>(null);
+  // Đổi tên bệnh viện / tên flow ngay trên màn quản lý (không cần mở canvas).
+  const [renameTarget, setRenameTarget] = useState<FileRow | null>(null);
+  const [renameFacility, setRenameFacility] = useState('');
+  const [renameScenario, setRenameScenario] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -225,6 +229,65 @@ export function FileManagerScreen() {
     await commitAndOpen(name, content, t('commitCreate', { name }));
   };
 
+  // Mở modal đổi tên (prefill từ metadata của dòng).
+  const openRenameModal = (file: FileRow) => {
+    setRenameTarget(file);
+    setRenameFacility(file.meta.facility ?? '');
+    setRenameScenario(file.meta.name ?? stripExt(file.name));
+  };
+
+  // Lưu đổi tên: đọc file -> vá metadata (giữ nguyên nodes) -> commit lại theo sha.
+  const handleRename = async () => {
+    if (!renameTarget) return;
+    const target = renameTarget;
+    const facility = renameFacility.trim();
+    const scenario = renameScenario.trim();
+    if (!facility || !scenario) return;
+    setRenameTarget(null);
+    setBusy(true);
+    setActionError(null);
+    try {
+      const { content, sha } = await getFlow(token!, target.path);
+      const next = updateFlowMeta(content, {
+        facility,
+        name: scenario,
+        updatedAt: formatDateTime(new Date()),
+      });
+      await putFlow(token!, target.path, next, t('commitRename', { name: target.name }), sha);
+      await refresh();
+    } catch (e) {
+      setActionError(t(ghErrorKey(e)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Nhân bản: copy nội dung sang file mới (tên file + tên kịch bản thêm hậu tố),
+  // đóng dấu người tạo/thời điểm là người nhân bản.
+  const handleDuplicate = async (file: FileRow) => {
+    if (busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const { content } = await getFlow(token!, file.path);
+      const newFileName = uniqueFileName(sanitizeFileName(file.name), new Set(files.map((f) => f.name)));
+      const now = formatDateTime(new Date());
+      const baseName = file.meta.name ?? stripExt(file.name);
+      const next = updateFlowMeta(content, {
+        name: `${baseName} (Copy)`,
+        createdAt: now,
+        updatedAt: now,
+        author: user?.name ?? user?.email ?? '',
+      });
+      await putFlow(token!, `${FLOWS_DIR}/${newFileName}`, next, t('commitDuplicate', { name: newFileName }));
+      await refresh();
+    } catch (e) {
+      setActionError(t(ghErrorKey(e)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleDelete = async () => {
     if (!deleteTarget) return;
     const target = deleteTarget;
@@ -250,25 +313,40 @@ export function FileManagerScreen() {
       <header className="flex items-center justify-between border-b border-[var(--bk-border)] bg-[var(--bk-surface)] px-4 py-2.5">
         {/* Không đặt icon ở đây — tránh nhầm là nút bấm (nút icon chỉ có ở màn canvas). */}
         <div>
-          <div className="text-sm font-semibold text-[var(--bk-text)]">{t('fmTitle')}</div>
-          <div className="text-[11px] text-[var(--bk-text-faint)]">
-            {t('fmFolderNote', { dir: FLOWS_DIR })}
-          </div>
+          <div className="text-base font-bold text-[var(--bk-text)]">Brekeke Flow Builder</div>
+          <div className="text-[11px] text-[var(--bk-text-faint)]">{t('fmTitle')}</div>
         </div>
         <FileManagerMenu />
       </header>
 
       {/* ── Nội dung ── */}
       {!token ? (
-        <div className="flex flex-1 items-center justify-center p-6">
+        <div className="relative flex flex-1 items-center justify-center overflow-hidden p-6">
+          {/* Vầng sáng accent mờ (đồng bộ màn login). */}
+          <div
+            aria-hidden
+            className="pointer-events-none absolute left-1/2 top-1/2 h-[460px] w-[460px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--bk-accent)] opacity-[0.08] blur-[100px]"
+          />
           <GithubConnectPanel />
         </div>
       ) : (
-        <main className="mx-auto w-full max-w-5xl flex-1 overflow-auto p-6">
-          <div className="mb-4">
-            <h1 className="text-lg font-bold text-[var(--bk-text)]">{t('fmTitle')}</h1>
-            <p className="text-sm text-[var(--bk-text-muted)]">{t('fmSubtitle')}</p>
-          </div>
+        <main className="relative mx-auto w-full max-w-5xl flex-1 overflow-auto p-6">
+          {/* Vầng sáng accent mờ phía sau card — chiều sâu kiểu màn login. */}
+          <div
+            aria-hidden
+            className="pointer-events-none absolute left-1/2 top-24 h-[420px] w-[640px] -translate-x-1/2 rounded-full bg-[var(--bk-accent)] opacity-[0.07] blur-[110px]"
+          />
+
+          <div className="relative overflow-hidden rounded-3xl border border-[var(--bk-border)] bg-[var(--bk-surface)] p-6 shadow-[var(--bk-shadow)]">
+            {/* Dải accent mảnh trên đỉnh card (đồng bộ thẻ login). */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-transparent via-[var(--bk-accent)] to-transparent opacity-70"
+            />
+            <div className="mb-4">
+              <h1 className="text-lg font-bold tracking-tight text-[var(--bk-text)]">{t('fmTitle')}</h1>
+              <p className="text-sm text-[var(--bk-text-muted)]">{t('fmSubtitle')}</p>
+            </div>
 
           {/* Thanh hành động */}
           <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -379,6 +457,24 @@ export function FileManagerScreen() {
                           </button>
                           <button
                             type="button"
+                            onClick={() => openRenameModal(file)}
+                            disabled={busy}
+                            className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--bk-text-faint)] transition hover:bg-[var(--bk-accent-soft)] hover:text-[var(--bk-accent)] disabled:opacity-60"
+                            title={t('fmRename')}
+                          >
+                            <Icon icon="lucide:pencil" width={16} height={16} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDuplicate(file)}
+                            disabled={busy}
+                            className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--bk-text-faint)] transition hover:bg-[var(--bk-accent-soft)] hover:text-[var(--bk-accent)] disabled:opacity-60"
+                            title={t('fmDuplicate')}
+                          >
+                            <Icon icon="lucide:copy" width={16} height={16} />
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => setDeleteTarget(file)}
                             disabled={busy}
                             className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--bk-text-faint)] transition hover:bg-[color-mix(in_srgb,#dc2626_12%,transparent)] hover:text-rose-500 disabled:opacity-60"
@@ -393,6 +489,7 @@ export function FileManagerScreen() {
                 </tbody>
               </table>
             )}
+          </div>
           </div>
         </main>
       )}
@@ -457,6 +554,62 @@ export function FileManagerScreen() {
                 className="rounded-lg bg-[var(--bk-accent)] px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
               >
                 {t('fmCreate')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: đổi tên bệnh viện / tên flow (vá metadata, giữ nguyên nodes) */}
+      {renameTarget && (
+        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true" onClick={() => setRenameTarget(null)}>
+          <div className="bk-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3 flex items-center gap-2 text-sm font-bold text-[var(--bk-text)]">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]">
+                <Icon icon="lucide:pencil" width={15} height={15} />
+              </span>
+              {t('fmRenameTitle')}
+            </div>
+
+            <label className="mb-1 block text-xs font-semibold text-[var(--bk-text-muted)]">
+              {t('colFacility')}
+            </label>
+            <input
+              autoFocus
+              value={renameFacility}
+              onChange={(e) => setRenameFacility(e.target.value)}
+              placeholder={t('fmFacilityPlaceholder')}
+              className="mb-3 w-full rounded-lg border border-[var(--bk-border)] bg-[var(--bk-bg)] px-3 py-2 text-sm text-[var(--bk-text)] outline-none focus:border-[var(--bk-accent)]"
+            />
+
+            <label className="mb-1 block text-xs font-semibold text-[var(--bk-text-muted)]">
+              {t('colScenario')}
+            </label>
+            <input
+              value={renameScenario}
+              onChange={(e) => setRenameScenario(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleRename();
+              }}
+              placeholder={t('fmScenarioPlaceholder')}
+              className="mb-4 w-full rounded-lg border border-[var(--bk-border)] bg-[var(--bk-bg)] px-3 py-2 text-sm text-[var(--bk-text)] outline-none focus:border-[var(--bk-accent)]"
+            />
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setRenameTarget(null)}
+                className="rounded-lg border border-[var(--bk-border)] px-4 py-2 text-sm font-semibold text-[var(--bk-text-muted)] transition hover:bg-[var(--bk-surface-2)] hover:text-[var(--bk-text)]"
+              >
+                {t('btnCancel')}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleRename()}
+                disabled={!renameFacility.trim() || !renameScenario.trim()}
+                className="rounded-lg bg-[var(--bk-accent)] px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
+              >
+                {t('btnSave')}
               </button>
             </div>
           </div>

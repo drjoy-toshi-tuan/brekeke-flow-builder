@@ -48,10 +48,15 @@ export function AddModulePanel() {
   const nodeCount = useFlowStore((s) => s.ir?.nodes.length ?? 0);
   // Đã có node start? -> không cho thêm start nữa (start là điểm bắt đầu duy nhất).
   const hasStart = useFlowStore((s) => s.ir?.nodes.some((n) => n.type === 'start') ?? false);
+  // Node Start CHỈ có ở main flow — đang mở sub flow thì không thêm được.
+  const inSubflow = useFlowStore((s) => s.activeFlowId !== 'main');
   const { screenToFlowPosition } = useReactFlow();
   const t = useT();
 
-  const isDisabled = (type: (typeof ADDABLE_NODE_TYPES)[number]) => type === 'start' && hasStart;
+  const isDisabled = (type: (typeof ADDABLE_NODE_TYPES)[number]) =>
+    type === 'start' && (hasStart || inSubflow);
+  const disabledTitle = (type: (typeof ADDABLE_NODE_TYPES)[number]) =>
+    type === 'start' && inSubflow ? t('startMainOnly') : t('startExists');
 
   const handleAdd = (type: (typeof ADDABLE_NODE_TYPES)[number]) => {
     if (isDisabled(type)) return;
@@ -111,7 +116,7 @@ export function AddModulePanel() {
                 role="menuitem"
                 disabled={disabled}
                 draggable={!disabled}
-                title={disabled ? t('startExists') : undefined}
+                title={disabled ? disabledTitle(type) : undefined}
                 onDragStart={(e) => {
                   if (disabled) {
                     e.preventDefault();

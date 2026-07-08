@@ -112,11 +112,12 @@ function serializeGraph(
 export function toYaml(ir: FlowIR): string {
   const main = serializeGraph(ir.nodes, ir.edges);
 
-  // Sub Flow: mỗi flow phụ là 1 graph riêng { name, start, nodes } trong flow.subflows.
-  const subflows = (ir.subflows ?? []).map((s) => ({
-    name: s.name,
-    ...serializeGraph(s.nodes, s.edges),
-  }));
+  // Sub Flow: mỗi flow phụ là 1 graph riêng { name, nodes } trong flow.subflows.
+  // Sub flow không có node Start nên không có field start.
+  const subflows = (ir.subflows ?? []).map((s) => {
+    const graph = serializeGraph(s.nodes, s.edges);
+    return { name: s.name, nodes: graph.nodes };
+  });
 
   const doc = {
     flow: {
