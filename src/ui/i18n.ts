@@ -119,6 +119,12 @@ const DICT: Record<Lang, Record<string, string>> = {
     // ── searchSelect ──
     searchSelectPlaceholder: 'Chọn hoặc gõ để lọc…',
     searchSelectEmpty: 'Không có lựa chọn',
+    // ── Xác nhận đăng xuất / ngắt kết nối ──
+    logoutConfirmTitle: 'Đăng xuất',
+    logoutConfirmMessage: 'Bạn có chắc muốn đăng xuất không?',
+    disconnectConfirmTitle: 'Ngắt kết nối GitHub',
+    disconnectConfirmMessage:
+      'Ngắt kết nối sẽ xoá token khỏi trình duyệt này — lần sau phải nhập lại token. Bạn có chắc không?',
     // ── Panel Main/Sub Flow ──
     flowsTitle: 'Main Flow / Sub Flow',
     mainFlowSection: 'Main Flow',
@@ -352,6 +358,12 @@ const DICT: Record<Lang, Record<string, string>> = {
     // ── searchSelect ──
     searchSelectPlaceholder: '選択または入力で絞り込み…',
     searchSelectEmpty: '候補がありません',
+    // ── Xác nhận đăng xuất / ngắt kết nối ──
+    logoutConfirmTitle: 'ログアウト',
+    logoutConfirmMessage: 'ログアウトしてもよろしいですか？',
+    disconnectConfirmTitle: 'GitHub切断',
+    disconnectConfirmMessage:
+      '切断するとトークンがこのブラウザから削除され、次回は再入力が必要になります。よろしいですか？',
     // ── Panel Main/Sub Flow ──
     flowsTitle: 'メインフロー / サブフロー',
     mainFlowSection: 'メインフロー',

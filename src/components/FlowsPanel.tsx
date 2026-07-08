@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
 import { useT } from '../ui/i18n';
 import { Icon } from '../ui/icons';
+import { IvrPropertyModal } from './IvrPropertyModal';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Nút icon ở header trái (màn canvas) mở panel Main Flow / Sub Flow:
@@ -44,6 +45,9 @@ export function FlowsPanel() {
   const switchFlow = useFlowStore((s) => s.switchFlow);
   const createSubflow = useFlowStore((s) => s.createSubflow);
   const t = useT();
+
+  // Modal Cài đặt IVR Property (chuyển từ menu header về đây — cùng chỗ cấu hình flow).
+  const [ivrOpen, setIvrOpen] = useState(false);
 
   // Ô nhập tên khi bấm nút tạo sub flow (inline trong panel).
   const [creating, setCreating] = useState(false);
@@ -154,8 +158,25 @@ export function FlowsPanel() {
               {t('createSubflow')}
             </button>
           )}
+
+          {/* ── Cài đặt IVR Property — cấu hình chung của flow, đặt cùng chỗ Main/Sub Flow. ── */}
+          <div className="bk-menu-sep" />
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setIvrOpen(true);
+              setOpen(false);
+            }}
+            className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm font-medium text-[var(--bk-text)] transition hover:bg-[var(--bk-surface-2)]"
+          >
+            <Icon icon="majesticons:code-block-line" width={16} height={16} className="text-[var(--bk-accent)]" />
+            {t('ivrProperty')}
+          </button>
         </div>
       )}
+
+      {ivrOpen && <IvrPropertyModal onClose={() => setIvrOpen(false)} />}
     </div>
   );
 }

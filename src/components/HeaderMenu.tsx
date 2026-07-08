@@ -11,19 +11,19 @@ import { useLang, useT, type TKey } from '../ui/i18n';
 import { useToast } from '../ui/toast';
 import { Icon } from '../ui/icons';
 import { SlideToggle } from './SlideToggle';
-import { IvrPropertyModal } from './IvrPropertyModal';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Menu dọc trên header (đóng/mở, animation giống "Thêm node"). Gom mọi chức năng
-// từng nằm rời trên header: ngôn ngữ, theme, tự sắp xếp, xuất YAML, đăng xuất —
-// và thêm mục mới "Cài đặt IVR Property" (mở modal).
+// từng nằm rời trên header: ngôn ngữ, theme, tự sắp xếp, xuất YAML, đăng xuất.
+// (Cài đặt IVR Property đã chuyển sang panel Main/Sub Flow — xem FlowsPanel.)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function HeaderMenu() {
   const [open, setOpen] = useState(false);
   // Giữ menu mounted trong lúc chạy animation ĐÓNG.
   const [render, setRender] = useState(false);
-  const [ivrOpen, setIvrOpen] = useState(false);
+  // Xác nhận đăng xuất (tránh bấm nhầm 1 phát là văng ra ngoài).
+  const [confirmLogout, setConfirmLogout] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (open) setRender(true);
@@ -173,6 +173,9 @@ export function HeaderMenu() {
               title={theme === 'dark' ? t('themeDark') : t('themeLight')}
             />
           </div>
+          {/* ── Cài đặt flow ── */}
+          <MenuSection title={t('secFlow')} />
+          {/* Auto Layout thuộc nhóm thao tác flow (không phải giao diện). */}
           <button
             type="button"
             role="menuitem"
@@ -182,21 +185,6 @@ export function HeaderMenu() {
           >
             <Icon icon="lucide:layout-dashboard" width={16} height={16} className="text-[var(--bk-accent)]" />
             <span>{busy ? t('autoLayoutBusy') : t('autoLayout')}</span>
-          </button>
-
-          {/* ── Cài đặt flow ── */}
-          <MenuSection title={t('secFlow')} />
-          <button
-            type="button"
-            role="menuitem"
-            className="bk-menu-item"
-            onClick={() => {
-              setIvrOpen(true);
-              setOpen(false);
-            }}
-          >
-            <Icon icon="majesticons:code-block-line" width={16} height={16} className="text-[var(--bk-accent)]" />
-            <span>{t('ivrProperty')}</span>
           </button>
           {currentFile && (
             <button
@@ -238,7 +226,7 @@ export function HeaderMenu() {
             <span>{t('exportYaml')}</span>
           </button>
 
-          {/* ── Tài khoản / Đăng xuất ── */}
+          {/* ── Điều hướng ── */}
           <div className="bk-menu-sep" />
           {currentFile && (
             <button
@@ -254,20 +242,60 @@ export function HeaderMenu() {
               <span>{t('fmBackToManager')}</span>
             </button>
           )}
-          <div className="bk-menu-account">
+
+          {/* ── Tài khoản / Đăng xuất — tách xa nút điều hướng để không bấm nhầm. ── */}
+          <div className="bk-menu-sep mt-3" />
+          <div className="bk-menu-account mt-1">
             {user?.picture && <img src={user.picture} alt="" className="h-7 w-7 rounded-full" />}
             <span className="min-w-0 flex-1 truncate text-xs text-[var(--bk-text-muted)]" title={user?.email}>
               {user?.name}
             </span>
-            <button type="button" className="bk-menu-logout" onClick={signOut} title={t('logout')}>
-              <Icon icon="lucide:log-out" width={14} height={14} />
+            <button
+              type="button"
+              className="bk-menu-logout"
+              onClick={() => {
+                setConfirmLogout(true);
+                setOpen(false);
+              }}
+              title={t('logout')}
+            >
+              <Icon icon="line-md:logout" width={14} height={14} />
               <span>{t('logout')}</span>
             </button>
           </div>
         </div>
       )}
 
-      {ivrOpen && <IvrPropertyModal onClose={() => setIvrOpen(false)} />}
+      {/* Modal xác nhận đăng xuất (thay vì đăng xuất ngay 1 click). */}
+      {confirmLogout && (
+        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true" onClick={() => setConfirmLogout(false)}>
+          <div className="bk-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-1 flex items-center gap-2 text-sm font-bold text-[var(--bk-text)]">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[color-mix(in_srgb,#dc2626_14%,transparent)] text-[#dc2626]">
+                <Icon icon="line-md:logout" width={15} height={15} />
+              </span>
+              {t('logoutConfirmTitle')}
+            </div>
+            <p className="mb-4 text-sm leading-relaxed text-[var(--bk-text-muted)]">{t('logoutConfirmMessage')}</p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmLogout(false)}
+                className="rounded-lg border border-[var(--bk-border)] px-4 py-2 text-sm font-semibold text-[var(--bk-text-muted)] transition hover:bg-[var(--bk-surface-2)] hover:text-[var(--bk-text)]"
+              >
+                {t('btnCancel')}
+              </button>
+              <button
+                type="button"
+                onClick={signOut}
+                className="rounded-lg bg-[#dc2626] px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"
+              >
+                {t('logout')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
