@@ -280,18 +280,18 @@ export function FileManagerScreen() {
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={busy}
-              className="flex items-center gap-1.5 rounded-lg bg-[var(--bk-accent)] px-3.5 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-60"
+              className="flex items-center gap-1.5 rounded-lg bg-[var(--bk-accent)] px-3.5 py-2 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-60"
             >
-              <Icon icon="lucide:upload" width={16} height={16} />
+              <Icon icon="line-md:upload-loop" width={17} height={17} />
               {t('fmUpload')}
             </button>
             <button
               type="button"
               onClick={openNewModal}
               disabled={busy}
-              className="flex items-center gap-1.5 rounded-lg bg-[#16a34a] px-3.5 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-60"
+              className="flex items-center gap-1.5 rounded-lg bg-[#16a34a] px-3.5 py-2 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-60"
             >
-              <Icon icon="lucide:file-plus" width={16} height={16} />
+              <Icon icon="line-md:plus" width={17} height={17} />
               {t('fmNew')}
             </button>
             <button
@@ -300,7 +300,7 @@ export function FileManagerScreen() {
               disabled={loading || busy}
               title={t('fmRefresh')}
               aria-label={t('fmRefresh')}
-              className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--bk-text-muted)] transition hover:text-[var(--bk-accent)] disabled:opacity-60"
+              className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--bk-text-muted)] transition-all duration-200 hover:-translate-y-0.5 hover:text-[var(--bk-accent)] active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-60"
             >
               <Icon icon="lucide:refresh-cw" width={18} height={18} className={loading ? 'animate-spin' : ''} />
             </button>

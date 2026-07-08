@@ -142,20 +142,20 @@ function servicesBlock(env: IvrEnvironment): string {
   ].join('\n');
 }
 
-// Các dòng announce sinh từ node trong flow (announce / input / llm).
+// Các dòng announce sinh từ node trong flow (announce / interaction / openai).
 function announceLines(ir: FlowIR, token: string): string[] {
   const lines: string[] = [];
   for (const node of ir.nodes) {
     const name = nodeName(node);
     if (node.type === 'announce') {
       lines.push(promptLine(name, str(node.data.text), token));
-    } else if (node.type === 'input') {
+    } else if (node.type === 'interaction') {
       lines.push(promptLine(name, str(node.data.announce), token));
       if (node.data.repeat === 'yes') {
         lines.push(promptLine(`復唱_${name}`, str(node.data.repeatAnnounce), token));
       }
       lines.push(promptLine(`リトライ_${name}`, str(node.data.retryAnnounce), token));
-    } else if (node.type === 'llm') {
+    } else if (node.type === 'openai') {
       lines.push(promptLine(`リトライ_LLM_${name}`, str(node.data.retryAnnounce), token));
     }
   }
