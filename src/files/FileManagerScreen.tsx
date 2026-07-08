@@ -248,15 +248,11 @@ export function FileManagerScreen() {
     <div className="relative flex h-full flex-col bg-[var(--bk-bg)]">
       {/* ── Top bar: tiêu đề + nút menu (giống canvas) ── */}
       <header className="flex items-center justify-between border-b border-[var(--bk-border)] bg-[var(--bk-surface)] px-4 py-2.5">
-        <div className="flex items-center gap-3">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--bk-accent-soft)] text-lg text-[var(--bk-accent)]">
-            <Icon icon="hugeicons:workflow-square-10" />
-          </span>
-          <div>
-            <div className="text-sm font-semibold text-[var(--bk-text)]">{t('fmTitle')}</div>
-            <div className="text-[11px] text-[var(--bk-text-faint)]">
-              {t('fmFolderNote', { dir: FLOWS_DIR })}
-            </div>
+        {/* Không đặt icon ở đây — tránh nhầm là nút bấm (nút icon chỉ có ở màn canvas). */}
+        <div>
+          <div className="text-sm font-semibold text-[var(--bk-text)]">{t('fmTitle')}</div>
+          <div className="text-[11px] text-[var(--bk-text-faint)]">
+            {t('fmFolderNote', { dir: FLOWS_DIR })}
           </div>
         </div>
         <FileManagerMenu />

@@ -16,6 +16,9 @@ import { SlideToggle } from '../components/SlideToggle';
 export function FileManagerMenu() {
   const [open, setOpen] = useState(false);
   const [render, setRender] = useState(false);
+  // Xác nhận trước khi đăng xuất / ngắt kết nối GitHub (tránh bấm nhầm 1 click).
+  const [confirmLogout, setConfirmLogout] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (open) setRender(true);
@@ -98,12 +101,17 @@ export function FileManagerMenu() {
                   <Icon icon="mdi:github" width={14} height={14} />
                   <span className="truncate" title={t('fmConnectedAs', { login })}>{login}</span>
                 </span>
+                {/* Nút bấm hẳn hoi (không phải text) + hỏi xác nhận trước khi ngắt. */}
                 <button
                   type="button"
-                  onClick={disconnect}
-                  className="rounded-md px-2 py-1 text-xs font-semibold text-[var(--bk-text-muted)] transition hover:text-rose-500"
+                  onClick={() => {
+                    setConfirmDisconnect(true);
+                    setOpen(false);
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg border border-[var(--bk-border)] px-2.5 py-1.5 text-xs font-semibold text-[var(--bk-text-muted)] transition hover:border-rose-400 hover:text-rose-500"
                 >
-                  {t('fmDisconnect')}
+                  <Icon icon="line-md:cog-off-loop" width={14} height={14} />
+                  <span>{t('fmDisconnect')}</span>
                 </button>
               </div>
             </>
@@ -116,13 +124,99 @@ export function FileManagerMenu() {
             <span className="min-w-0 flex-1 truncate text-xs text-[var(--bk-text-muted)]" title={user?.email}>
               {user?.name}
             </span>
-            <button type="button" className="bk-menu-logout" onClick={signOut} title={t('logout')}>
-              <Icon icon="lucide:log-out" width={14} height={14} />
+            <button
+              type="button"
+              className="bk-menu-logout"
+              onClick={() => {
+                setConfirmLogout(true);
+                setOpen(false);
+              }}
+              title={t('logout')}
+            >
+              <Icon icon="line-md:logout" width={14} height={14} />
               <span>{t('logout')}</span>
             </button>
           </div>
         </div>
       )}
+
+      {/* Modal xác nhận đăng xuất. */}
+      {confirmLogout && (
+        <ConfirmModal
+          icon="line-md:logout"
+          title={t('logoutConfirmTitle')}
+          message={t('logoutConfirmMessage')}
+          confirmLabel={t('logout')}
+          onCancel={() => setConfirmLogout(false)}
+          onConfirm={signOut}
+          cancelLabel={t('btnCancel')}
+        />
+      )}
+
+      {/* Modal xác nhận ngắt kết nối GitHub. */}
+      {confirmDisconnect && (
+        <ConfirmModal
+          icon="line-md:cog-off-loop"
+          title={t('disconnectConfirmTitle')}
+          message={t('disconnectConfirmMessage')}
+          confirmLabel={t('fmDisconnect')}
+          onCancel={() => setConfirmDisconnect(false)}
+          onConfirm={() => {
+            disconnect();
+            setConfirmDisconnect(false);
+          }}
+          cancelLabel={t('btnCancel')}
+        />
+      )}
+    </div>
+  );
+}
+
+// Modal xác nhận nhỏ dùng chung cho đăng xuất / ngắt kết nối trong menu này.
+function ConfirmModal({
+  icon,
+  title,
+  message,
+  confirmLabel,
+  cancelLabel,
+  onCancel,
+  onConfirm,
+}: {
+  icon: string;
+  title: string;
+  message: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true" onClick={onCancel}>
+      <div className="bk-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-1 flex items-center gap-2 text-sm font-bold text-[var(--bk-text)]">
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[color-mix(in_srgb,#dc2626_14%,transparent)] text-[#dc2626]">
+            <Icon icon={icon} width={15} height={15} />
+          </span>
+          {title}
+        </div>
+        <p className="mb-4 text-sm leading-relaxed text-[var(--bk-text-muted)]">{message}</p>
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg border border-[var(--bk-border)] px-4 py-2 text-sm font-semibold text-[var(--bk-text-muted)] transition hover:bg-[var(--bk-surface-2)] hover:text-[var(--bk-text)]"
+          >
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="rounded-lg bg-[#dc2626] px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

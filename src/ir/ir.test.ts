@@ -3,7 +3,14 @@ import { fromYaml } from './fromYaml';
 import { toYaml } from './toYaml';
 import { parse } from 'yaml';
 import { SYNTHETIC_START_ID } from './types';
-import { defaultDataFor, sourceHandlesFor, readBranches, catchAllDisplay } from '../ui/nodeSchema';
+import {
+  defaultDataFor,
+  sourceHandlesFor,
+  readBranches,
+  catchAllDisplay,
+  effectiveBranches,
+  optionsForSource,
+} from '../ui/nodeSchema';
 import { parseFlowMeta } from './flowMeta';
 
 const SAMPLE = `
@@ -213,6 +220,103 @@ flow:
         { id: 'b1', value: '2' },
       ]),
     ).toBe('^(?!(?:1|2)$).*$');
+  });
+});
+
+describe('Context Match Router: nhánh sinh từ Pair (value 1..n, không catch-all)', () => {
+  const CMR = `
+flow:
+  name: "f"
+  start: r
+  nodes:
+    - id: r
+      type: logic
+      moduleType: Context Match Router
+      pairs:
+        - left: "a"
+          right: "b"
+        - left: "c"
+          right: "d"
+      branches:
+        - when: "1"
+          to: x
+          label: "Khớp"
+        - when: "Pair2"
+          to: y
+    - id: x
+      type: hangup
+    - id: y
+      type: hangup
+`;
+
+  it('fromYaml: when "1" và "Pair2" (dạng cũ) đều map về handle pairN', () => {
+    const ir = fromYaml(CMR);
+    const edges = ir.edges.filter((e) => e.source === 'r');
+    expect(edges.map((e) => e.sourceHandle).sort()).toEqual(['pair1', 'pair2']);
+  });
+
+  it('effectiveBranches: chỉ các nhánh pair, value 1..n, giữ label; không catch-all', () => {
+    const ir = fromYaml(CMR);
+    const r = ir.nodes.find((n) => n.id === 'r')!;
+    expect(effectiveBranches(r.type, r.data)).toEqual([
+      { id: 'pair1', value: '1', label: 'Khớp' },
+      { id: 'pair2', value: '2' },
+    ]);
+    // Handle trên canvas cũng chỉ có 2 chấm pair (không có default).
+    expect(sourceHandlesFor(r).map((h) => h.id)).toEqual(['pair1', 'pair2']);
+  });
+});
+
+describe('sub flow trong cùng file YAML', () => {
+  const WITH_SUB = `
+flow:
+  name: "main"
+  start: a
+  nodes:
+    - id: a
+      type: announce
+      text: "hi"
+      next: j
+    - id: j
+      type: jump
+      subflow: "Đặt lịch"
+  subflows:
+    - name: "Đặt lịch"
+      start: s1
+      nodes:
+        - id: s1
+          type: interaction
+          announce: "ngày?"
+        - id: s2
+          type: hangup
+`;
+
+  it('fromYaml đọc subflows (id slug + graph riêng có start tổng hợp)', () => {
+    const ir = fromYaml(WITH_SUB);
+    expect(ir.subflows).toHaveLength(1);
+    const sub = ir.subflows![0];
+    expect(sub.name).toBe('Đặt lịch');
+    // 2 node YAML + 1 node start tổng hợp của sub flow.
+    expect(sub.nodes).toHaveLength(3);
+    expect(sub.edges.find((e) => e.source === SYNTHETIC_START_ID)?.target).toBe('s1');
+    // Node Jump ở main flow chọn được sub flow theo tên.
+    expect(optionsForSource('subflows', ir)).toEqual(['Đặt lịch']);
+  });
+
+  it('toYaml ghi lại subflows (round-trip)', () => {
+    const ir = fromYaml(WITH_SUB);
+    const parsed = parse(toYaml(ir)) as {
+      flow: {
+        nodes: Array<{ id: string }>;
+        subflows?: Array<{ name: string; start?: string; nodes: Array<{ id: string; type: string }> }>;
+      };
+    };
+    expect(parsed.flow.nodes.map((n) => n.id)).toEqual(['a', 'j']);
+    expect(parsed.flow.subflows).toHaveLength(1);
+    expect(parsed.flow.subflows![0].name).toBe('Đặt lịch');
+    expect(parsed.flow.subflows![0].start).toBe('s1');
+    expect(parsed.flow.subflows![0].nodes.map((n) => n.id)).toEqual(['s1', 's2']);
+    expect(parsed.flow.subflows![0].nodes[0].type).toBe('interaction');
   });
 });
 

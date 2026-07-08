@@ -41,6 +41,12 @@ interface RawNode {
   [key: string]: unknown;
 }
 
+interface RawSubflow {
+  name?: string;
+  start?: string;
+  nodes?: RawNode[];
+}
+
 interface RawFlowFile {
   flow?: {
     name?: string;
@@ -50,6 +56,7 @@ interface RawFlowFile {
     createdAt?: string;
     updatedAt?: string;
     nodes?: RawNode[];
+    subflows?: RawSubflow[];
   };
 }
 
@@ -75,16 +82,17 @@ function edgeId(source: string, target: string, suffix?: string): string {
   return suffix ? `${source}->${target}#${suffix}` : `${source}->${target}`;
 }
 
-export function fromYaml(text: string): FlowIR {
-  const parsed = parse(text) as RawFlowFile | null;
-  const flow = parsed?.flow ?? {};
-  const rawNodes = flow.nodes ?? [];
-
+// Parse 1 graph (main flow hoặc sub flow): danh sách node YAML + điểm bắt đầu
+// -> nodes/edges IR (kèm node "start" tổng hợp nếu có `start`).
+function parseGraph(
+  rawNodes: RawNode[],
+  start: string | undefined,
+): { nodes: FlowNode[]; edges: FlowEdge[] } {
   const nodes: FlowNode[] = [];
   const edges: FlowEdge[] = [];
 
   // Node "start" tổng hợp: YAML không có node thật cho điểm bắt đầu.
-  if (flow.start) {
+  if (start) {
     nodes.push({
       id: SYNTHETIC_START_ID,
       type: 'start',
@@ -93,9 +101,9 @@ export function fromYaml(text: string): FlowIR {
       data: {},
     });
     edges.push({
-      id: edgeId(SYNTHETIC_START_ID, flow.start),
+      id: edgeId(SYNTHETIC_START_ID, start),
       source: SYNTHETIC_START_ID,
-      target: flow.start,
+      target: start,
       sourceHandle: 'default',
     });
   }
@@ -144,9 +152,11 @@ export function fromYaml(text: string): FlowIR {
       raw.branches.forEach((branch, index) => {
         const label = typeof branch.label === 'string' ? branch.label : undefined;
         if (branch.when && branch.to) {
-          // Node logic (Context Match Router): nhánh PairN dùng handle 'pairN' để
-          // liên động với danh sách Pair trong panel (không phải b0/b1 thường).
-          const pairMatch = nodeType === 'logic' ? /^Pair(\d+)$/.exec(branch.when) : null;
+          // Node logic (Context Match Router): nhánh Pair dùng handle 'pairN' để liên
+          // động với danh sách Pair trong panel. Value mới là '1'/'2'…; vẫn nhận
+          // dạng cũ 'Pair1' cho file đã lưu trước đó.
+          const isCmr = nodeType === 'logic' && data.moduleType === 'Context Match Router';
+          const pairMatch = isCmr ? /^(?:Pair)?(\d+)$/.exec(branch.when) : null;
           const handle = pairMatch ? `pair${pairMatch[1]}` : `b${index}`;
           dataBranches.push({ id: handle, value: branch.when, label });
           edges.push({
@@ -175,6 +185,28 @@ export function fromYaml(text: string): FlowIR {
     }
   }
 
+  return { nodes, edges };
+}
+
+export function fromYaml(text: string): FlowIR {
+  const parsed = parse(text) as RawFlowFile | null;
+  const flow = parsed?.flow ?? {};
+
+  const { nodes, edges } = parseGraph(flow.nodes ?? [], flow.start);
+
+  // Sub Flow: mỗi entry là 1 graph riêng (name/start/nodes), id = slug duy nhất.
+  const usedIds = new Set<string>();
+  const subflows = (flow.subflows ?? [])
+    .filter((raw) => typeof raw?.name === 'string' && raw.name.trim())
+    .map((raw) => {
+      const name = raw.name!.trim();
+      let id = slugify(name);
+      let i = 2;
+      while (usedIds.has(id)) id = `${slugify(name)}-${i++}`;
+      usedIds.add(id);
+      return { id, name, ...parseGraph(raw.nodes ?? [], raw.start) };
+    });
+
   // Giữ nguyên 作成日時/更新日時/作成者 nếu file đã có; nếu chưa thì để trống
   // (không tự bịa thời điểm import — tránh ghi đè khi lưu lại).
   return {
@@ -189,6 +221,7 @@ export function fromYaml(text: string): FlowIR {
     },
     nodes,
     edges,
+    ...(subflows.length > 0 ? { subflows } : {}),
   };
 }
 

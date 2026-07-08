@@ -14,6 +14,17 @@ export interface FlowIR {
     createdAt: string; // 作成日時 — định dạng yyyy-MM-dd HH:mm
     updatedAt: string; // 更新日時 — định dạng yyyy-MM-dd HH:mm
   };
+  // Main Flow: graph chính của file (flow.nodes trong YAML).
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+  // Sub Flow: các flow phụ trong cùng file, node Jump trỏ tới theo TÊN. Xử lý tới
+  // node cuối (không nối tiếp) của sub flow thì quay lại main flow (logic Brekeke).
+  subflows?: SubFlow[];
+}
+
+export interface SubFlow {
+  id: string; // slug duy nhất trong file (suy từ tên)
+  name: string; // tên hiển thị — node Jump tham chiếu theo tên này
   nodes: FlowNode[];
   edges: FlowEdge[];
 }

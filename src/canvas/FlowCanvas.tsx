@@ -75,6 +75,14 @@ export function FlowCanvas() {
     setEdges(rf.edges);
   }, [ir, setNodes, setEdges]);
 
+  // Đổi flow (main <-> sub) -> fit view vào graph mới sau khi canvas re-derive.
+  const activeFlowId = useFlowStore((s) => s.activeFlowId);
+  const { fitView } = useReactFlow();
+  useEffect(() => {
+    const id = requestAnimationFrame(() => void fitView({ padding: 0.2, duration: 250 }));
+    return () => cancelAnimationFrame(id);
+  }, [activeFlowId, fitView]);
+
   // Phím tắt Ctrl/⌘ + Shift + L: bật/tắt tương tác (Toggle Interactivity) — đồng
   // bộ với nút khoá trong Controls (cùng sửa store nodesDraggable/Connectable/Selectable).
   useEffect(() => {

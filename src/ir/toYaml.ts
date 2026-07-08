@@ -51,14 +51,18 @@ function readDataBranches(data: Record<string, unknown>): Map<string, BranchInfo
   return map;
 }
 
-export function toYaml(ir: FlowIR): string {
+// Serialize 1 graph (main flow hoặc sub flow) -> { start, nodes } dạng YAML.
+function serializeGraph(
+  irNodes: FlowIR['nodes'],
+  irEdges: FlowEdge[],
+): { start?: string; nodes: OutNode[] } {
   // Điểm bắt đầu = target của edge đi ra từ node 'start' tổng hợp (nếu có).
-  const startEdge = ir.edges.find((e) => e.source === SYNTHETIC_START_ID);
+  const startEdge = irEdges.find((e) => e.source === SYNTHETIC_START_ID);
   const start = startEdge?.target;
 
   const outNodes: OutNode[] = [];
 
-  for (const node of ir.nodes) {
+  for (const node of irNodes) {
     if (node.id === SYNTHETIC_START_ID) continue; // start là field, không phải node YAML
 
     const out: OutNode = { id: node.id, type: node.type };
@@ -69,7 +73,7 @@ export function toYaml(ir: FlowIR): string {
       out[key] = value;
     }
 
-    const edges = outgoing(ir.edges, node.id);
+    const edges = outgoing(irEdges, node.id);
 
     // Node nhánh tự do (nexus/logic/jump): xuất branches[]. Riêng logic/jump chỉ dùng
     // branches khi thật sự có nhánh tuỳ biến (ngoài catch-all) — module Script thường
@@ -102,6 +106,18 @@ export function toYaml(ir: FlowIR): string {
     outNodes.push(out);
   }
 
+  return { ...(start ? { start } : {}), nodes: outNodes };
+}
+
+export function toYaml(ir: FlowIR): string {
+  const main = serializeGraph(ir.nodes, ir.edges);
+
+  // Sub Flow: mỗi flow phụ là 1 graph riêng { name, start, nodes } trong flow.subflows.
+  const subflows = (ir.subflows ?? []).map((s) => ({
+    name: s.name,
+    ...serializeGraph(s.nodes, s.edges),
+  }));
+
   const doc = {
     flow: {
       name: ir.meta.name,
@@ -109,8 +125,9 @@ export function toYaml(ir: FlowIR): string {
       ...(ir.meta.author ? { author: ir.meta.author } : {}),
       ...(ir.meta.createdAt ? { createdAt: ir.meta.createdAt } : {}),
       ...(ir.meta.updatedAt ? { updatedAt: ir.meta.updatedAt } : {}),
-      ...(start ? { start } : {}),
-      nodes: outNodes,
+      ...(main.start ? { start: main.start } : {}),
+      nodes: main.nodes,
+      ...(subflows.length > 0 ? { subflows } : {}),
     },
   };
 
