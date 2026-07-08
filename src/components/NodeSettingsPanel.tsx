@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useFlowStore } from '../store/flowStore';
 import type { FlowNode, NodeType } from '../ir/types';
 import { NODE_CONFIG } from '../ui/nodeConfig';
@@ -6,6 +6,10 @@ import {
   PROPERTY_FIELDS,
   BRANCH_SCHEMA,
   readBranches,
+  readPairs,
+  effectiveBranches,
+  isPairBranchNode,
+  optionsForSource,
   catchAllDisplay,
   CATCH_ALL_ID,
   type PropertyField,
@@ -339,15 +343,27 @@ function FieldControl({ field, data }: { field: PropertyField; data: Record<stri
       return (
         <label className="block">
           {label}
-          {/* Text 1 dòng: chặn xuống dòng (dán nhiều dòng -> gộp về 1 dòng). */}
+          {/* Text 1 dòng: chặn xuống dòng (dán nhiều dòng -> gộp về 1 dòng).
+              readOnly (vd Nguồn ngày lễ): hiển thị mờ, không cho sửa. */}
           <input
             type="text"
-            className={inputClass}
+            className={`${inputClass} ${field.readOnly ? 'cursor-not-allowed opacity-70' : ''}`}
             value={value}
-            onChange={(e) => set(e.target.value.replace(/[\r\n]+/g, ' '))}
+            readOnly={field.readOnly}
+            tabIndex={field.readOnly ? -1 : undefined}
+            onChange={field.readOnly ? undefined : (e) => set(e.target.value.replace(/[\r\n]+/g, ' '))}
           />
         </label>
       );
+    case 'searchSelect':
+      return (
+        <div className="block">
+          {label}
+          <SearchSelect field={field} value={value} onChange={set} />
+        </div>
+      );
+    case 'pairs':
+      return <PairsEditor data={data} />;
     case 'autoText':
       return (
         <label className="block">
@@ -478,6 +494,156 @@ function CollapsibleField({
   );
 }
 
+// ── searchSelect: pulldown gõ để lọc ─────────────────────────────────────────
+// Option lấy động từ IR (node Interaction / context đã lưu / sub flow). Gõ chữ để
+// lọc; giá trị gõ tự do vẫn được giữ (lenient) để không chặn dữ liệu chưa có nguồn.
+function SearchSelect({
+  field,
+  value,
+  onChange,
+}: {
+  field: PropertyField;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const t = useT();
+  const ir = useFlowStore((s) => s.ir);
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  const options = useMemo(
+    () => (field.optionsFrom ? optionsForSource(field.optionsFrom, ir) : []),
+    [field.optionsFrom, ir],
+  );
+  const query = value.trim().toLowerCase();
+  // Đang gõ -> lọc theo chữ; giá trị khớp hẳn 1 option -> hiện đủ danh sách để đổi nhanh.
+  const filtered =
+    query && !options.some((o) => o.toLowerCase() === query)
+      ? options.filter((o) => o.toLowerCase().includes(query))
+      : options;
+
+  return (
+    <div className="relative" ref={wrapRef}>
+      <input
+        type="text"
+        className={`${inputClass} pr-8`}
+        value={value}
+        placeholder={t('searchSelectPlaceholder')}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onChange={(e) => {
+          onChange(e.target.value.replace(/[\r\n]+/g, ' '));
+          setOpen(true);
+        }}
+      />
+      <Icon
+        icon="lucide:chevron-down"
+        width={15}
+        height={15}
+        className={`pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--bk-text-faint)] transition-transform ${open ? 'rotate-180' : ''}`}
+      />
+      {open && (
+        <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-52 overflow-y-auto rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface)] p-1 shadow-[var(--bk-shadow)]">
+          {filtered.length === 0 ? (
+            <div className="px-2.5 py-2 text-xs text-[var(--bk-text-faint)]">{t('searchSelectEmpty')}</div>
+          ) : (
+            filtered.map((o) => (
+              <button
+                key={o}
+                type="button"
+                // mousedown (trước blur) để click chọn không bị dropdown đóng "nuốt" mất.
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onChange(o);
+                  setOpen(false);
+                }}
+                className={[
+                  'block w-full truncate rounded-md px-2.5 py-1.5 text-left text-sm transition',
+                  o === value
+                    ? 'bg-[var(--bk-accent-soft)] font-medium text-[var(--bk-accent)]'
+                    : 'text-[var(--bk-text)] hover:bg-[var(--bk-surface-2)]',
+                ].join(' ')}
+                title={o}
+              >
+                {o}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Pairs (Context Match Router) ─────────────────────────────────────────────
+// Mỗi Pair = output của Node-Context 1 × output của Node-Context 2. Pair 1 không
+// xoá được; các Pair sau thêm/xoá tự do. Nhánh (Branch Settings) sinh tự động từ
+// danh sách này (value ^Pair{n}$) — xem effectiveBranches.
+function PairsEditor({ data }: { data: Record<string, unknown> }) {
+  const t = useT();
+  const setDraftField = useFlowStore((s) => s.setDraftField);
+  const pairs = readPairs(data);
+
+  const update = (index: number, side: 'left' | 'right', v: string) => {
+    const next = pairs.map((p, i) => (i === index ? { ...p, [side]: v.replace(/[\r\n]+/g, ' ') } : p));
+    setDraftField('pairs', next);
+  };
+  const add = () => setDraftField('pairs', [...pairs, { left: '', right: '' }]);
+  const remove = (index: number) => {
+    if (index === 0) return; // Pair 1 cố định
+    setDraftField('pairs', pairs.filter((_, i) => i !== index));
+  };
+
+  return (
+    <div className="block space-y-2.5">
+      {pairs.map((p, i) => (
+        <div key={i}>
+          <span className="text-xs font-medium text-[var(--bk-text-muted)]">{`${t('fPairs')} ${i + 1}`}</span>
+          <div className="mt-1 flex items-center gap-2">
+            <input
+              type="text"
+              className={`${inputClass} !mt-0 flex-1`}
+              value={p.left}
+              placeholder={t('pairLeftPh')}
+              onChange={(e) => update(i, 'left', e.target.value)}
+            />
+            {/* Dấu × giữa 2 output: pair khớp khi CẢ 2 giá trị cùng khớp. */}
+            <Icon icon="lucide:x" width={16} height={16} className="shrink-0 text-[var(--bk-text-faint)]" />
+            <input
+              type="text"
+              className={`${inputClass} !mt-0 flex-1`}
+              value={p.right}
+              placeholder={t('pairRightPh')}
+              onChange={(e) => update(i, 'right', e.target.value)}
+            />
+            {i === 0 ? (
+              <span className="w-8 shrink-0" aria-hidden />
+            ) : (
+              <button
+                type="button"
+                onClick={() => remove(i)}
+                title={t('deletePair')}
+                aria-label={t('deletePair')}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--bk-text-faint)] transition hover:bg-[color-mix(in_srgb,#dc2626_12%,transparent)] hover:text-rose-500"
+              >
+                <Icon icon="lucide:trash-2" width={15} height={15} />
+              </button>
+            )}
+          </div>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={add}
+        className="flex items-center gap-2 rounded-lg border border-dashed border-[var(--bk-border)] px-3 py-2 text-sm font-medium text-[var(--bk-text-muted)] transition hover:border-[var(--bk-accent)] hover:text-[var(--bk-accent)]"
+      >
+        <Icon icon="lucide:plus" width={16} height={16} />
+        {t('addPair')}
+      </button>
+    </div>
+  );
+}
+
 // ── Branch ────────────────────────────────────────────────────────────────────
 interface TargetInfo {
   label: string;
@@ -550,9 +716,13 @@ function BranchTab({ node, data }: { node: FlowNode; data: Record<string, unknow
     );
   }
 
-  // Nhánh tự do (condition/script): nhánh catch-all (^.*$) đứng đầu, không sửa/xoá;
+  // Node logic (Context Match Router): nhánh SINH TỪ Pair — value ^Pair{n}$ khoá cứng,
+  // label sửa được, KHÔNG thêm/xoá nhánh ở đây (thêm/xoá Pair bên tab Property).
+  const pairMode = isPairBranchNode(node.type, data);
+
+  // Nhánh tự do (nexus/logic/jump): nhánh catch-all (^.*$) đứng đầu, không sửa/xoá;
   // các nhánh còn lại thêm/sửa/xoá tuỳ ý. "+ Thêm nhánh" để thêm.
-  const branches = readBranches(data);
+  const branches = pairMode ? effectiveBranches(node.type, data) : readBranches(data);
   const catchAllValue = catchAllDisplay(branches);
   // catch-all luôn hiển thị trước, các nhánh khác theo sau.
   const ordered = [
@@ -562,6 +732,7 @@ function BranchTab({ node, data }: { node: FlowNode; data: Record<string, unknow
 
   return (
     <div className="space-y-3">
+      {pairMode && <p className="text-xs text-[var(--bk-text-faint)]">{t('branchPairNote')}</p>}
       <div className="space-y-2.5">
         {/* Tiêu đề cột: VALUE · LABEL · NODE (nhãn hiển thị trên dây thay cho value). */}
         <div className="bk-branch-row bk-branch-head">
@@ -584,6 +755,11 @@ function BranchTab({ node, data }: { node: FlowNode; data: Record<string, unknow
                     tabIndex={-1}
                     title={t('branchElse')}
                   />
+                ) : pairMode ? (
+                  // Value nhánh Pair khoá cứng ^Pair{n}$ (hiển thị kèm neo như nhánh cố định).
+                  <span className="bk-branch-fixed" title={`^${b.value}$`}>
+                    {`^${b.value}$`}
+                  </span>
                 ) : (
                   <RegexBranchInput
                     className={`${inputClass} !mt-0 w-full font-mono`}
@@ -606,7 +782,7 @@ function BranchTab({ node, data }: { node: FlowNode; data: Record<string, unknow
               <div className="bk-branch-target">
                 <BranchTarget info={targetInfo(b.id)} />
               </div>
-              {isCatchAll ? (
+              {isCatchAll || pairMode ? (
                 <span className="bk-branch-del-spacer" aria-hidden />
               ) : (
                 <button
@@ -623,14 +799,16 @@ function BranchTab({ node, data }: { node: FlowNode; data: Record<string, unknow
           );
         })}
       </div>
-      <button
-        type="button"
-        onClick={draftAddBranch}
-        className="flex items-center gap-2 rounded-lg border border-dashed border-[var(--bk-border)] px-3 py-2 text-sm font-medium text-[var(--bk-text-muted)] transition hover:border-[var(--bk-accent)] hover:text-[var(--bk-accent)]"
-      >
-        <Icon icon="lucide:plus" width={16} height={16} />
-        {t('addBranch')}
-      </button>
+      {!pairMode && (
+        <button
+          type="button"
+          onClick={draftAddBranch}
+          className="flex items-center gap-2 rounded-lg border border-dashed border-[var(--bk-border)] px-3 py-2 text-sm font-medium text-[var(--bk-text-muted)] transition hover:border-[var(--bk-accent)] hover:text-[var(--bk-accent)]"
+        >
+          <Icon icon="lucide:plus" width={16} height={16} />
+          {t('addBranch')}
+        </button>
+      )}
     </div>
   );
 }

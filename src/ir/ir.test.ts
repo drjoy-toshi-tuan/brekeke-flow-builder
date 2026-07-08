@@ -53,6 +53,11 @@ describe('fromYaml', () => {
     expect(ir.nodes.find((n) => n.id === SYNTHETIC_START_ID)?.type).toBe('start');
   });
 
+  it('alias tên type cũ: input->interaction, condition->nexus', () => {
+    expect(ir.nodes.find((n) => n.id === 'main_menu')?.type).toBe('interaction');
+    expect(ir.nodes.find((n) => n.id === 'classify')?.type).toBe('nexus');
+  });
+
   it('map next thành edge default', () => {
     const e = ir.edges.find((x) => x.source === 'greet' && x.target === 'main_menu');
     expect(e?.sourceHandle).toBe('default');
@@ -183,14 +188,17 @@ flow:
   });
 
   it('defaultDataFor: seed tham số mặc định + 1 nhánh cho node editable', () => {
-    const input = defaultDataFor('input');
-    expect(input.inputType).toBe('STT');
-    expect(input.retryCount).toBe('2');
-    expect(input.branches).toBeUndefined(); // input là fixed, không có nhánh tự do
+    const interaction = defaultDataFor('interaction');
+    expect(interaction.inputType).toBe('STT');
+    expect(interaction.retryCount).toBe('2');
+    expect(interaction.branches).toBeUndefined(); // interaction là fixed, không có nhánh tự do
 
-    const script = defaultDataFor('script');
+    const logic = defaultDataFor('logic');
+    expect(logic.moduleType).toBe('Script');
+    // Chỉ seed tham số của module đang chọn — không rải tham số CDC/CMR/MRB.
+    expect(logic.holidaySource).toBeUndefined();
     // Mặc định chỉ có nhánh catch-all (id 'default').
-    expect(script.branches).toEqual([{ id: 'default', value: '' }]);
+    expect(logic.branches).toEqual([{ id: 'default', value: '' }]);
 
     const start = defaultDataFor('start');
     expect(start.acceptanceTime).toBe('yes');

@@ -1,5 +1,5 @@
 import { stringify } from 'yaml';
-import { type FlowIR, type FlowEdge, SYNTHETIC_START_ID } from './types';
+import { type FlowIR, type FlowEdge, EDITABLE_BRANCH_TYPES, SYNTHETIC_START_ID } from './types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // IR -> YAML (round-trip cơ bản). Hàm thuần.
@@ -71,10 +71,19 @@ export function toYaml(ir: FlowIR): string {
 
     const edges = outgoing(ir.edges, node.id);
 
-    if (node.type === 'condition') {
+    // Node nhánh tự do (nexus/logic/jump): xuất branches[]. Riêng logic/jump chỉ dùng
+    // branches khi thật sự có nhánh tuỳ biến (ngoài catch-all) — module Script thường
+    // chỉ có 1 đường ra thì giữ dạng `next` cho gọn.
+    const dataBranches = readDataBranches(node.data);
+    const hasCustomBranches =
+      [...dataBranches.keys()].some((id) => id !== 'default') ||
+      edges.some((e) => (e.sourceHandle ?? 'default') !== 'default');
+    const useBranches =
+      EDITABLE_BRANCH_TYPES.includes(node.type) && (node.type === 'nexus' || hasCustomBranches);
+
+    if (useBranches) {
       // Giá trị điều kiện lấy TỪ node.data.branches (nguồn sự thật) theo sourceHandle;
       // fallback về edge.condition cho dữ liệu cũ.
-      const dataBranches = readDataBranches(node.data);
       const branches: OutBranch[] = edges.map((e) => {
         const handle = e.sourceHandle ?? 'default';
         const info = dataBranches.get(handle);

@@ -21,27 +21,41 @@ export interface FlowIR {
 export type NodeType =
   | 'start'
   | 'announce' // TTS / phát audio
-  | 'input' // thu DTMF hoặc STT
-  | 'condition' // phân nhánh theo điều kiện (jump)
-  | 'script' // ES5 script (Brekeke)
-  | 'llm' // gọi OpenAI / LLM
+  | 'interaction' // thu DTMF hoặc STT (tên cũ: input)
+  | 'nexus' // phân nhánh theo điều kiện (tên cũ: condition)
+  | 'logic' // module logic / script (tên cũ: script)
+  | 'openai' // gọi OpenAI / LLM (tên cũ: llm)
   | 'faq' // hỏi-đáp (FAQ)
   | 'transfer' // chuyển máy
   | 'flag' // đặt cờ (ステータスフラグ / SMSフラグ)
+  | 'jump' // nhảy sang sub flow khác
   | 'hangup';
 
 export const NODE_TYPES: readonly NodeType[] = [
   'start',
   'announce',
-  'input',
-  'condition',
-  'script',
-  'llm',
+  'interaction',
+  'nexus',
+  'logic',
+  'openai',
   'faq',
   'transfer',
   'flag',
+  'jump',
   'hangup',
 ] as const;
+
+// Tên type cũ trong YAML -> tên mới (đổi tên hệ thống nhưng file cũ vẫn mở được).
+export const LEGACY_TYPE_ALIASES: Record<string, NodeType> = {
+  input: 'interaction',
+  condition: 'nexus',
+  script: 'logic',
+  llm: 'openai',
+};
+
+// Loại node có nhánh TỰ DO (data.branches) — dùng chung cho fromYaml/toYaml/nodeSchema
+// để 3 nơi không lệch nhau khi thêm loại node mới.
+export const EDITABLE_BRANCH_TYPES: readonly NodeType[] = ['nexus', 'logic', 'jump'] as const;
 
 export interface FlowNode {
   id: string;

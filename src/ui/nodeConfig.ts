@@ -16,13 +16,14 @@ export interface NodeVisual {
 export const NODE_CONFIG: Record<NodeType, NodeVisual> = {
   start: { icon: 'lucide:play', typeLabel: 'Start', color: '#0ac4ab', showTarget: false },
   announce: { icon: 'lucide:volume-2', typeLabel: 'Announce', color: '#10b981' },
-  input: { icon: 'mingcute:voice-fill', typeLabel: 'Input', color: '#0ea5e9' },
-  condition: { icon: 'lucide:git-fork', typeLabel: 'Nexus', color: '#f59e0b' },
-  script: { icon: 'mingcute:command-line', typeLabel: 'Logic', color: '#22c55e' },
-  llm: { icon: 'proicons:openai', typeLabel: 'OpenAI', color: '#d946ef' },
+  interaction: { icon: 'mingcute:voice-fill', typeLabel: 'Interaction', color: '#0ea5e9' },
+  nexus: { icon: 'lucide:git-fork', typeLabel: 'Nexus', color: '#f59e0b' },
+  logic: { icon: 'mingcute:command-line', typeLabel: 'Logic', color: '#22c55e' },
+  openai: { icon: 'proicons:openai', typeLabel: 'OpenAI', color: '#d946ef' },
   faq: { icon: 'lucide:messages-square', typeLabel: 'FAQ', color: '#6366f1' },
   transfer: { icon: 'lucide:phone-forwarded', typeLabel: 'Transfer', color: '#06b6d4' },
   flag: { icon: 'mingcute:flag-4-fill', typeLabel: 'Flag', color: '#de5f1b' },
+  jump: { icon: 'lucide:corner-up-right', typeLabel: 'Jump', color: '#8b5cf6' },
   hangup: { icon: 'lucide:phone-off', typeLabel: 'Hangup', color: '#f43f5e', showSource: false },
 };
 
@@ -31,12 +32,13 @@ export const NODE_CONFIG: Record<NodeType, NodeVisual> = {
 export const ADDABLE_NODE_TYPES: readonly NodeType[] = [
   'start',
   'announce',
-  'input',
-  'condition',
-  'script',
-  'llm',
+  'interaction',
+  'nexus',
+  'logic',
+  'openai',
   'faq',
   'transfer',
   'flag',
+  'jump',
   'hangup',
 ] as const;

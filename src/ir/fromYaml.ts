@@ -5,6 +5,8 @@ import {
   type FlowEdge,
   type NodeType,
   NODE_TYPES,
+  LEGACY_TYPE_ALIASES,
+  EDITABLE_BRANCH_TYPES,
   SYNTHETIC_START_ID,
 } from './types';
 
@@ -55,8 +57,19 @@ interface RawFlowFile {
 const STRUCTURAL_KEYS = new Set(['id', 'type', 'next', 'branches']);
 
 function coerceNodeType(raw: string): NodeType {
+  if (raw in LEGACY_TYPE_ALIASES) return LEGACY_TYPE_ALIASES[raw]; // file cũ: input/condition/script/llm
   return (NODE_TYPES as readonly string[]).includes(raw) ? (raw as NodeType) : 'announce';
 }
+
+// Các giá trị hợp lệ của bộ chọn Module trong node logic. File cũ lưu bộ chọn này
+// ở key `module`; nay `module` là THAM SỐ của Clinic Day Classifier / Module Result
+// Binder (参照元モジュール) nên bộ chọn chuyển sang key `moduleType`.
+const LOGIC_MODULE_NAMES = new Set([
+  'Script',
+  'Clinic Day Classifier',
+  'Context Match Router',
+  'Module Result Binder',
+]);
 
 function edgeId(source: string, target: string, suffix?: string): string {
   return suffix ? `${source}->${target}#${suffix}` : `${source}->${target}`;
@@ -95,6 +108,16 @@ export function fromYaml(text: string): FlowIR {
     }
 
     const nodeType = coerceNodeType(raw.type);
+    // Migrate key bộ chọn module của node logic: module -> moduleType (file cũ).
+    if (
+      nodeType === 'logic' &&
+      data.moduleType == null &&
+      typeof data.module === 'string' &&
+      LOGIC_MODULE_NAMES.has(data.module)
+    ) {
+      data.moduleType = data.module;
+      delete data.module;
+    }
     const node: FlowNode = {
       id: raw.id,
       type: nodeType,
@@ -121,7 +144,10 @@ export function fromYaml(text: string): FlowIR {
       raw.branches.forEach((branch, index) => {
         const label = typeof branch.label === 'string' ? branch.label : undefined;
         if (branch.when && branch.to) {
-          const handle = `b${index}`;
+          // Node logic (Context Match Router): nhánh PairN dùng handle 'pairN' để
+          // liên động với danh sách Pair trong panel (không phải b0/b1 thường).
+          const pairMatch = nodeType === 'logic' ? /^Pair(\d+)$/.exec(branch.when) : null;
+          const handle = pairMatch ? `pair${pairMatch[1]}` : `b${index}`;
           dataBranches.push({ id: handle, value: branch.when, label });
           edges.push({
             id: edgeId(raw.id, branch.to, handle),
@@ -143,7 +169,7 @@ export function fromYaml(text: string): FlowIR {
           });
         }
       });
-      if (nodeType === 'condition' && dataBranches.length > 0) {
+      if (EDITABLE_BRANCH_TYPES.includes(nodeType) && dataBranches.length > 0) {
         node.data.branches = dataBranches;
       }
     }

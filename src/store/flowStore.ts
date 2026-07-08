@@ -4,7 +4,14 @@ import { fromYaml } from '../ir/fromYaml';
 import { toYaml } from '../ir/toYaml';
 import { layout } from '../ir/layout';
 import { NODE_CONFIG } from '../ui/nodeConfig';
-import { defaultDataFor, readBranches, BRANCH_SCHEMA, CATCH_ALL_ID, type DataBranch } from '../ui/nodeSchema';
+import {
+  defaultDataFor,
+  readBranches,
+  effectiveBranches,
+  BRANCH_SCHEMA,
+  CATCH_ALL_ID,
+  type DataBranch,
+} from '../ui/nodeSchema';
 import { DEFAULT_IVR_SETTINGS, formatDateTime, type IvrSettings } from '../ir/ivrProperty';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -365,10 +372,15 @@ export const useFlowStore = create<FlowState>((set, get) => {
     },
 
     // Đặt nhãn hiển thị cho 1 nhánh (áp dụng cho MỌI nhánh, kể cả catch-all).
+    // Dùng effectiveBranches để nhánh sinh từ Pair (CMR) cũng đặt label được
+    // (entry pairN có thể chưa tồn tại trong data.branches).
     draftSetBranchLabel: (branchId, label) => {
-      const { draft } = get();
+      const { draft, ir, selectedNodeId } = get();
       if (!draft) return;
-      const branches = readBranches(draft.data).map((b) => (b.id === branchId ? { ...b, label } : b));
+      const node = ir?.nodes.find((n) => n.id === selectedNodeId);
+      const branches = effectiveBranches(node?.type ?? 'nexus', draft.data).map((b) =>
+        b.id === branchId ? { ...b, label } : b,
+      );
       set({ draft: { ...draft, data: { ...draft.data, branches } } });
     },
 
@@ -386,10 +398,13 @@ export const useFlowStore = create<FlowState>((set, get) => {
       if (!node) return;
 
       const editable = BRANCH_SCHEMA[node.type].mode === 'editable';
-      const branches = editable ? readBranches(draft.data) : [];
+      // Nhánh hiệu lực (CMR sinh từ Pair) — cũng persist vào data.branches khi lưu
+      // để toYaml/round-trip có nguồn sự thật đầy đủ.
+      const branches = editable ? effectiveBranches(node.type, draft.data) : [];
       const branchIds = new Set(branches.map((b) => b.id));
       const valueByHandle = new Map(branches.map((b) => [b.id, b.value]));
       const labelByHandle = new Map(branches.map((b) => [b.id, (b.label ?? '').trim()]));
+      const committedData = editable ? { ...draft.data, branches } : draft.data;
 
       set({
         ...snapshot(),
@@ -397,7 +412,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
           ...ir,
           meta: { ...ir.meta, updatedAt: new Date().toISOString() },
           nodes: ir.nodes.map((n) =>
-            n.id === selectedNodeId ? { ...n, label: draft.label, data: draft.data } : n,
+            n.id === selectedNodeId ? { ...n, label: draft.label, data: committedData } : n,
           ),
           // Node nhánh tự do: bỏ dây xuất phát từ handle đã xoá; đồng bộ điều kiện dây còn lại.
           edges: editable

@@ -1,4 +1,4 @@
-import type { FlowNode, NodeType } from '../ir/types';
+import type { FlowIR, FlowNode, NodeType } from '../ir/types';
 import type { TKey } from './i18n';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -17,7 +17,15 @@ export type FieldKind =
   | 'collapsibleTextarea' // textarea ẩn/hiện (nội dung dài)
   | 'code' // editor có tô sáng cú pháp
   | 'select' // pull-down
+  | 'searchSelect' // pull-down gõ để lọc; option lấy động từ flow (xem optionsFrom)
+  | 'pairs' // danh sách Pair (2 ô text + dấu ×) của Context Match Router
   | 'yesno'; // checkbox 2 lựa chọn あり / なし
+
+// Nguồn option động cho searchSelect (tính từ IR hiện tại, xem optionsForSource).
+export type OptionsSource =
+  | 'interactionNodes' // tên các node Interaction trong flow
+  | 'nodeAndContexts' // node Interaction + tên context đã lưu (Nexus/CDC/MRB)
+  | 'subflows'; // danh sách sub flow (cơ chế sẽ bổ sung sau — hiện trống)
 
 export interface FieldOption {
   value: string;
@@ -31,6 +39,8 @@ export interface PropertyField {
   labelKey: TKey;
   kind: FieldKind;
   options?: FieldOption[]; // cho select / yesno
+  optionsFrom?: OptionsSource; // cho searchSelect
+  readOnly?: boolean; // hiển thị nhưng không cho sửa (vd holidaySource)
   default?: string;
   rows?: number; // cho textarea
   // Chỉ hiển thị khi điều kiện đúng (vd Voice Type chỉ hiện khi Input Type là STT).
@@ -58,6 +68,12 @@ export interface BranchSchema {
 const YESNO_OPTIONS: FieldOption[] = [
   { value: 'yes', labelKey: 'optYes' },
   { value: 'no', labelKey: 'optNo' },
+];
+
+// Có / Không (はい / いいえ) — khác optYes/optNo (あり/なし) về mặt chữ tiếng Nhật.
+const YESNO_HAI_OPTIONS: FieldOption[] = [
+  { value: 'yes', labelKey: 'optYesHai' },
+  { value: 'no', labelKey: 'optNoIie' },
 ];
 
 const INPUT_TYPE_OPTIONS: FieldOption[] = [
@@ -89,19 +105,66 @@ const TRANSFER_TYPE_OPTIONS: FieldOption[] = [
   { value: 'BLIND', label: 'Blind Transfer' },
 ];
 
-// Module cho node Logic (nguyên Script). Chọn "Script" -> hiện ô soạn code;
-// 2 module còn lại (tạm thời chưa có tham số riêng) sẽ bổ sung property sau.
+// ── Module của node Logic ──
+export const LOGIC_MODULE_CDC = 'Clinic Day Classifier';
+export const LOGIC_MODULE_CMR = 'Context Match Router';
+export const LOGIC_MODULE_MRB = 'Module Result Binder';
+export const LOGIC_MODULE_SCRIPT = 'Script';
+
+// Bộ chọn module lưu ở data.moduleType ('module' là THAM SỐ của CDC/MRB — 参照元モジュール).
 const MODULE_OPTIONS: FieldOption[] = [
-  { value: 'Clinic Day Classifier', label: 'Clinic Day Classifier' },
-  { value: 'Context Match Router', label: 'Context Match Router' },
-  { value: 'Script', label: 'Script' },
+  { value: LOGIC_MODULE_CDC, label: LOGIC_MODULE_CDC },
+  { value: LOGIC_MODULE_CMR, label: LOGIC_MODULE_CMR },
+  { value: LOGIC_MODULE_MRB, label: LOGIC_MODULE_MRB },
+  { value: LOGIC_MODULE_SCRIPT, label: LOGIC_MODULE_SCRIPT },
 ];
+
+// Module đang chọn của node logic (mặc định Script khi chưa chọn).
+export function logicModuleOf(data: Record<string, unknown>): string {
+  const v = data.moduleType;
+  return typeof v === 'string' && v ? v : LOGIC_MODULE_SCRIPT;
+}
 
 // Logic: chỉ hiện ô soạn code khi Module = Script (mặc định khi chưa chọn).
 function moduleIsScript(data: Record<string, unknown>): boolean {
-  const v = data.module;
-  return typeof v === 'string' ? v === 'Script' : true;
+  return logicModuleOf(data) === LOGIC_MODULE_SCRIPT;
 }
+const moduleIsCdc = (d: Record<string, unknown>) => logicModuleOf(d) === LOGIC_MODULE_CDC;
+const moduleIsCmr = (d: Record<string, unknown>) => logicModuleOf(d) === LOGIC_MODULE_CMR;
+const moduleIsMrb = (d: Record<string, unknown>) => logicModuleOf(d) === LOGIC_MODULE_MRB;
+
+// ── Clinic Day Classifier ──
+// Nguồn ngày lễ cố định (nội các Nhật公開) — hiển thị read-only, không cho sửa.
+export const HOLIDAY_SOURCE_URL = 'https://www8.cao.go.jp/chosei/shukujitsu/syukujitsu.csv';
+
+// Mode ngày nghỉ (休診日判定モード) — giá trị hệ thống giữ nguyên tiếng Nhật.
+const CLOSED_DAY_MODE_OPTIONS: FieldOption[] = [
+  { value: '土日祝日', labelKey: 'cdmSatSunHol' },
+  { value: '祝日', labelKey: 'cdmHol' },
+  { value: '土日', labelKey: 'cdmSatSun' },
+  { value: '日祝日', labelKey: 'cdmSunHol' },
+  { value: '土', labelKey: 'cdmSat' },
+  { value: '日', labelKey: 'cdmSun' },
+  { value: 'なし', labelKey: 'cdmNone' },
+];
+
+// Kiểu output (出力結果形式) — giá trị hệ thống giữ tiếng Nhật.
+const OUTPUT_TYPE_OPTIONS: FieldOption[] = [
+  { value: 'フリーテキスト', labelKey: 'otFreeText' },
+  { value: '日時', labelKey: 'otDatetime' },
+];
+
+// Kiểu context của Module Result Binder (khác bộ TEXT/DATE của CDC).
+const MRB_CONTEXT_TYPE_OPTIONS: FieldOption[] = [
+  'TEXT',
+  'DEPARTMENT',
+  'CLASSIFICATION',
+  'NUMBER',
+  'DATE',
+  'PHONE_NUMBER',
+].map((v) => ({ value: v, label: v }));
+
+const CDC_CONTEXT_TYPE_OPTIONS: FieldOption[] = ['TEXT', 'DATE'].map((v) => ({ value: v, label: v }));
 
 // Input Type có STT (STT hoặc STT & DTMF) -> mới hiện Voice Type.
 function inputHasStt(data: Record<string, unknown>): boolean {
@@ -109,15 +172,19 @@ function inputHasStt(data: Record<string, unknown>): boolean {
   return v === 'STT' || v === 'STT_DTMF' || v == null; // mặc định STT
 }
 
-// Condition: chỉ hiện Tên/Kiểu context khi bật "Lưu context".
+// Nexus: chỉ hiện Tên/Kiểu context khi bật "Lưu context".
 function saveContextOn(data: Record<string, unknown>): boolean {
   return data.saveContext === 'yes';
 }
 
-// Input: chỉ hiện "Repeat Announce" khi bật "Repeat" (復唱).
+// Interaction: chỉ hiện "Repeat Announce" khi bật "Repeat" (復唱).
 function repeatOn(data: Record<string, unknown>): boolean {
   return data.repeat === 'yes';
 }
+
+// CDC/MRB: chỉ hiện Tên/Kiểu context khi bật "Lưu context" của module tương ứng.
+const cdcSaveContextOn = (d: Record<string, unknown>) => moduleIsCdc(d) && d.saveContext2db === 'yes';
+const mrbSaveContextOn = (d: Record<string, unknown>) => moduleIsMrb(d) && d.saveContext2DB === 'yes';
 
 export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
   start: [
@@ -125,7 +192,7 @@ export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
     { key: 'contextSetting', labelKey: 'fContextSetting', kind: 'collapsibleTextarea', rows: 6 },
   ],
   announce: [{ key: 'text', labelKey: 'fAnnounce', kind: 'autoText' }],
-  input: [
+  interaction: [
     { key: 'announce', labelKey: 'fAnnounce', kind: 'autoText' },
     // Repeat (復唱): ngay dưới Announce; bật -> hiện Repeat Announce (復唱アナウンス).
     { key: 'repeat', labelKey: 'fRepeat', kind: 'yesno', options: YESNO_OPTIONS, default: 'no' },
@@ -143,7 +210,7 @@ export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
     // Retry Announce luôn nằm ngay dưới Retry Count.
     { key: 'retryAnnounce', labelKey: 'fRetryAnnounce', kind: 'autoText' },
   ],
-  condition: [
+  nexus: [
     { key: 'saveContext', labelKey: 'fSaveContext', kind: 'yesno', options: YESNO_OPTIONS, default: 'no' },
     { key: 'contextName', labelKey: 'fContextName', kind: 'text', showIf: saveContextOn },
     {
@@ -155,11 +222,72 @@ export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
       showIf: saveContextOn,
     },
   ],
-  script: [
-    { key: 'module', labelKey: 'fModule', kind: 'select', options: MODULE_OPTIONS, default: 'Script' },
+  logic: [
+    { key: 'moduleType', labelKey: 'fModule', kind: 'select', options: MODULE_OPTIONS, default: LOGIC_MODULE_SCRIPT },
+
+    // ── Script ──
     { key: 'script', labelKey: 'fScript', kind: 'code', rows: 18, showIf: moduleIsScript },
+
+    // ── Clinic Day Classifier ──
+    { key: 'module', labelKey: 'fRefModule', kind: 'searchSelect', optionsFrom: 'interactionNodes', showIf: moduleIsCdc },
+    {
+      key: 'holidaySource',
+      labelKey: 'fHolidaySource',
+      kind: 'text',
+      readOnly: true,
+      default: HOLIDAY_SOURCE_URL,
+      showIf: moduleIsCdc,
+    },
+    { key: 'customHoliday', labelKey: 'fCustomHoliday', kind: 'text', showIf: moduleIsCdc },
+    {
+      key: 'closedDayMode',
+      labelKey: 'fClosedDayMode',
+      kind: 'select',
+      options: CLOSED_DAY_MODE_OPTIONS,
+      default: '土日祝日',
+      showIf: moduleIsCdc,
+    },
+    { key: 'blockDays', labelKey: 'fBlockDays', kind: 'number', default: '0', showIf: moduleIsCdc },
+    { key: 'acceptPastDay', labelKey: 'fAcceptPastDay', kind: 'yesno', options: YESNO_HAI_OPTIONS, default: 'no', showIf: moduleIsCdc },
+    {
+      key: 'output_type',
+      labelKey: 'fOutputType',
+      kind: 'select',
+      options: OUTPUT_TYPE_OPTIONS,
+      default: 'フリーテキスト',
+      showIf: moduleIsCdc,
+    },
+    { key: 'saveContext2db', labelKey: 'fSaveContext', kind: 'yesno', options: YESNO_HAI_OPTIONS, default: 'no', showIf: moduleIsCdc },
+    { key: 'contextName', labelKey: 'fContextName', kind: 'text', showIf: cdcSaveContextOn },
+    {
+      key: 'contextDisplayType',
+      labelKey: 'fContextType',
+      kind: 'select',
+      options: CDC_CONTEXT_TYPE_OPTIONS,
+      default: 'TEXT',
+      showIf: cdcSaveContextOn,
+    },
+
+    // ── Context Match Router ──
+    { key: 'nodeContext1', labelKey: 'fNodeContext1', kind: 'searchSelect', optionsFrom: 'nodeAndContexts', showIf: moduleIsCmr },
+    { key: 'nodeContext2', labelKey: 'fNodeContext2', kind: 'searchSelect', optionsFrom: 'nodeAndContexts', showIf: moduleIsCmr },
+    { key: 'pairs', labelKey: 'fPairs', kind: 'pairs', showIf: moduleIsCmr },
+
+    // ── Module Result Binder ──
+    { key: 'module', labelKey: 'fMrbModule', kind: 'searchSelect', optionsFrom: 'nodeAndContexts', showIf: moduleIsMrb },
+    { key: 'variable', labelKey: 'fVariable', kind: 'text', showIf: moduleIsMrb },
+    { key: 'saveContext2DB', labelKey: 'fSaveContext', kind: 'yesno', options: YESNO_HAI_OPTIONS, default: 'no', showIf: moduleIsMrb },
+    { key: 'contextName', labelKey: 'fContextName', kind: 'text', showIf: mrbSaveContextOn },
+    {
+      key: 'contextDisplayType',
+      labelKey: 'fContextType',
+      kind: 'select',
+      options: MRB_CONTEXT_TYPE_OPTIONS,
+      default: 'TEXT',
+      showIf: mrbSaveContextOn,
+    },
   ],
-  llm: [
+  openai: [
     { key: 'retryCount', labelKey: 'fRetryCount', kind: 'number', default: '2' },
     // Retry Announce luôn nằm ngay dưới Retry Count.
     { key: 'retryAnnounce', labelKey: 'fRetryAnnounce', kind: 'autoText' },
@@ -176,6 +304,8 @@ export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
     { key: 'statusFlag', labelKey: 'fStatusFlag', kind: 'number' },
     { key: 'smsFlag', labelKey: 'fSmsFlag', kind: 'number' },
   ],
+  // Jump: chọn sub flow để nhảy tới (danh sách sub flow sẽ bổ sung sau).
+  jump: [{ key: 'subflow', labelKey: 'fSubflow', kind: 'searchSelect', optionsFrom: 'subflows' }],
   hangup: [],
 };
 
@@ -187,7 +317,7 @@ export const NEXT_BRANCH_LABEL = '次へ';
 export const FAILED_BRANCH_LABEL = '失敗';
 
 const NEXT_ONLY: BranchDescriptor[] = [{ id: 'default', name: 'NEXT', label: NEXT_BRANCH_LABEL }];
-// FAILED + NEXT dùng chung cho input/llm/faq/transfer.
+// FAILED + NEXT dùng chung cho interaction/openai/faq/transfer.
 const FAILED_NEXT: BranchDescriptor[] = [
   { id: 'failed', name: 'FAILED', label: FAILED_BRANCH_LABEL },
   { id: 'default', name: 'NEXT', label: NEXT_BRANCH_LABEL },
@@ -196,15 +326,17 @@ const FAILED_NEXT: BranchDescriptor[] = [
 export const BRANCH_SCHEMA: Record<NodeType, BranchSchema> = {
   start: { mode: 'fixed', fixed: NEXT_ONLY },
   announce: { mode: 'fixed', fixed: NEXT_ONLY },
-  input: { mode: 'fixed', fixed: FAILED_NEXT },
-  condition: { mode: 'editable' },
-  script: { mode: 'editable' },
-  llm: { mode: 'fixed', fixed: FAILED_NEXT },
+  interaction: { mode: 'fixed', fixed: FAILED_NEXT },
+  nexus: { mode: 'editable' },
+  logic: { mode: 'editable' },
+  openai: { mode: 'fixed', fixed: FAILED_NEXT },
   faq: { mode: 'fixed', fixed: FAILED_NEXT },
   // Transfer: nhánh FAILED (nối máy thất bại) nằm trên nhánh NEXT.
   transfer: { mode: 'fixed', fixed: FAILED_NEXT },
   // Flag: chỉ có nhánh NEXT.
   flag: { mode: 'fixed', fixed: NEXT_ONLY },
+  // Jump: nhánh tự do (thêm được nhánh) giống nexus/logic.
+  jump: { mode: 'editable' },
   hangup: { mode: 'none' },
 };
 
@@ -253,24 +385,114 @@ export function catchAllDisplay(branches: DataBranch[]): string {
   return `^(?!(?:${others.join('|')})$).*$`;
 }
 
+// ── Pair (Context Match Router) ─────────────────────────────────────────────
+// 1 Pair = 2 output cần khớp nhau (Node-Context 1 × Node-Context 2). Pair thứ n
+// sinh nhánh value ^Pair{n}$ ở Branch Settings (label do người dùng đặt).
+export interface ContextPair {
+  left: string;
+  right: string;
+}
+
+// Đọc danh sách Pair trong data (an toàn kiểu). Luôn có ít nhất Pair 1.
+export function readPairs(data: Record<string, unknown>): ContextPair[] {
+  const raw = data.pairs;
+  let list: ContextPair[] = [];
+  if (Array.isArray(raw)) {
+    list = raw
+      .filter((p): p is Record<string, unknown> => !!p && typeof p === 'object')
+      .map((p) => ({
+        left: typeof p.left === 'string' ? p.left : '',
+        right: typeof p.right === 'string' ? p.right : '',
+      }));
+  }
+  return list.length > 0 ? list : [{ left: '', right: '' }];
+}
+
+// Node logic đang ở module Context Match Router? (nhánh sinh từ Pair, khoá thêm/xoá tay)
+export function isPairBranchNode(type: NodeType, data: Record<string, unknown>): boolean {
+  return type === 'logic' && logicModuleOf(data) === LOGIC_MODULE_CMR;
+}
+
+// Danh sách nhánh "hiệu lực" của node:
+//   - CMR: sinh từ Pair (pair1, pair2, …; value Pair{n}); label giữ từ data.branches.
+//   - còn lại: đọc thẳng data.branches.
+export function effectiveBranches(type: NodeType, data: Record<string, unknown>): DataBranch[] {
+  const branches = readBranches(data);
+  if (!isPairBranchNode(type, data)) return branches;
+  const byId = new Map(branches.map((b) => [b.id, b]));
+  const catchAll = byId.get(CATCH_ALL_ID) ?? { id: CATCH_ALL_ID, value: '' };
+  return [
+    catchAll,
+    ...readPairs(data).map((_, i) => {
+      const id = `pair${i + 1}`;
+      const old = byId.get(id);
+      const branch: DataBranch = { id, value: `Pair${i + 1}` };
+      if (old?.label) branch.label = old.label;
+      return branch;
+    }),
+  ];
+}
+
+// ── Option động cho searchSelect ─────────────────────────────────────────────
+// Tên các node Interaction trong flow (ưu tiên label, fallback id).
+export function interactionNodeNames(ir: FlowIR | null): string[] {
+  if (!ir) return [];
+  return ir.nodes.filter((n) => n.type === 'interaction').map((n) => n.label.trim() || n.id);
+}
+
+// Tên context đã được tạo & lưu trong flow: Nexus (saveContext), Clinic Day
+// Classifier (saveContext2db) và Module Result Binder (saveContext2DB).
+export function savedContextNames(ir: FlowIR | null): string[] {
+  if (!ir) return [];
+  const names: string[] = [];
+  for (const n of ir.nodes) {
+    const d = n.data;
+    const name = typeof d.contextName === 'string' ? d.contextName.trim() : '';
+    if (!name) continue;
+    if (n.type === 'nexus' && d.saveContext === 'yes') names.push(name);
+    if (n.type === 'logic' && logicModuleOf(d) === LOGIC_MODULE_CDC && d.saveContext2db === 'yes') names.push(name);
+    if (n.type === 'logic' && logicModuleOf(d) === LOGIC_MODULE_MRB && d.saveContext2DB === 'yes') names.push(name);
+  }
+  return names;
+}
+
+// Option cho từng nguồn (loại trùng, giữ thứ tự xuất hiện).
+export function optionsForSource(source: OptionsSource, ir: FlowIR | null): string[] {
+  switch (source) {
+    case 'interactionNodes':
+      return [...new Set(interactionNodeNames(ir))];
+    case 'nodeAndContexts':
+      return [...new Set([...interactionNodeNames(ir), ...savedContextNames(ir)])];
+    case 'subflows':
+      return []; // cơ chế sub flow sẽ bổ sung sau
+  }
+}
+
 // Handle output (chấm nối dây ở đáy node) suy ra TỪ IR:
 //   - none      -> [] (không có output)
 //   - fixed     -> danh sách cố định theo schema
-//   - editable  -> theo node.data.branches (nhãn = value)
+//   - editable  -> theo nhánh hiệu lực (CMR sinh từ Pair; còn lại data.branches)
 // irAdapter dùng hàm này để render handle; panel dùng để biết số nhánh.
 export function sourceHandlesFor(node: FlowNode): BranchDescriptor[] {
   const schema = BRANCH_SCHEMA[node.type];
   if (schema.mode === 'none') return [];
   if (schema.mode === 'fixed') return schema.fixed ?? [];
   // Nhãn trên dây/handle: ưu tiên label do người dùng đặt, fallback về value.
-  return readBranches(node.data).map((b) => ({ id: b.id, label: b.label?.trim() || b.value || undefined }));
+  return effectiveBranches(node.type, node.data).map((b) => ({
+    id: b.id,
+    label: b.label?.trim() || b.value || undefined,
+  }));
 }
 
 // Sinh dữ liệu mặc định khi thêm node mới (tham số + nhánh tự do nếu có).
+// Field có showIf chỉ seed khi điều kiện đúng với data đang dựng — tránh rải
+// tham số của module chưa chọn (vd tham số CDC trên node logic đang là Script).
 export function defaultDataFor(type: NodeType): Record<string, unknown> {
   const data: Record<string, unknown> = { description: '' };
   for (const f of PROPERTY_FIELDS[type]) {
-    if (f.default != null) data[f.key] = f.default;
+    if (f.default == null) continue;
+    if (f.showIf && !f.showIf(data)) continue;
+    data[f.key] = f.default;
   }
   if (BRANCH_SCHEMA[type].mode === 'editable') {
     // Mặc định chỉ có nhánh catch-all (^.*$), không sửa/không xoá.
