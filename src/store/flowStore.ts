@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import type { FlowIR, FlowEdge, FlowNode, NodeType, SubFlow } from '../ir/types';
-import { SYNTHETIC_START_ID } from '../ir/types';
 import { fromYaml } from '../ir/fromYaml';
 import { toYaml } from '../ir/toYaml';
 import { layout } from '../ir/layout';
@@ -149,20 +148,10 @@ function slugifyName(name: string): string {
   return slug || 'subflow';
 }
 
-// Graph khởi tạo của sub flow mới: chỉ có node Start (điểm bắt đầu của sub flow).
+// Graph khởi tạo của sub flow mới: TRỐNG — node Start chỉ tồn tại ở main flow
+// (sub flow được gọi qua Jump, xử lý xong node cuối thì tự quay về main flow).
 function seedSubflowGraph(): { nodes: FlowNode[]; edges: FlowEdge[] } {
-  return {
-    nodes: [
-      {
-        id: SYNTHETIC_START_ID,
-        type: 'start',
-        label: 'Start',
-        position: { x: 0, y: 0 },
-        data: defaultDataFor('start'),
-      },
-    ],
-    edges: [],
-  };
+  return { nodes: [], edges: [] };
 }
 
 export const useFlowStore = create<FlowState>((set, get) => {
@@ -440,10 +429,11 @@ export const useFlowStore = create<FlowState>((set, get) => {
     },
 
     addNode: (type, position) => {
-      const { ir } = get();
+      const { ir, activeFlowId } = get();
       if (!ir) return '';
-      // Start là điểm bắt đầu duy nhất — chỉ cho phép 1 node start trong flow.
-      if (type === 'start' && ir.nodes.some((n) => n.type === 'start')) return '';
+      // Start là điểm bắt đầu duy nhất và CHỈ có ở main flow (sub flow không có Start).
+      if (type === 'start' && (activeFlowId !== 'main' || ir.nodes.some((n) => n.type === 'start')))
+        return '';
       // id duy nhất theo loại: announce_1, announce_2, …
       const existing = new Set(ir.nodes.map((n) => n.id));
       let i = 1;

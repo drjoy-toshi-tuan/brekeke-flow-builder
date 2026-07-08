@@ -291,19 +291,19 @@ flow:
           type: hangup
 `;
 
-  it('fromYaml đọc subflows (id slug + graph riêng có start tổng hợp)', () => {
+  it('fromYaml đọc subflows (id slug + graph riêng, KHÔNG có node Start)', () => {
     const ir = fromYaml(WITH_SUB);
     expect(ir.subflows).toHaveLength(1);
     const sub = ir.subflows![0];
     expect(sub.name).toBe('Đặt lịch');
-    // 2 node YAML + 1 node start tổng hợp của sub flow.
-    expect(sub.nodes).toHaveLength(3);
-    expect(sub.edges.find((e) => e.source === SYNTHETIC_START_ID)?.target).toBe('s1');
+    // Chỉ 2 node YAML — sub flow không có node Start (kể cả file cũ còn field start).
+    expect(sub.nodes).toHaveLength(2);
+    expect(sub.nodes.some((n) => n.id === SYNTHETIC_START_ID)).toBe(false);
     // Node Jump ở main flow chọn được sub flow theo tên.
     expect(optionsForSource('subflows', ir)).toEqual(['Đặt lịch']);
   });
 
-  it('toYaml ghi lại subflows (round-trip)', () => {
+  it('toYaml ghi lại subflows (round-trip, không field start)', () => {
     const ir = fromYaml(WITH_SUB);
     const parsed = parse(toYaml(ir)) as {
       flow: {
@@ -314,7 +314,7 @@ flow:
     expect(parsed.flow.nodes.map((n) => n.id)).toEqual(['a', 'j']);
     expect(parsed.flow.subflows).toHaveLength(1);
     expect(parsed.flow.subflows![0].name).toBe('Đặt lịch');
-    expect(parsed.flow.subflows![0].start).toBe('s1');
+    expect(parsed.flow.subflows![0].start).toBeUndefined();
     expect(parsed.flow.subflows![0].nodes.map((n) => n.id)).toEqual(['s1', 's2']);
     expect(parsed.flow.subflows![0].nodes[0].type).toBe('interaction');
   });

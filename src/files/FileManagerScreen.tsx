@@ -313,25 +313,40 @@ export function FileManagerScreen() {
       <header className="flex items-center justify-between border-b border-[var(--bk-border)] bg-[var(--bk-surface)] px-4 py-2.5">
         {/* Không đặt icon ở đây — tránh nhầm là nút bấm (nút icon chỉ có ở màn canvas). */}
         <div>
-          <div className="text-sm font-semibold text-[var(--bk-text)]">{t('fmTitle')}</div>
-          <div className="text-[11px] text-[var(--bk-text-faint)]">
-            {t('fmFolderNote', { dir: FLOWS_DIR })}
-          </div>
+          <div className="text-base font-bold text-[var(--bk-text)]">Brekeke Flow Builder</div>
+          <div className="text-[11px] text-[var(--bk-text-faint)]">{t('fmTitle')}</div>
         </div>
         <FileManagerMenu />
       </header>
 
       {/* ── Nội dung ── */}
       {!token ? (
-        <div className="flex flex-1 items-center justify-center p-6">
+        <div className="relative flex flex-1 items-center justify-center overflow-hidden p-6">
+          {/* Vầng sáng accent mờ (đồng bộ màn login). */}
+          <div
+            aria-hidden
+            className="pointer-events-none absolute left-1/2 top-1/2 h-[460px] w-[460px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--bk-accent)] opacity-[0.08] blur-[100px]"
+          />
           <GithubConnectPanel />
         </div>
       ) : (
-        <main className="mx-auto w-full max-w-5xl flex-1 overflow-auto p-6">
-          <div className="mb-4">
-            <h1 className="text-lg font-bold text-[var(--bk-text)]">{t('fmTitle')}</h1>
-            <p className="text-sm text-[var(--bk-text-muted)]">{t('fmSubtitle')}</p>
-          </div>
+        <main className="relative mx-auto w-full max-w-5xl flex-1 overflow-auto p-6">
+          {/* Vầng sáng accent mờ phía sau card — chiều sâu kiểu màn login. */}
+          <div
+            aria-hidden
+            className="pointer-events-none absolute left-1/2 top-24 h-[420px] w-[640px] -translate-x-1/2 rounded-full bg-[var(--bk-accent)] opacity-[0.07] blur-[110px]"
+          />
+
+          <div className="relative overflow-hidden rounded-3xl border border-[var(--bk-border)] bg-[var(--bk-surface)] p-6 shadow-[var(--bk-shadow)]">
+            {/* Dải accent mảnh trên đỉnh card (đồng bộ thẻ login). */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-transparent via-[var(--bk-accent)] to-transparent opacity-70"
+            />
+            <div className="mb-4">
+              <h1 className="text-lg font-bold tracking-tight text-[var(--bk-text)]">{t('fmTitle')}</h1>
+              <p className="text-sm text-[var(--bk-text-muted)]">{t('fmSubtitle')}</p>
+            </div>
 
           {/* Thanh hành động */}
           <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -474,6 +489,7 @@ export function FileManagerScreen() {
                 </tbody>
               </table>
             )}
+          </div>
           </div>
         </main>
       )}

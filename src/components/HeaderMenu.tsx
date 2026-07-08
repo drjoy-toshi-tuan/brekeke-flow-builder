@@ -68,8 +68,9 @@ export function HeaderMenu() {
   };
 
   // Lưu flow hiện tại (export IR -> YAML) về đúng file trên repo (cập nhật theo sha).
-  const handleSaveToRepo = async () => {
-    if (!currentFile || !token || saving) return;
+  // Trả về true khi lưu thành công (nút "Về màn quản lý file" dựa vào đây để điều hướng).
+  const handleSaveToRepo = async (): Promise<boolean> => {
+    if (!currentFile || !token || saving) return false;
     setSaving(true);
     setSaveError(null);
     try {
@@ -91,11 +92,25 @@ export function HeaderMenu() {
       setSha(res.sha);
       setSavedAt(now);
       showToast(t('fmSaved')); // thông báo nổi, tự biến mất
+      return true;
     } catch (e) {
       setSaveError(ghErrorKey(e));
+      return false;
     } finally {
       setSaving(false);
     }
+  };
+
+  // "Về màn quản lý file" = TỰ LƯU về repo rồi mới điều hướng; lưu lỗi thì ở lại
+  // (hiện lỗi trong menu) để không mất thay đổi mà không biết.
+  const handleBackToManager = async () => {
+    if (saving) return;
+    if (currentFile && token && ir) {
+      const ok = await handleSaveToRepo();
+      if (!ok) return;
+    }
+    closeFile();
+    setOpen(false);
   };
 
   // Phím tắt Ctrl/Cmd + Shift + S = lưu về repo (dùng ref để luôn gọi handler mới nhất).
@@ -233,12 +248,15 @@ export function HeaderMenu() {
               type="button"
               role="menuitem"
               className="bk-menu-item"
-              onClick={() => {
-                closeFile();
-                setOpen(false);
-              }}
+              onClick={() => void handleBackToManager()}
+              disabled={saving}
             >
-              <Icon icon="line-md:list-3-filled" width={16} height={16} className="text-[var(--bk-accent)]" />
+              <Icon
+                icon={saving ? 'lucide:loader-circle' : 'line-md:list-3-filled'}
+                width={16}
+                height={16}
+                className={`text-[var(--bk-accent)] ${saving ? 'animate-spin' : ''}`}
+              />
               <span>{t('fmBackToManager')}</span>
             </button>
           )}
