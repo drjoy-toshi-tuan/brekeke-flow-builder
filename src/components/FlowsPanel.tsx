@@ -246,7 +246,7 @@ export function FlowsPanel() {
             }}
             className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm font-medium text-[var(--bk-text)] transition hover:bg-[var(--bk-surface-2)]"
           >
-            <Icon icon="majesticons:code-block-line" width={16} height={16} className="text-[var(--bk-accent)]" />
+            <Icon icon="line-md:text-box" width={16} height={16} className="text-[var(--bk-accent)]" />
             {t('ivrProperty')}
           </button>
         </div>
@@ -339,7 +339,13 @@ function FlowItem({
         {active && <Icon icon="lucide:circle-check" width={14} height={14} className="shrink-0" />}
       </button>
       {(onRename || onDelete) && (
-        <div className="flex shrink-0 items-center gap-0.5 pr-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        // Hiện khi hover HOẶC khi sub flow này đang được chọn (click vào là thấy luôn).
+        <div
+          className={[
+            'flex shrink-0 items-center gap-0.5 pr-1.5 transition-opacity',
+            active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100',
+          ].join(' ')}
+        >
           {onRename && (
             <button
               type="button"

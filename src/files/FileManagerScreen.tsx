@@ -15,7 +15,7 @@ import {
 import { ghErrorKey } from '../github/errors';
 import { FLOWS_DIR } from '../github/config';
 import { fromYaml } from '../ir/fromYaml';
-import { parseFlowMeta, type FlowMeta } from '../ir/flowMeta';
+import { parseFlowMeta, updateFlowMeta, type FlowMeta } from '../ir/flowMeta';
 import { formatDateTime } from '../ir/ivrProperty';
 import { useFlowStore } from '../store/flowStore';
 import { useFileStore } from '../store/fileStore';
@@ -88,6 +88,10 @@ export function FileManagerScreen() {
   const [createErrorKey, setCreateErrorKey] = useState<TKey | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FileRow | null>(null);
   const [overwrite, setOverwrite] = useState<{ name: string; content: string; sha: string } | null>(null);
+  // Đổi tên bệnh viện / tên flow ngay trên màn quản lý (không cần mở canvas).
+  const [renameTarget, setRenameTarget] = useState<FileRow | null>(null);
+  const [renameFacility, setRenameFacility] = useState('');
+  const [renameScenario, setRenameScenario] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -223,6 +227,65 @@ export function FileManagerScreen() {
     const author = user?.name ?? user?.email ?? '';
     const content = buildBlankFlow({ facility, name: scenario, author, createdAt: now });
     await commitAndOpen(name, content, t('commitCreate', { name }));
+  };
+
+  // Mở modal đổi tên (prefill từ metadata của dòng).
+  const openRenameModal = (file: FileRow) => {
+    setRenameTarget(file);
+    setRenameFacility(file.meta.facility ?? '');
+    setRenameScenario(file.meta.name ?? stripExt(file.name));
+  };
+
+  // Lưu đổi tên: đọc file -> vá metadata (giữ nguyên nodes) -> commit lại theo sha.
+  const handleRename = async () => {
+    if (!renameTarget) return;
+    const target = renameTarget;
+    const facility = renameFacility.trim();
+    const scenario = renameScenario.trim();
+    if (!facility || !scenario) return;
+    setRenameTarget(null);
+    setBusy(true);
+    setActionError(null);
+    try {
+      const { content, sha } = await getFlow(token!, target.path);
+      const next = updateFlowMeta(content, {
+        facility,
+        name: scenario,
+        updatedAt: formatDateTime(new Date()),
+      });
+      await putFlow(token!, target.path, next, t('commitRename', { name: target.name }), sha);
+      await refresh();
+    } catch (e) {
+      setActionError(t(ghErrorKey(e)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Nhân bản: copy nội dung sang file mới (tên file + tên kịch bản thêm hậu tố),
+  // đóng dấu người tạo/thời điểm là người nhân bản.
+  const handleDuplicate = async (file: FileRow) => {
+    if (busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const { content } = await getFlow(token!, file.path);
+      const newFileName = uniqueFileName(sanitizeFileName(file.name), new Set(files.map((f) => f.name)));
+      const now = formatDateTime(new Date());
+      const baseName = file.meta.name ?? stripExt(file.name);
+      const next = updateFlowMeta(content, {
+        name: `${baseName} (Copy)`,
+        createdAt: now,
+        updatedAt: now,
+        author: user?.name ?? user?.email ?? '',
+      });
+      await putFlow(token!, `${FLOWS_DIR}/${newFileName}`, next, t('commitDuplicate', { name: newFileName }));
+      await refresh();
+    } catch (e) {
+      setActionError(t(ghErrorKey(e)));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleDelete = async () => {
@@ -379,6 +442,24 @@ export function FileManagerScreen() {
                           </button>
                           <button
                             type="button"
+                            onClick={() => openRenameModal(file)}
+                            disabled={busy}
+                            className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--bk-text-faint)] transition hover:bg-[var(--bk-accent-soft)] hover:text-[var(--bk-accent)] disabled:opacity-60"
+                            title={t('fmRename')}
+                          >
+                            <Icon icon="lucide:pencil" width={16} height={16} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDuplicate(file)}
+                            disabled={busy}
+                            className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--bk-text-faint)] transition hover:bg-[var(--bk-accent-soft)] hover:text-[var(--bk-accent)] disabled:opacity-60"
+                            title={t('fmDuplicate')}
+                          >
+                            <Icon icon="lucide:copy" width={16} height={16} />
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => setDeleteTarget(file)}
                             disabled={busy}
                             className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--bk-text-faint)] transition hover:bg-[color-mix(in_srgb,#dc2626_12%,transparent)] hover:text-rose-500 disabled:opacity-60"
@@ -457,6 +538,62 @@ export function FileManagerScreen() {
                 className="rounded-lg bg-[var(--bk-accent)] px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
               >
                 {t('fmCreate')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: đổi tên bệnh viện / tên flow (vá metadata, giữ nguyên nodes) */}
+      {renameTarget && (
+        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true" onClick={() => setRenameTarget(null)}>
+          <div className="bk-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3 flex items-center gap-2 text-sm font-bold text-[var(--bk-text)]">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]">
+                <Icon icon="lucide:pencil" width={15} height={15} />
+              </span>
+              {t('fmRenameTitle')}
+            </div>
+
+            <label className="mb-1 block text-xs font-semibold text-[var(--bk-text-muted)]">
+              {t('colFacility')}
+            </label>
+            <input
+              autoFocus
+              value={renameFacility}
+              onChange={(e) => setRenameFacility(e.target.value)}
+              placeholder={t('fmFacilityPlaceholder')}
+              className="mb-3 w-full rounded-lg border border-[var(--bk-border)] bg-[var(--bk-bg)] px-3 py-2 text-sm text-[var(--bk-text)] outline-none focus:border-[var(--bk-accent)]"
+            />
+
+            <label className="mb-1 block text-xs font-semibold text-[var(--bk-text-muted)]">
+              {t('colScenario')}
+            </label>
+            <input
+              value={renameScenario}
+              onChange={(e) => setRenameScenario(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleRename();
+              }}
+              placeholder={t('fmScenarioPlaceholder')}
+              className="mb-4 w-full rounded-lg border border-[var(--bk-border)] bg-[var(--bk-bg)] px-3 py-2 text-sm text-[var(--bk-text)] outline-none focus:border-[var(--bk-accent)]"
+            />
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setRenameTarget(null)}
+                className="rounded-lg border border-[var(--bk-border)] px-4 py-2 text-sm font-semibold text-[var(--bk-text-muted)] transition hover:bg-[var(--bk-surface-2)] hover:text-[var(--bk-text)]"
+              >
+                {t('btnCancel')}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleRename()}
+                disabled={!renameFacility.trim() || !renameScenario.trim()}
+                className="rounded-lg bg-[var(--bk-accent)] px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
+              >
+                {t('btnSave')}
               </button>
             </div>
           </div>

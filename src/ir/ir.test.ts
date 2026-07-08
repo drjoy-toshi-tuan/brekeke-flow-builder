@@ -11,7 +11,7 @@ import {
   effectiveBranches,
   optionsForSource,
 } from '../ui/nodeSchema';
-import { parseFlowMeta } from './flowMeta';
+import { parseFlowMeta, updateFlowMeta } from './flowMeta';
 
 const SAMPLE = `
 flow:
@@ -351,6 +351,36 @@ flow:
     expect(parsed.flow.author).toBe('Tuan');
     expect(parsed.flow.createdAt).toBe('2026-07-01 09:30');
     expect(parsed.flow.updatedAt).toBe('2026-07-02 14:00');
+  });
+
+  it('updateFlowMeta: vá metadata, giữ nguyên nodes/subflows', () => {
+    const src = `flow:
+  name: "cũ"
+  facility: "viện cũ"
+  start: greet
+  nodes:
+    - id: greet
+      type: announce
+      text: "hi"
+  subflows:
+    - name: "sub"
+      start: s1
+      nodes:
+        - id: s1
+          type: hangup
+`;
+    const out = updateFlowMeta(src, { name: 'mới', facility: 'viện mới', updatedAt: '2026-07-08 10:00' });
+    const meta = parseFlowMeta(out);
+    expect(meta.name).toBe('mới');
+    expect(meta.facility).toBe('viện mới');
+    expect(meta.updatedAt).toBe('2026-07-08 10:00');
+    // Graph không suy suyển: node + subflow còn nguyên.
+    const ir = fromYaml(out);
+    expect(ir.nodes.find((n) => n.id === 'greet')?.data.text).toBe('hi');
+    expect(ir.subflows?.[0].name).toBe('sub');
+    // Field không có trong patch giữ nguyên (author không bị xoá/đổi).
+    const out2 = updateFlowMeta(out, { name: 'mới 2' });
+    expect(parseFlowMeta(out2).facility).toBe('viện mới');
   });
 
   it('parseFlowMeta trả metadata; field vắng -> undefined', () => {
