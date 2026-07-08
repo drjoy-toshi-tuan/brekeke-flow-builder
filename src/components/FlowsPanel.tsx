@@ -154,7 +154,7 @@ export function FlowsPanel() {
                 aria-label={t('createSubflow')}
               >
                 {/* key theo trạng thái để animation vẽ nét của icon chạy lại khi nút "sáng" lên */}
-                <Icon key={newName.trim() ? 'on' : 'off'} icon="line-md:confirm-square-filled" width={26} height={26} />
+                <Icon key={newName.trim() ? 'on' : 'off'} icon="line-md:square-filled-to-confirm-square-filled-transition" width={26} height={26} />
               </button>
             </div>
           ) : (
