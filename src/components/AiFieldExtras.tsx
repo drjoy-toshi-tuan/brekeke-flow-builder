@@ -11,11 +11,14 @@ import { AiGenerateModal } from './AiGenerateModal';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hàng nút AI dưới ô script (Logic) / prompt (OpenAI):
-//   - "AIで生成・修正": mở modal sinh/sửa nội dung bằng AI.
-//   - (chỉ script) nút ⓘ: xoè panel giải thích code — text lưu ở
-//     data.scriptExplanation (theo YAML, mở lại không cần gen lại); nút 再生成
-//     gọi AI đọc lại code.
+//   - "AI Generate" (tím #d946ef, không viền, icon lấp lánh): mở modal sinh/sửa.
+//   - (chỉ script) nút ⓘ: xoè panel giải thích code — bật thì icon xanh #22c55e;
+//     text lưu ở data.scriptExplanation (theo YAML, mở lại không cần gen lại);
+//     nút Regenerate gọi AI đọc lại code.
 // ─────────────────────────────────────────────────────────────────────────────
+
+const AI_PURPLE = '#d946ef';
+const EXPLAIN_GREEN = '#22c55e';
 
 // Icon info kiểu icon-park-solid:info (hình tròn đặc + chữ i) — vẽ inline để
 // không phải mở rộng bộ icon offline.
@@ -55,7 +58,7 @@ export function AiFieldExtras({ node, field, value, data }: AiFieldExtrasProps) 
   const isScript = field.aiGenerate === 'script';
   const explanation = typeof data.scriptExplanation === 'string' ? data.scriptExplanation : '';
 
-  // 再生成: AI đọc code -> ghi vào draft (LƯU node mới commit vào IR/YAML).
+  // Regenerate: AI đọc code -> ghi vào draft (LƯU node mới commit vào IR/YAML).
   const regenerate = async () => {
     if (explaining || !value.trim()) return;
     setExplaining(true);
@@ -73,12 +76,14 @@ export function AiFieldExtras({ node, field, value, data }: AiFieldExtrasProps) 
   return (
     <>
       <div className="mt-2 flex items-center gap-2">
+        {/* Nút AI Generate: tím đặc, KHÔNG viền, icon lấp lánh to hơn. */}
         <button
           type="button"
           onClick={() => setShowModal(true)}
-          className="flex items-center gap-1.5 rounded-lg border border-[color-mix(in_srgb,#8b5cf6_45%,var(--bk-border))] bg-[color-mix(in_srgb,#8b5cf6_10%,transparent)] px-3 py-1.5 text-xs font-semibold text-[#8b5cf6] transition hover:bg-[color-mix(in_srgb,#8b5cf6_18%,transparent)]"
+          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white transition hover:brightness-95"
+          style={{ background: AI_PURPLE }}
         >
-          <AiSparkleIcon size={15} />
+          <AiSparkleIcon size={17} />
           {t('aiGenerate')}
         </button>
         {isScript && (
@@ -88,12 +93,12 @@ export function AiFieldExtras({ node, field, value, data }: AiFieldExtrasProps) 
             title={t('aiExplainShow')}
             aria-label={t('aiExplainShow')}
             aria-expanded={showExplain}
-            className={[
-              'flex h-7 w-7 items-center justify-center rounded-lg transition',
+            className="flex h-7 w-7 items-center justify-center rounded-lg transition hover:bg-[var(--bk-surface-2)]"
+            style={
               showExplain
-                ? 'bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]'
-                : 'text-[var(--bk-text-faint)] hover:bg-[var(--bk-surface-2)] hover:text-[var(--bk-accent)]',
-            ].join(' ')}
+                ? { color: EXPLAIN_GREEN, background: `color-mix(in srgb, ${EXPLAIN_GREEN} 14%, transparent)` }
+                : { color: 'var(--bk-text-faint)' }
+            }
           >
             <InfoIcon size={16} />
           </button>
@@ -105,7 +110,9 @@ export function AiFieldExtras({ node, field, value, data }: AiFieldExtrasProps) 
         <div className="mt-2 rounded-xl border border-[var(--bk-border)] bg-[var(--bk-surface-2)] p-3">
           <div className="mb-1.5 flex items-center justify-between gap-2">
             <span className="flex items-center gap-1.5 text-xs font-bold text-[var(--bk-text)]">
-              <InfoIcon size={13} />
+              <span style={{ color: EXPLAIN_GREEN }} className="flex items-center">
+                <InfoIcon size={13} />
+              </span>
               {t('aiExplainTitle')}
             </span>
             <button
