@@ -10,18 +10,17 @@ import { AiSparkleIcon } from './AiSparkleIcon';
 import { AiGenerateModal } from './AiGenerateModal';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Hàng nút AI dưới ô script (Logic) / prompt (OpenAI):
-//   - "AI Generate" (tím #d946ef, không viền, icon lấp lánh): mở modal sinh/sửa.
-//   - (chỉ script) nút ⓘ: xoè panel giải thích code — bật thì icon xanh #22c55e;
-//     text lưu ở data.scriptExplanation (theo YAML, mở lại không cần gen lại);
-//     nút Regenerate gọi AI đọc lại code.
+// Phụ trợ AI cho ô script (Logic) / prompt (OpenAI):
+//   - AiGenerateButton: nút "AI Generate" (tím #d946ef, không viền) — đặt ở GÓC
+//     TRÊN BÊN PHẢI, cùng hàng với nhãn field (trên ô nhập). Mở modal sinh/sửa.
+//   - ScriptExplain (chỉ script): nút ⓘ dưới ô code -> panel giải thích; bật thì
+//     icon xanh #22c55e; text lưu ở data.scriptExplanation (theo YAML); nút Regenerate.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const AI_PURPLE = '#d946ef';
 const EXPLAIN_GREEN = '#22c55e';
 
-// Icon info kiểu icon-park-solid:info (hình tròn đặc + chữ i) — vẽ inline để
-// không phải mở rộng bộ icon offline.
+// Icon info kiểu icon-park-solid:info (hình tròn đặc + chữ i) — vẽ inline.
 function InfoIcon({ size = 15 }: { size?: number }) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
@@ -38,24 +37,55 @@ function aiErrorKey(e: unknown): TKey {
   return 'aiErrCall';
 }
 
-interface AiFieldExtrasProps {
+// ── Nút "AI Generate" (đặt cạnh nhãn field, góc trên bên phải) ────────────────
+export function AiGenerateButton({
+  node,
+  field,
+  value,
+}: {
   node: FlowNode;
-  field: PropertyField; // field có aiGenerate ('script' | 'prompt')
-  value: string; // nội dung code/prompt hiện tại trong draft
-  data: Record<string, unknown>; // draft data (đọc scriptExplanation)
+  field: PropertyField;
+  value: string;
+}) {
+  const t = useT();
+  const setDraftField = useFlowStore((s) => s.setDraftField);
+  const [showModal, setShowModal] = useState(false);
+  if (!field.aiGenerate) return null;
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setShowModal(true)}
+        className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold text-white transition hover:brightness-95"
+        style={{ background: AI_PURPLE }}
+      >
+        <AiSparkleIcon size={16} />
+        {t('aiGenerate')}
+      </button>
+      {showModal && (
+        <AiGenerateModal
+          kind={field.aiGenerate}
+          nodeId={node.id}
+          current={value}
+          onApply={(text) => setDraftField(field.key, text)}
+          onClose={() => setShowModal(false)}
+        />
+      )}
+    </>
+  );
 }
 
-export function AiFieldExtras({ node, field, value, data }: AiFieldExtrasProps) {
+// ── Giải thích code bằng AI (dưới ô script) ──────────────────────────────────
+export function ScriptExplain({ value, data }: { value: string; data: Record<string, unknown> }) {
   const t = useT();
   const { lang } = useLang();
   const setDraftField = useFlowStore((s) => s.setDraftField);
 
-  const [showModal, setShowModal] = useState(false);
   const [showExplain, setShowExplain] = useState(false);
   const [explaining, setExplaining] = useState(false);
   const [explainErrKey, setExplainErrKey] = useState<TKey | null>(null);
 
-  const isScript = field.aiGenerate === 'script';
   const explanation = typeof data.scriptExplanation === 'string' ? data.scriptExplanation : '';
 
   // Regenerate: AI đọc code -> ghi vào draft (LƯU node mới commit vào IR/YAML).
@@ -75,38 +105,25 @@ export function AiFieldExtras({ node, field, value, data }: AiFieldExtrasProps) 
 
   return (
     <>
-      <div className="mt-2 flex items-center gap-2">
-        {/* Nút AI Generate: tím đặc, KHÔNG viền, icon lấp lánh to hơn. */}
+      <div className="mt-2">
         <button
           type="button"
-          onClick={() => setShowModal(true)}
-          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white transition hover:brightness-95"
-          style={{ background: AI_PURPLE }}
+          onClick={() => setShowExplain((v) => !v)}
+          title={t('aiExplainShow')}
+          aria-label={t('aiExplainShow')}
+          aria-expanded={showExplain}
+          className="flex h-7 w-7 items-center justify-center rounded-lg transition hover:bg-[var(--bk-surface-2)]"
+          style={
+            showExplain
+              ? { color: EXPLAIN_GREEN, background: `color-mix(in srgb, ${EXPLAIN_GREEN} 14%, transparent)` }
+              : { color: 'var(--bk-text-faint)' }
+          }
         >
-          <AiSparkleIcon size={17} />
-          {t('aiGenerate')}
+          <InfoIcon size={16} />
         </button>
-        {isScript && (
-          <button
-            type="button"
-            onClick={() => setShowExplain((v) => !v)}
-            title={t('aiExplainShow')}
-            aria-label={t('aiExplainShow')}
-            aria-expanded={showExplain}
-            className="flex h-7 w-7 items-center justify-center rounded-lg transition hover:bg-[var(--bk-surface-2)]"
-            style={
-              showExplain
-                ? { color: EXPLAIN_GREEN, background: `color-mix(in srgb, ${EXPLAIN_GREEN} 14%, transparent)` }
-                : { color: 'var(--bk-text-faint)' }
-            }
-          >
-            <InfoIcon size={16} />
-          </button>
-        )}
       </div>
 
-      {/* Panel giải thích code (phóng ra dưới hàng nút). */}
-      {isScript && showExplain && (
+      {showExplain && (
         <div className="mt-2 rounded-xl border border-[var(--bk-border)] bg-[var(--bk-surface-2)] p-3">
           <div className="mb-1.5 flex items-center justify-between gap-2">
             <span className="flex items-center gap-1.5 text-xs font-bold text-[var(--bk-text)]">
@@ -135,16 +152,6 @@ export function AiFieldExtras({ node, field, value, data }: AiFieldExtrasProps) 
             {explanation.trim() ? explanation : t('aiExplainEmpty')}
           </div>
         </div>
-      )}
-
-      {showModal && field.aiGenerate && (
-        <AiGenerateModal
-          kind={field.aiGenerate}
-          nodeId={node.id}
-          current={value}
-          onApply={(text) => setDraftField(field.key, text)}
-          onClose={() => setShowModal(false)}
-        />
       )}
     </>
   );
