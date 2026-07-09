@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   BaseEdge,
   EdgeLabelRenderer,
   Position,
   getSmoothStepPath,
   useInternalNode,
+  useStore,
   type EdgeProps,
   type InternalNode,
 } from '@xyflow/react';
@@ -20,14 +21,22 @@ import { useT } from '../../ui/i18n';
 //
 // Trường hợp DÂY NỐI VÒNG LÊN TRÊN (retry/loop: đích nằm CAO hơn nguồn): smooth-step
 // mặc định luồn thẳng đứng giữa 2 node nên dây đâm xuyên qua thân node. Ở đây tự dựng
-// đường gấp khúc "lách" hẳn ra một bên: nếu handle nguồn nằm nửa TRÁI thì vòng sang
-// trái, nửa PHẢI thì vòng sang phải — luôn đi ngoài mép node để không cắt qua node.
+// đường gấp khúc để tránh cắt qua node. Cách chọn làn dọc (không cứng nhắc):
+//   1. Hướng vòng theo VỊ TRÍ node ĐÍCH so với node nguồn (đích bên trái -> vòng trái,
+//      bên phải -> vòng phải), KHÔNG theo vị trí handle. Nhờ vậy dây không lao ra sai
+//      bên rồi phải cuốn ngược lại.
+//   2. Nếu 2 node đứng cạnh nhau và giữa chúng còn KHE đủ rộng (không bị node khác chắn)
+//      thì luồn làn dọc vào GIỮA KHE — dây bám sát, gọn. Khe càng hẹp thì làn càng sát
+//      vào giữa (tự co theo khoảng cách 2 node).
+//   3. Chỉ khi khe quá hẹp / 2 node chồng ngang (vd đích nằm NGAY TRÊN nguồn) hoặc có
+//      node khác chắn khe thì mới vòng hẳn RA NGOÀI mép node đích.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Khoảng đệm dây chừa ra khỏi mép node khi vòng.
-const LOOP_LANE = 44; // làn dọc cách mép ngoài node
+const LOOP_LANE = 44; // làn dọc cách mép ngoài node (khi phải vòng RA NGOÀI)
 const LOOP_GAP = 22; // đệm trên/dưới node trước khi rẽ ngang
 const LOOP_RADIUS = 14; // bo góc gấp khúc (khớp smooth-step)
+const LANE_MIN_GAP = 28; // khe ngang tối thiểu giữa 2 node để luồn dây VÀO GIỮA khe
 
 interface Box {
   left: number;
@@ -89,6 +98,14 @@ function midpointOf(points: { x: number; y: number }[]): { x: number; y: number 
   return points[Math.floor(points.length / 2)];
 }
 
+// Có node (chướng ngại) nào chắn làn dọc tại x = laneX trong dải [top, bottom] không?
+function laneBlocked(laneX: number, top: number, bottom: number, obstacles: Box[]): boolean {
+  for (const b of obstacles) {
+    if (laneX > b.left && laneX < b.right && bottom > b.top && top < b.bottom) return true;
+  }
+  return false;
+}
+
 // Tính đường "lách" cho dây nối vòng lên trên. Trả null nếu không phải trường hợp
 // loop-back (khi đó dùng smooth-step mặc định).
 function computeLoopBackPath(
@@ -100,6 +117,7 @@ function computeLoopBackPath(
   targetPosition: Position,
   sBox: Box | null,
   tBox: Box | null,
+  obstacles: Box[],
 ): { path: string; labelX: number; labelY: number } | null {
   // Chỉ xử lý cấu hình handle chuẩn: nguồn ở ĐÁY (đi xuống), đích ở ĐỈNH (đi vào từ trên).
   if (sourcePosition !== Position.Bottom || targetPosition !== Position.Top) return null;
@@ -108,16 +126,29 @@ function computeLoopBackPath(
   // luồng đi xuống bình thường (nguồn trên, đích dưới) vẫn dùng smooth-step.
   if (ty >= sy - LOOP_GAP * 2) return null;
 
-  // Quyết định bên vòng theo vị trí handle nguồn so với tâm node nguồn:
-  // handle nằm nửa TRÁI -> vòng sang trái; nửa PHẢI -> vòng sang phải.
-  const goLeft = sx <= sBox.cx;
-  const laneX = goLeft
-    ? Math.min(sBox.left, tBox.left, sx, tx) - LOOP_LANE
-    : Math.max(sBox.right, tBox.right, sx, tx) + LOOP_LANE;
-
   // Đi xuống dưới đáy node nguồn, rẽ ra làn, đi ngược lên trên đỉnh node đích, rẽ vào.
   const dropY = Math.max(sy, sBox.bottom) + LOOP_GAP;
   const riseY = Math.min(ty, tBox.top) - LOOP_GAP;
+  const laneTop = Math.min(riseY, dropY);
+  const laneBottom = Math.max(riseY, dropY);
+
+  // Hướng vòng theo VỊ TRÍ node đích so với node nguồn (không theo handle). Hoà (đích nằm
+  // ngay trên nguồn) -> nghiêng TRÁI để giữ hành vi cũ cho case loop dọc.
+  const targetIsLeft = tBox.cx <= sBox.cx;
+  // Khe hở ngang giữa 2 node ở phía đối diện nhau.
+  const gap = targetIsLeft ? sBox.left - tBox.right : tBox.left - sBox.right;
+  // Làn dọc luồn vào GIỮA khe (co theo khoảng cách 2 node).
+  const gapLaneX = targetIsLeft ? (tBox.right + sBox.left) / 2 : (sBox.right + tBox.left) / 2;
+
+  let laneX: number;
+  if (gap >= LANE_MIN_GAP && !laneBlocked(gapLaneX, laneTop, laneBottom, obstacles)) {
+    // 2 node đứng cạnh, khe đủ rộng & không bị chắn -> luồn dây vào giữa khe (gọn).
+    laneX = gapLaneX;
+  } else {
+    // Khe quá hẹp / node chồng ngang (đích ngay trên nguồn) / bị node khác chắn ->
+    // vòng hẳn ra NGOÀI mép node ĐÍCH, đúng phía target.
+    laneX = targetIsLeft ? tBox.left - LOOP_LANE : tBox.right + LOOP_LANE;
+  }
 
   const points = [
     { x: sx, y: sy },
@@ -157,6 +188,17 @@ export function DeletableEdge({
 
   const sourceNode = useInternalNode(source);
   const targetNode = useInternalNode(target);
+  // Các node khác (không phải nguồn/đích) — dùng để không luồn dây xuyên qua chúng.
+  const nodeLookup = useStore((s) => s.nodeLookup);
+  const obstacles = useMemo(() => {
+    const list: Box[] = [];
+    for (const [nid, n] of nodeLookup) {
+      if (nid === source || nid === target) continue;
+      const b = boxOf(n);
+      if (b) list.push(b);
+    }
+    return list;
+  }, [nodeLookup, source, target]);
 
   let edgePath: string;
   let labelX: number;
@@ -171,6 +213,7 @@ export function DeletableEdge({
     targetPosition,
     boxOf(sourceNode),
     boxOf(targetNode),
+    obstacles,
   );
   if (loop) {
     edgePath = loop.path;
