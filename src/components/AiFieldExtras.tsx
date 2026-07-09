@@ -1,24 +1,30 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FlowNode } from '../ir/types';
 import type { PropertyField } from '../ui/nodeSchema';
 import { useFlowStore } from '../store/flowStore';
 import { useLang, useT, type TKey } from '../ui/i18n';
+import { useToast } from '../ui/toast';
 import { Icon } from '../ui/icons';
-import { AiError } from '../ai/openai';
+import { AiError, chatComplete, stripCodeFence } from '../ai/openai';
 import { explainScript } from '../ai/explain';
 import { AiSparkleIcon } from './AiSparkleIcon';
-import { AiGenerateModal } from './AiGenerateModal';
+import { CodeEditor } from './CodeEditor';
+import { AiGenerateModal, type AiGenerateRequest } from './AiGenerateModal';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Phụ trợ AI cho ô script (Logic) / prompt (OpenAI):
-//   - AiGenerateButton: nút "AI Generate" (tím #d946ef, không viền) — đặt ở GÓC
-//     TRÊN BÊN PHẢI, cùng hàng với nhãn field (trên ô nhập). Mở modal sinh/sửa.
-//   - ScriptExplain (chỉ script): nút ⓘ dưới ô code -> panel giải thích; bật thì
-//     icon xanh #22c55e; text lưu ở data.scriptExplanation (theo YAML); nút Regenerate.
+//   - AiEditableField: nhãn + nút "AI Generate" (góc trên phải) + ô nhập (code/prompt).
+//     Bấm Generate ở modal -> modal đóng ngay, ô hiện lớp phủ "AI đang tạo…" (icon lấp
+//     lánh) trong lúc gọi OpenAI; có kết quả thì GÕ dần vào ô (typing). Xong script ->
+//     tự kích hoạt phần giải thích code.
+//   - ScriptExplain (chỉ script): nút ⓘ dưới ô code -> panel giải thích; openSignal đổi
+//     -> tự mở panel & 再生成 (dùng sau khi AI gen xong script).
 // ─────────────────────────────────────────────────────────────────────────────
 
 const AI_PURPLE = '#d946ef';
 const EXPLAIN_GREEN = '#22c55e';
+const FIELD_CLASS =
+  'w-full rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-3 py-2 text-sm text-[var(--bk-text)] outline-none transition focus:border-[var(--bk-accent)]';
 
 // Icon info kiểu icon-park-solid:info (hình tròn đặc + chữ i) — vẽ inline.
 function InfoIcon({ size = 15 }: { size?: number }) {
@@ -37,47 +43,167 @@ function aiErrorKey(e: unknown): TKey {
   return 'aiErrCall';
 }
 
-// ── Nút "AI Generate" (đặt cạnh nhãn field, góc trên bên phải) ────────────────
-export function AiGenerateButton({
+// Gõ dần `text` vào ô (hiệu ứng đánh máy). Thời lượng co giãn theo độ dài, chặn trong
+// [500ms, 2600ms]; ease-out để đoạn cuối chậm lại chút -> cảm giác tự nhiên, chuyên
+// nghiệp (không quá nhanh cũng không quá chậm). isCancelled -> ghi hết ngay & dừng.
+function typeInto(
+  text: string,
+  onChange: (v: string) => void,
+  isCancelled: () => boolean,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const len = text.length;
+    if (len === 0) {
+      onChange('');
+      resolve();
+      return;
+    }
+    const duration = Math.min(2600, Math.max(500, len * 7));
+    const start = performance.now();
+    const tick = (now: number) => {
+      if (isCancelled()) {
+        onChange(text);
+        resolve();
+        return;
+      }
+      const p = Math.min(1, (now - start) / duration);
+      const eased = 1 - (1 - p) * (1 - p); // ease-out quad
+      const chars = Math.max(1, Math.round(len * eased));
+      onChange(text.slice(0, chars));
+      if (p < 1) requestAnimationFrame(tick);
+      else resolve();
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+// ── Ô nhập script/prompt có AI Generate (nhãn + nút + ô + lớp phủ loading + typing) ──
+export function AiEditableField({
   node,
   field,
   value,
+  onChange,
+  data,
 }: {
   node: FlowNode;
   field: PropertyField;
   value: string;
+  onChange: (v: string) => void;
+  data: Record<string, unknown>;
 }) {
   const t = useT();
-  const setDraftField = useFlowStore((s) => s.setDraftField);
+  const showToast = useToast((s) => s.show);
   const [showModal, setShowModal] = useState(false);
-  if (!field.aiGenerate) return null;
+  // idle: bình thường · waiting: đang gọi OpenAI (hiện lớp phủ) · typing: đang gõ chữ.
+  const [phase, setPhase] = useState<'idle' | 'waiting' | 'typing'>('idle');
+  // Đếm tăng để kích hoạt ScriptExplain tự chạy sau khi gen xong script.
+  const [explainSignal, setExplainSignal] = useState(0);
+  // Huỷ khi unmount (đổi node/tab) -> không set state / ghi tiếp lên component đã gỡ.
+  // Reset false khi mount (kể cả lần remount của StrictMode) để không bị "kẹt huỷ".
+  const cancelledRef = useRef(false);
+  useEffect(() => {
+    cancelledRef.current = false;
+    return () => {
+      cancelledRef.current = true;
+    };
+  }, []);
+
+  const kind = field.aiGenerate; // 'script' | 'prompt'
+  const busy = phase !== 'idle';
+
+  const runGenerate = async (req: AiGenerateRequest) => {
+    const prev = value; // giữ nội dung cũ để khôi phục nếu lỗi
+    setPhase('waiting');
+    onChange(''); // xoá nội dung cũ + hiện lớp phủ loading
+    try {
+      const result = await chatComplete([
+        { role: 'system', content: req.system },
+        { role: 'user', content: req.user },
+      ]);
+      if (cancelledRef.current) return;
+      const text = kind === 'script' ? stripCodeFence(result) : result;
+      setPhase('typing');
+      await typeInto(text, onChange, () => cancelledRef.current);
+      if (cancelledRef.current) return;
+      setPhase('idle');
+      // Script: gen xong -> tự kích hoạt phần giải thích code.
+      if (kind === 'script') setExplainSignal((n) => n + 1);
+    } catch (e) {
+      if (cancelledRef.current) return;
+      onChange(prev); // lỗi -> trả lại nội dung cũ (không mất công sức trước đó)
+      setPhase('idle');
+      showToast(t(aiErrorKey(e)));
+    }
+  };
 
   return (
-    <>
-      <button
-        type="button"
-        onClick={() => setShowModal(true)}
-        className="bk-ai-sparkle flex shrink-0 items-center gap-1.5 rounded-lg px-1 py-1 text-xs font-semibold transition hover:brightness-90"
-        style={{ color: AI_PURPLE }}
-      >
-        <AiSparkleIcon size={16} />
-        {t('aiGenerate')}
-      </button>
+    <div className="block">
+      {/* Nhãn + nút "AI Generate" ở góc trên bên phải (trên ô nhập). */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-medium text-[var(--bk-text-muted)]">{t(field.labelKey)}</span>
+        <button
+          type="button"
+          onClick={() => setShowModal(true)}
+          disabled={busy}
+          className="bk-ai-sparkle flex shrink-0 items-center gap-1.5 rounded-lg px-1 py-1 text-xs font-semibold transition hover:brightness-90 disabled:cursor-not-allowed disabled:opacity-50"
+          style={{ color: AI_PURPLE }}
+        >
+          <AiSparkleIcon size={16} />
+          {t('aiGenerate')}
+        </button>
+      </div>
+
+      <div className="relative mt-1">
+        {field.kind === 'code' ? (
+          <CodeEditor value={value} onChange={onChange} rows={field.rows ?? 12} language={field.language} />
+        ) : (
+          <textarea
+            className={`${FIELD_CLASS} resize-y`}
+            rows={field.rows ?? 3}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+          />
+        )}
+
+        {/* Lớp phủ loading khi đang chờ OpenAI: icon lấp lánh + "AI đang tạo…". */}
+        {phase === 'waiting' && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface-2)]">
+            <span style={{ color: AI_PURPLE }}>
+              <AiSparkleIcon size={30} />
+            </span>
+            <span className="text-xs font-semibold" style={{ color: AI_PURPLE }}>
+              {t('aiGenLoading')}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Giải thích code bằng AI (nút info + panel) — chỉ cho script của node Logic. */}
+      {kind === 'script' && <ScriptExplain value={value} data={data} openSignal={explainSignal} />}
+
       {showModal && (
         <AiGenerateModal
-          kind={field.aiGenerate}
+          kind={kind!}
           nodeId={node.id}
           current={value}
-          onApply={(text) => setDraftField(field.key, text)}
+          onGenerate={(req) => void runGenerate(req)}
           onClose={() => setShowModal(false)}
         />
       )}
-    </>
+    </div>
   );
 }
 
 // ── Giải thích code bằng AI (dưới ô script) ──────────────────────────────────
-export function ScriptExplain({ value, data }: { value: string; data: Record<string, unknown> }) {
+export function ScriptExplain({
+  value,
+  data,
+  openSignal = 0,
+}: {
+  value: string;
+  data: Record<string, unknown>;
+  openSignal?: number;
+}) {
   const t = useT();
   const { lang } = useLang();
   const setDraftField = useFlowStore((s) => s.setDraftField);
@@ -102,6 +228,16 @@ export function ScriptExplain({ value, data }: { value: string; data: Record<str
       setExplaining(false);
     }
   };
+
+  // openSignal đổi (sau khi AI gen xong script) -> tự mở panel & 再生成 giải thích.
+  useEffect(() => {
+    if (openSignal > 0) {
+      setShowExplain(true);
+      void regenerate();
+    }
+    // Chỉ chạy khi openSignal đổi; regenerate đọc value hiện tại (script vừa gõ xong).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openSignal]);
 
   return (
     <>
@@ -149,7 +285,11 @@ export function ScriptExplain({ value, data }: { value: string; data: Record<str
           </div>
           {explainErrKey && <div className="mb-1.5 text-[11px] text-rose-500">{t(explainErrKey)}</div>}
           <div className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-[var(--bk-text-muted)]">
-            {explanation.trim() ? explanation : t('aiExplainEmpty')}
+            {explaining && !explanation.trim()
+              ? t('aiGenLoading')
+              : explanation.trim()
+                ? explanation
+                : t('aiExplainEmpty')}
           </div>
         </div>
       )}

@@ -25,7 +25,7 @@ import { CodeEditor } from './CodeEditor';
 import { RegexBranchInput } from './RegexBranchInput';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
 import { HoverTip, useClipTip } from './HoverTip';
-import { AiGenerateButton, ScriptExplain } from './AiFieldExtras';
+import { AiEditableField } from './AiFieldExtras';
 
 // Key giải thích ý nghĩa loại node trong từ điển i18n (exStart, exAnnounce, …).
 function explainKey(type: NodeType): TKey {
@@ -411,20 +411,20 @@ function FieldControl({
         </label>
       );
     case 'textarea':
+      // Prompt (OpenAI) có AI Generate -> dùng AiEditableField (loading + typing).
+      if (field.aiGenerate) {
+        return <AiEditableField node={node} field={field} value={value} onChange={set} data={data} />;
+      }
       return (
-        <div className="block">
-          {/* Nhãn + nút "AI Generate" ở góc trên bên phải (trên ô prompt). */}
-          <div className="flex items-center justify-between gap-2">
-            {label}
-            {field.aiGenerate && <AiGenerateButton node={node} field={field} value={value} />}
-          </div>
+        <label className="block">
+          {label}
           <textarea
             className={`${inputClass} resize-y`}
             rows={field.rows ?? 3}
             value={value}
             onChange={(e) => set(e.target.value)}
           />
-        </div>
+        </label>
       );
     case 'select':
       return (
@@ -466,19 +466,17 @@ function FieldControl({
         </div>
       );
     case 'code':
+      // Script (Logic) có AI Generate -> AiEditableField (loading + typing + giải thích).
+      if (field.aiGenerate) {
+        return <AiEditableField node={node} field={field} value={value} onChange={set} data={data} />;
+      }
       return (
-        <div className="block">
-          {/* Nhãn + nút "AI Generate" ở góc trên bên phải (trên ô script). */}
-          <div className="flex items-center justify-between gap-2">
-            {label}
-            {field.aiGenerate && <AiGenerateButton node={node} field={field} value={value} />}
-          </div>
+        <label className="block">
+          {label}
           <div className="mt-1">
             <CodeEditor value={value} onChange={set} rows={field.rows ?? 12} language={field.language} />
           </div>
-          {/* Giải thích code bằng AI (nút info + panel) — chỉ cho script của node Logic. */}
-          {field.aiGenerate === 'script' && <ScriptExplain value={value} data={data} />}
-        </div>
+        </label>
       );
     case 'collapsibleTextarea':
       return <CollapsibleField field={field} value={value} onChange={set} />;
