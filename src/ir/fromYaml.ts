@@ -33,9 +33,16 @@ interface RawBranch {
   label?: string; // nhãn hiển thị trên dây (tuỳ chọn)
 }
 
+interface RawPos {
+  x?: unknown;
+  y?: unknown;
+}
+
 interface RawNode {
   id: string;
+  name?: string; // tên hiển thị (label) do người dùng đặt
   type: string;
+  position?: RawPos; // toạ độ đã lưu (giữ bố cục, khỏi auto-layout lại)
   next?: string;
   branches?: RawBranch[];
   [key: string]: unknown;
@@ -51,6 +58,7 @@ interface RawFlowFile {
   flow?: {
     name?: string;
     start?: string;
+    startPosition?: RawPos; // toạ độ node Start tổng hợp
     facility?: string;
     author?: string;
     createdAt?: string;
@@ -60,8 +68,16 @@ interface RawFlowFile {
   };
 }
 
+// Đọc toạ độ đã lưu (an toàn kiểu); thiếu/không hợp lệ -> {0,0} (báo hiệu cần layout).
+function readPos(raw: RawPos | undefined): { x: number; y: number } {
+  const x = typeof raw?.x === 'number' ? raw.x : 0;
+  const y = typeof raw?.y === 'number' ? raw.y : 0;
+  return { x, y };
+}
+
 // Field mang tính "cấu trúc" (không phải tham số riêng của node) — không đưa vào data.
-const STRUCTURAL_KEYS = new Set(['id', 'type', 'next', 'branches']);
+// `name` = tên hiển thị (label) do người dùng đặt; đọc riêng ra node.label.
+const STRUCTURAL_KEYS = new Set(['id', 'name', 'type', 'position', 'next', 'branches']);
 
 function coerceNodeType(raw: string): NodeType {
   if (raw in LEGACY_TYPE_ALIASES) return LEGACY_TYPE_ALIASES[raw]; // file cũ: input/condition/script/llm
@@ -87,6 +103,7 @@ function edgeId(source: string, target: string, suffix?: string): string {
 function parseGraph(
   rawNodes: RawNode[],
   start: string | undefined,
+  startPosition?: RawPos,
 ): { nodes: FlowNode[]; edges: FlowEdge[] } {
   const nodes: FlowNode[] = [];
   const edges: FlowEdge[] = [];
@@ -97,7 +114,7 @@ function parseGraph(
       id: SYNTHETIC_START_ID,
       type: 'start',
       label: 'Start',
-      position: { x: 0, y: 0 },
+      position: readPos(startPosition), // giữ toạ độ đã lưu (nếu có)
       data: {},
     });
     edges.push({
@@ -129,8 +146,10 @@ function parseGraph(
     const node: FlowNode = {
       id: raw.id,
       type: nodeType,
-      label: raw.id,
-      position: { x: 0, y: 0 }, // ELK sẽ điền lại ở layout.ts
+      // Tên hiển thị: ưu tiên field `name` (label người dùng đặt), fallback về id.
+      label: typeof raw.name === 'string' && raw.name.trim() ? raw.name : raw.id,
+      // Toạ độ đã lưu (nếu có); thiếu -> {0,0} -> loadYaml/switchFlow sẽ ELK layout.
+      position: readPos(raw.position),
       data,
     };
     nodes.push(node);
@@ -195,7 +214,7 @@ export function fromYaml(text: string): FlowIR {
   const parsed = parse(text) as RawFlowFile | null;
   const flow = parsed?.flow ?? {};
 
-  const { nodes, edges } = parseGraph(flow.nodes ?? [], flow.start);
+  const { nodes, edges } = parseGraph(flow.nodes ?? [], flow.start, flow.startPosition);
 
   // Sub Flow: mỗi entry là 1 graph riêng (name/nodes), id = slug duy nhất.
   // Sub flow KHÔNG có node Start (chỉ main flow có) — bỏ qua field start nếu file cũ còn.

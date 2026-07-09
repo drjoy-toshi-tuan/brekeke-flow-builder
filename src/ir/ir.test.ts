@@ -8,6 +8,7 @@ import {
   sourceHandlesFor,
   readBranches,
   catchAllDisplay,
+  catchAllEditable,
   effectiveBranches,
   optionsForSource,
 } from '../ui/nodeSchema';
@@ -89,6 +90,64 @@ describe('fromYaml', () => {
 });
 
 describe('toYaml round-trip', () => {
+  it('giữ TOẠ ĐỘ node (position) qua save/reopen — không auto-layout lại', () => {
+    const withPos = `
+flow:
+  name: "f"
+  start: a
+  startPosition: { x: 96, y: 40 }
+  nodes:
+    - id: a
+      type: announce
+      text: "hi"
+      position: { x: 96, y: 200 }
+      next: b
+    - id: b
+      type: hangup
+      position: { x: 96, y: 360 }
+`;
+    const ir = fromYaml(withPos);
+    // Toạ độ đọc đúng: node thật + node Start tổng hợp.
+    expect(ir.nodes.find((n) => n.id === 'a')?.position).toEqual({ x: 96, y: 200 });
+    expect(ir.nodes.find((n) => n.id === 'b')?.position).toEqual({ x: 96, y: 360 });
+    expect(ir.nodes.find((n) => n.id === SYNTHETIC_START_ID)?.position).toEqual({ x: 96, y: 40 });
+    // Toạ độ không phải toàn (0,0) -> loadYaml sẽ GIỮ NGUYÊN (không ELK layout lại).
+    expect(ir.nodes.every((n) => n.position.x === 0 && n.position.y === 0)).toBe(false);
+    // Round-trip: toYaml ghi lại position từng node + flow.startPosition.
+    const parsed = parse(toYaml(ir)) as {
+      flow: { startPosition?: { x: number; y: number }; nodes: Array<{ id: string; position?: { x: number; y: number } }> };
+    };
+    expect(parsed.flow.startPosition).toEqual({ x: 96, y: 40 });
+    expect(parsed.flow.nodes.find((n) => n.id === 'a')?.position).toEqual({ x: 96, y: 200 });
+  });
+
+  it('file cũ KHÔNG có position -> mọi node (0,0) (loadYaml sẽ auto-layout)', () => {
+    const ir = fromYaml(SAMPLE);
+    expect(ir.nodes.every((n) => n.position.x === 0 && n.position.y === 0)).toBe(true);
+  });
+
+  it('giữ TÊN node (label) qua save/reopen: field `name`', () => {
+    const ir = fromYaml(SAMPLE);
+    // Người dùng đổi tên node 'greet' -> label mới.
+    const renamed = {
+      ...ir,
+      nodes: ir.nodes.map((n) => (n.id === 'greet' ? { ...n, label: '冒頭アナウンス' } : n)),
+    };
+    const yaml = toYaml(renamed);
+    // YAML ghi field `name` cho node đã đổi tên (khác id), không ghi cho node chưa đổi.
+    const parsed = parse(yaml) as {
+      flow: { nodes: Array<{ id: string; name?: string }> };
+    };
+    const greet = parsed.flow.nodes.find((n) => n.id === 'greet')!;
+    expect(greet.name).toBe('冒頭アナウンス');
+    const classify = parsed.flow.nodes.find((n) => n.id === 'classify')!;
+    expect(classify.name).toBeUndefined(); // chưa đổi tên -> label === id -> không ghi
+    // Mở lại: label được khôi phục từ `name` (không rớt về id).
+    const reopened = fromYaml(yaml);
+    expect(reopened.nodes.find((n) => n.id === 'greet')?.label).toBe('冒頭アナウンス');
+    expect(reopened.nodes.find((n) => n.id === 'classify')?.label).toBe('classify');
+  });
+
   it('IR -> YAML tái tạo cấu trúc flow', () => {
     const ir = fromYaml(SAMPLE);
     const yaml = toYaml(ir);
@@ -247,6 +306,50 @@ flow:
 
     const start = defaultDataFor('start');
     expect(start.acceptanceTime).toBe('yes');
+  });
+
+  it('catchAllEditable: nexus sửa được catch-all; announce/interaction thì không', () => {
+    // Nexus: người dùng có thể tự đặt điều kiện cho nhánh catch-all.
+    expect(catchAllEditable('nexus', {})).toBe(true);
+    // Logic Script (mặc định) không sửa catch-all; các node fixed cũng không.
+    expect(catchAllEditable('logic', defaultDataFor('logic'))).toBe(false);
+    expect(catchAllEditable('announce', {})).toBe(false);
+    expect(catchAllEditable('interaction', {})).toBe(false);
+  });
+
+  it('nexus: catch-all có value round-trip qua when + default', () => {
+    const withValue = `
+flow:
+  name: "f"
+  start: g
+  nodes:
+    - id: g
+      type: condition
+      branches:
+        - when: "OK"
+          to: a
+        - when: "その他"
+          default: b
+    - id: a
+      type: hangup
+    - id: b
+      type: hangup
+`;
+    const ir = fromYaml(withValue);
+    const g = ir.nodes.find((n) => n.id === 'g')!;
+    // Nhánh default kèm when -> vẫn là catch-all (handle 'default') nhưng GIỮ value.
+    expect(readBranches(g.data)).toEqual([
+      { id: 'b0', value: 'OK' },
+      { id: 'default', value: 'その他' },
+    ]);
+    const parsed = parse(toYaml(ir)) as {
+      flow: { nodes: Array<{ id: string; branches?: Array<Record<string, string>> }> };
+    };
+    const out = parsed.flow.nodes.find((n) => n.id === 'g')!;
+    expect(out.branches).toEqual([
+      { when: 'OK', to: 'a' },
+      { when: 'その他', default: 'b' },
+    ]);
   });
 
   it('catchAllDisplay: ^.*$ khi 1 nhánh, phủ định khi có nhánh khác', () => {

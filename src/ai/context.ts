@@ -17,19 +17,26 @@ export interface QuestionCandidate {
   label: string;
   announce: string; // nội dung announce của node (data.text / data.announce)
   flowName: string; // 'Main Flow' hoặc tên sub flow — hiển thị trong bộ chọn
+  isMain: boolean; // node thuộc Main Flow (để chọn icon M/S trong bộ chọn)
 }
 
 interface Graph {
   nodes: FlowNode[];
   edges: FlowEdge[];
   flowName: string;
+  isMain: boolean;
 }
 
 // Các graph trong tài liệu: main + mọi sub flow.
 function graphsOf(doc: FlowIR): Graph[] {
   return [
-    { nodes: doc.nodes, edges: doc.edges, flowName: 'Main Flow' },
-    ...(doc.subflows ?? []).map((s) => ({ nodes: s.nodes, edges: s.edges, flowName: s.name })),
+    { nodes: doc.nodes, edges: doc.edges, flowName: 'Main Flow', isMain: true },
+    ...(doc.subflows ?? []).map((s) => ({
+      nodes: s.nodes,
+      edges: s.edges,
+      flowName: s.name,
+      isMain: false,
+    })),
   ];
 }
 
@@ -51,6 +58,7 @@ export function questionCandidates(doc: FlowIR | null): QuestionCandidate[] {
         label: n.label.trim() || n.id,
         announce: announceTextOf(n),
         flowName: g.flowName,
+        isMain: g.isMain,
       });
     }
   }
@@ -95,10 +103,10 @@ export function buildGenerateSystemPrompt(kind: GenerateKind, ctx: GenerateConte
   const role =
     kind === 'script'
       ? `Bạn là kỹ sư IVR chuyên viết script JavaScript cho node Logic (module Script) của hệ thống AI電話 (Brekeke-based).
-Nhiệm vụ: sinh hoặc chỉnh sửa script phân tích câu trả lời của người gọi cho câu hỏi bên dưới.
+Nhiệm vụ: tạo hoặc chỉnh sửa script phân tích câu trả lời của người gọi cho câu hỏi bên dưới.
 ${BREKEKE_SCRIPT_KNOWLEDGE}`
       : `Bạn là chuyên gia prompt engineering cho node OpenAI của hệ thống AI電話 (Brekeke-based).
-Nhiệm vụ: sinh hoặc chỉnh sửa PROMPT (văn bản) mà node OpenAI dùng để phân tích câu trả lời của người gọi cho câu hỏi bên dưới.
+Nhiệm vụ: tạo hoặc chỉnh sửa PROMPT (văn bản) mà node OpenAI dùng để phân tích câu trả lời của người gọi cho câu hỏi bên dưới.
 ${OPENAI_PROMPT_KNOWLEDGE}`;
 
   const sections = [role];
@@ -147,8 +155,8 @@ export function buildExplainMessages(script: string, lang: 'vi' | 'ja') {
       role: 'system' as const,
       content: `Bạn là kỹ sư IVR đọc hiểu script JavaScript của node Logic trong hệ thống AI電話 (Brekeke-based).
 Giá trị script \`return\` sẽ được so khớp với các nhánh regex của node để rẽ nhánh.
-Hãy giải thích NGẮN GỌN (bằng ${language}): (1) script này làm gì, (2) output/return có thể là những giá trị nào và ý nghĩa từng giá trị.
-Chỉ trả về phần giải thích thuần văn bản (có thể gạch đầu dòng), không markdown code fence.`,
+Hãy giải thích THẬT SÚC TÍCH (bằng ${language}), tối đa ~4 dòng: (1) script làm gì (1 câu), (2) các giá trị return có thể có & ý nghĩa (mỗi giá trị 1 dòng ngắn).
+Không lan man, không lặp lại code. Chỉ trả về văn bản thuần (có thể gạch đầu dòng), không markdown code fence.`,
     },
     {
       role: 'user' as const,
