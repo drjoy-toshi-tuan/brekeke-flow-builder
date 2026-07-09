@@ -17,19 +17,26 @@ export interface QuestionCandidate {
   label: string;
   announce: string; // nội dung announce của node (data.text / data.announce)
   flowName: string; // 'Main Flow' hoặc tên sub flow — hiển thị trong bộ chọn
+  isMain: boolean; // node thuộc Main Flow (để chọn icon M/S trong bộ chọn)
 }
 
 interface Graph {
   nodes: FlowNode[];
   edges: FlowEdge[];
   flowName: string;
+  isMain: boolean;
 }
 
 // Các graph trong tài liệu: main + mọi sub flow.
 function graphsOf(doc: FlowIR): Graph[] {
   return [
-    { nodes: doc.nodes, edges: doc.edges, flowName: 'Main Flow' },
-    ...(doc.subflows ?? []).map((s) => ({ nodes: s.nodes, edges: s.edges, flowName: s.name })),
+    { nodes: doc.nodes, edges: doc.edges, flowName: 'Main Flow', isMain: true },
+    ...(doc.subflows ?? []).map((s) => ({
+      nodes: s.nodes,
+      edges: s.edges,
+      flowName: s.name,
+      isMain: false,
+    })),
   ];
 }
 
@@ -51,6 +58,7 @@ export function questionCandidates(doc: FlowIR | null): QuestionCandidate[] {
         label: n.label.trim() || n.id,
         announce: announceTextOf(n),
         flowName: g.flowName,
+        isMain: g.isMain,
       });
     }
   }

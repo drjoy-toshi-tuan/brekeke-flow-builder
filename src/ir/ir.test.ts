@@ -8,6 +8,7 @@ import {
   sourceHandlesFor,
   readBranches,
   catchAllDisplay,
+  catchAllEditable,
   effectiveBranches,
   optionsForSource,
 } from '../ui/nodeSchema';
@@ -247,6 +248,50 @@ flow:
 
     const start = defaultDataFor('start');
     expect(start.acceptanceTime).toBe('yes');
+  });
+
+  it('catchAllEditable: nexus sửa được catch-all; announce/interaction thì không', () => {
+    // Nexus: người dùng có thể tự đặt điều kiện cho nhánh catch-all.
+    expect(catchAllEditable('nexus', {})).toBe(true);
+    // Logic Script (mặc định) không sửa catch-all; các node fixed cũng không.
+    expect(catchAllEditable('logic', defaultDataFor('logic'))).toBe(false);
+    expect(catchAllEditable('announce', {})).toBe(false);
+    expect(catchAllEditable('interaction', {})).toBe(false);
+  });
+
+  it('nexus: catch-all có value round-trip qua when + default', () => {
+    const withValue = `
+flow:
+  name: "f"
+  start: g
+  nodes:
+    - id: g
+      type: condition
+      branches:
+        - when: "OK"
+          to: a
+        - when: "その他"
+          default: b
+    - id: a
+      type: hangup
+    - id: b
+      type: hangup
+`;
+    const ir = fromYaml(withValue);
+    const g = ir.nodes.find((n) => n.id === 'g')!;
+    // Nhánh default kèm when -> vẫn là catch-all (handle 'default') nhưng GIỮ value.
+    expect(readBranches(g.data)).toEqual([
+      { id: 'b0', value: 'OK' },
+      { id: 'default', value: 'その他' },
+    ]);
+    const parsed = parse(toYaml(ir)) as {
+      flow: { nodes: Array<{ id: string; branches?: Array<Record<string, string>> }> };
+    };
+    const out = parsed.flow.nodes.find((n) => n.id === 'g')!;
+    expect(out.branches).toEqual([
+      { when: 'OK', to: 'a' },
+      { when: 'その他', default: 'b' },
+    ]);
   });
 
   it('catchAllDisplay: ^.*$ khi 1 nhánh, phủ định khi có nhánh khác', () => {

@@ -369,10 +369,12 @@ export interface DataBranch {
 // Giá trị hiển thị tự tính: khớp mọi thứ TRỪ các nhánh còn lại.
 export const CATCH_ALL_ID = 'default';
 
-// Riêng node logic module Module Result Binder: value của catch-all SỬA ĐƯỢC
-// (vẫn không xoá được) — các loại khác giữ read-only tự tính.
+// Node có value catch-all SỬA ĐƯỢC (vẫn không xoá được — luôn giữ nhánh else):
+//   - Nexus: cho người dùng tự đặt điều kiện thay vì để catch-all tự tính.
+//   - Logic module Module Result Binder.
+// Các loại còn lại giữ read-only tự tính (^(?!…)$.*$).
 export function catchAllEditable(type: NodeType, data: Record<string, unknown>): boolean {
-  return type === 'logic' && logicModuleOf(data) === LOGIC_MODULE_MRB;
+  return type === 'nexus' || (type === 'logic' && logicModuleOf(data) === LOGIC_MODULE_MRB);
 }
 
 // Bộ nhánh mặc định khi node logic chuyển sang module Clinic Day Classifier:

@@ -1,16 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
 import { useFileStore } from '../store/fileStore';
-import { useGithubToken } from '../github/token';
-import { putFlow } from '../github/api';
-import { ghErrorKey } from '../github/errors';
-import { formatDateTime } from '../ir/ivrProperty';
 import { useAuth } from '../auth/useAuth';
 import { useTheme } from '../ui/theme';
 import { useLang, useT, type TKey } from '../ui/i18n';
-import { useToast } from '../ui/toast';
 import { Icon } from '../ui/icons';
 import { SlideToggle } from './SlideToggle';
+import { useSaveFlow } from './useSaveFlow';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Menu dọc trên header (đóng/mở, animation giống "Thêm node"). Gom mọi chức năng
@@ -41,22 +37,14 @@ export function HeaderMenu() {
   const ir = useFlowStore((s) => s.ir);
   const autoLayout = useFlowStore((s) => s.autoLayout);
   const exportYaml = useFlowStore((s) => s.exportYaml);
-  const setMeta = useFlowStore((s) => s.setMeta);
   const currentFile = useFileStore((s) => s.current);
-  const closeFile = useFileStore((s) => s.closeFile);
-  const setSha = useFileStore((s) => s.setSha);
-  const token = useGithubToken((s) => s.token);
   const { user, signOut } = useAuth();
   const { theme, setTheme } = useTheme();
   const { lang, setLang } = useLang();
   const t = useT();
-  const showToast = useToast((s) => s.show);
   const [busy, setBusy] = useState(false);
-  const [saving, setSaving] = useState(false);
-  // Thời điểm lưu về repo thành công gần nhất (yyyy-MM-dd HH:mm) — hiện cạnh dấu tích.
-  const [savedAt, setSavedAt] = useState<string | null>(null);
-  // Key lỗi i18n nếu lưu thất bại (null = không lỗi).
-  const [saveError, setSaveError] = useState<string | null>(null);
+  // Lưu flow về repo — logic dùng chung (xem useSaveFlow), cũng dùng ở FlowsPanel.
+  const { saving, savedAt, saveError, canSave, saveToRepo: handleSaveToRepo } = useSaveFlow();
 
   const handleAutoLayout = async () => {
     setBusy(true);
@@ -65,52 +53,6 @@ export function HeaderMenu() {
     } finally {
       setBusy(false);
     }
-  };
-
-  // Lưu flow hiện tại (export IR -> YAML) về đúng file trên repo (cập nhật theo sha).
-  // Trả về true khi lưu thành công (nút "Về màn quản lý file" dựa vào đây để điều hướng).
-  const handleSaveToRepo = async (): Promise<boolean> => {
-    if (!currentFile || !token || saving) return false;
-    setSaving(true);
-    setSaveError(null);
-    try {
-      // Đóng dấu 更新日時 (và 作成者/作成日時 nếu file cũ chưa có) trước khi export.
-      const now = formatDateTime(new Date());
-      setMeta({
-        updatedAt: now,
-        ...(ir?.meta.createdAt ? {} : { createdAt: now }),
-        ...(ir?.meta.author ? {} : { author: user?.name ?? user?.email ?? '' }),
-      });
-      const yaml = exportYaml();
-      const res = await putFlow(
-        token,
-        currentFile.path,
-        yaml,
-        t('commitSave', { name: currentFile.name }),
-        currentFile.sha ?? undefined,
-      );
-      setSha(res.sha);
-      setSavedAt(now);
-      showToast(t('fmSaved')); // thông báo nổi, tự biến mất
-      return true;
-    } catch (e) {
-      setSaveError(ghErrorKey(e));
-      return false;
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  // "Về màn quản lý file" = TỰ LƯU về repo rồi mới điều hướng; lưu lỗi thì ở lại
-  // (hiện lỗi trong menu) để không mất thay đổi mà không biết.
-  const handleBackToManager = async () => {
-    if (saving) return;
-    if (currentFile && token && ir) {
-      const ok = await handleSaveToRepo();
-      if (!ok) return;
-    }
-    closeFile();
-    setOpen(false);
   };
 
   // Phím tắt Ctrl/Cmd + Shift + S = lưu về repo (dùng ref để luôn gọi handler mới nhất).
@@ -207,7 +149,7 @@ export function HeaderMenu() {
               role="menuitem"
               className="bk-menu-item"
               onClick={handleSaveToRepo}
-              disabled={!ir || !token || saving}
+              disabled={!canSave || saving}
             >
               <Icon
                 icon={saving ? 'lucide:loader-circle' : 'lucide:save'}
@@ -240,26 +182,6 @@ export function HeaderMenu() {
             <Icon icon="lucide:download" width={16} height={16} className="text-[var(--bk-accent)]" />
             <span>{t('exportYaml')}</span>
           </button>
-
-          {/* ── Điều hướng ── */}
-          <div className="bk-menu-sep" />
-          {currentFile && (
-            <button
-              type="button"
-              role="menuitem"
-              className="bk-menu-item"
-              onClick={() => void handleBackToManager()}
-              disabled={saving}
-            >
-              <Icon
-                icon={saving ? 'lucide:loader-circle' : 'line-md:list-3-filled'}
-                width={16}
-                height={16}
-                className={`text-[var(--bk-accent)] ${saving ? 'animate-spin' : ''}`}
-              />
-              <span>{t('fmBackToManager')}</span>
-            </button>
-          )}
 
           {/* ── Tài khoản / Đăng xuất — tách xa nút điều hướng để không bấm nhầm. ── */}
           <div className="bk-menu-sep mt-3" />

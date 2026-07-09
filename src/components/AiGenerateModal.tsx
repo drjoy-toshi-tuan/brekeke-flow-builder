@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
 import {
   buildGenerateSystemPrompt,
   detectQuestionNodeId,
   questionCandidates,
   type GenerateKind,
+  type QuestionCandidate,
 } from '../ai/context';
 import { AiError, chatComplete, stripCodeFence } from '../ai/openai';
 import { useT, type TKey } from '../ui/i18n';
@@ -100,21 +101,14 @@ export function AiGenerateModal({ kind, nodeId, current, onApply, onClose }: AiG
 
         {/* Thân cuộn được */}
         <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
-          {/* 1. Node câu hỏi (trên cùng) */}
+          {/* 1. Node câu hỏi (trên cùng) — bộ chọn tự vẽ để hiện icon Main/Sub flow. */}
           <label className="block">
             <span className="text-xs font-medium text-[var(--bk-text-muted)]">{t('aiQuestionNode')}</span>
-            <select
-              className="mt-1 w-full rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-3 py-2 text-sm text-[var(--bk-text)] outline-none transition focus:border-[var(--bk-accent)]"
+            <QuestionNodeSelect
+              candidates={candidates}
               value={questionId}
-              onChange={(e) => setQuestionId(e.target.value)}
-            >
-              <option value="">{t('aiQuestionNodeNone')}</option>
-              {candidates.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {`${c.label} — ${c.flowName}`}
-                </option>
-              ))}
-            </select>
+              onChange={setQuestionId}
+            />
           </label>
 
           {/* 2. Bối cảnh read-only: #Role / #Question Context (announce tự fill + highlight) */}
@@ -187,6 +181,111 @@ export function AiGenerateModal({ kind, nodeId, current, onApply, onClose }: AiG
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Icon Main/Sub flow — cùng bộ với panel cài đặt flow (FlowsPanel).
+const FLOW_ICON_MAIN = 'tabler:square-rounded-letter-m-filled';
+const FLOW_ICON_SUB = 'tabler:square-rounded-letter-s-filled';
+
+// Bộ chọn node câu hỏi. Native <select> không render được icon, nên tự vẽ dropdown:
+//   - Option "không chọn" -> chỉ 1 dấu gạch "—".
+//   - Các option khác -> tên node + icon Main/Sub flow (bỏ text "— <flow>").
+function QuestionNodeSelect({
+  candidates,
+  value,
+  onChange,
+}: {
+  candidates: QuestionCandidate[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const selected = candidates.find((c) => c.id === value) ?? null;
+
+  // Click ra ngoài -> đóng dropdown.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  return (
+    <div className="relative mt-1" ref={wrapRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-3 py-2 text-left text-sm text-[var(--bk-text)] outline-none transition focus:border-[var(--bk-accent)]"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        {selected ? (
+          <>
+            <span className="min-w-0 flex-1 truncate">{selected.label}</span>
+            <Icon
+              icon={selected.isMain ? FLOW_ICON_MAIN : FLOW_ICON_SUB}
+              width={16}
+              height={16}
+              className="shrink-0 text-[var(--bk-text-muted)]"
+            />
+          </>
+        ) : (
+          <span className="flex-1 text-[var(--bk-text-muted)]">—</span>
+        )}
+        <Icon icon="lucide:chevron-down" width={16} height={16} className="shrink-0 text-[var(--bk-text-faint)]" />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          className="absolute left-0 right-0 top-full z-30 mt-1 max-h-56 overflow-y-auto rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface)] p-1 shadow-[var(--bk-shadow)]"
+        >
+          {/* Không chọn: chỉ 1 dấu gạch. */}
+          <button
+            type="button"
+            role="option"
+            aria-selected={value === ''}
+            onClick={() => {
+              onChange('');
+              setOpen(false);
+            }}
+            className={`flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-sm transition hover:bg-[var(--bk-surface-2)] ${
+              value === '' ? 'text-[var(--bk-accent)]' : 'text-[var(--bk-text-muted)]'
+            }`}
+          >
+            —
+          </button>
+          {candidates.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              role="option"
+              aria-selected={value === c.id}
+              onClick={() => {
+                onChange(c.id);
+                setOpen(false);
+              }}
+              className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm transition hover:bg-[var(--bk-surface-2)] ${
+                value === c.id ? 'bg-[var(--bk-accent-soft)] font-semibold text-[var(--bk-accent)]' : 'text-[var(--bk-text)]'
+              }`}
+              title={`${c.label} · ${c.flowName}`}
+            >
+              <span className="min-w-0 flex-1 truncate">{c.label}</span>
+              <Icon
+                icon={c.isMain ? FLOW_ICON_MAIN : FLOW_ICON_SUB}
+                width={16}
+                height={16}
+                className={`shrink-0 ${value === c.id ? 'text-[var(--bk-accent)]' : 'text-[var(--bk-text-muted)]'}`}
+              />
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

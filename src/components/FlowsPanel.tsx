@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
-import { useT } from '../ui/i18n';
+import { useFileStore } from '../store/fileStore';
+import { useT, type TKey } from '../ui/i18n';
 import { Icon } from '../ui/icons';
 import { IvrPropertyModal } from './IvrPropertyModal';
+import { useSaveFlow } from './useSaveFlow';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Nút icon ở header trái (màn canvas) mở panel Main Flow / Sub Flow:
@@ -44,7 +46,22 @@ export function FlowsPanel() {
   const activeFlowId = useFlowStore((s) => s.activeFlowId);
   const switchFlow = useFlowStore((s) => s.switchFlow);
   const createSubflow = useFlowStore((s) => s.createSubflow);
+  const currentFile = useFileStore((s) => s.current);
+  const closeFile = useFileStore((s) => s.closeFile);
   const t = useT();
+
+  // "Về màn quản lý file" = TỰ LƯU về repo rồi mới điều hướng; lưu lỗi thì ở lại
+  // (hiện lỗi trong panel) để không mất thay đổi mà không biết.
+  const { saving, saveError, canSave, saveToRepo } = useSaveFlow();
+  const handleBackToManager = async () => {
+    if (saving) return;
+    if (canSave) {
+      const ok = await saveToRepo();
+      if (!ok) return;
+    }
+    closeFile();
+    setOpen(false);
+  };
 
   // Modal Cài đặt IVR Property (chuyển từ menu header về đây — cùng chỗ cấu hình flow).
   const [ivrOpen, setIvrOpen] = useState(false);
@@ -249,6 +266,31 @@ export function FlowsPanel() {
             <Icon icon="line-md:text-box" width={16} height={16} className="text-[var(--bk-accent)]" />
             {t('ivrProperty')}
           </button>
+
+          {/* ── Về màn quản lý file (dưới cùng) — tự lưu về repo rồi mới điều hướng. ── */}
+          {currentFile && (
+            <>
+              <div className="bk-menu-sep" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => void handleBackToManager()}
+                disabled={saving}
+                className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm font-medium text-[var(--bk-text)] transition hover:bg-[var(--bk-surface-2)] disabled:opacity-60"
+              >
+                <Icon
+                  icon={saving ? 'lucide:loader-circle' : 'line-md:list-3-filled'}
+                  width={16}
+                  height={16}
+                  className={`text-[var(--bk-accent)] ${saving ? 'animate-spin' : ''}`}
+                />
+                <span>{t('fmBackToManager')}</span>
+              </button>
+              {saveError && (
+                <div className="px-3 pb-1 text-[11px] text-rose-500">{t(saveError as TKey)}</div>
+              )}
+            </>
+          )}
         </div>
       )}
 
