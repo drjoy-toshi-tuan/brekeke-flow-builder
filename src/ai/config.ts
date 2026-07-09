@@ -9,7 +9,9 @@
 //      public trên GitHub Pages — chỉ dùng tạm khi thử nghiệm nội bộ).
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const OPENAI_MODEL = 'gpt-4o';
+// Model mặc định gpt-4.1 (code + bám chỉ thị tốt hơn 4o, rẻ hơn). Đổi qua env
+// VITE_OPENAI_MODEL nếu muốn (vd 'gpt-4o', 'o4-mini' cho logic phức tạp).
+export const OPENAI_MODEL = (import.meta.env.VITE_OPENAI_MODEL as string | undefined)?.trim() || 'gpt-4.1';
 export const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 
 // ⚠ Dán key vào đây chỉ khi chấp nhận key xuất hiện trong bundle tĩnh.
