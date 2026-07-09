@@ -20,9 +20,19 @@ export class AiError extends Error {
   }
 }
 
+// Model dòng reasoning (gpt-5*, o1/o3/o4…) KHÔNG nhận `temperature` tuỳ chỉnh
+// (chỉ chấp nhận mặc định) — gửi vào sẽ bị API từ chối. Các model này tự "suy
+// nghĩ" nên bỏ temperature; các model thường (gpt-4o/4.1) vẫn set 0.2 cho ổn định.
+function isReasoningModel(model: string): boolean {
+  return /^o\d/.test(model) || /^gpt-5/.test(model);
+}
+
 export async function chatComplete(messages: ChatMessage[]): Promise<string> {
   const key = getOpenAiKey();
   if (!key) throw new AiError('OpenAI API key chưa được cấu hình.', 'no-key');
+
+  const payload: Record<string, unknown> = { model: OPENAI_MODEL, messages };
+  if (!isReasoningModel(OPENAI_MODEL)) payload.temperature = 0.2;
 
   let res: Response;
   try {
@@ -32,11 +42,7 @@ export async function chatComplete(messages: ChatMessage[]): Promise<string> {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${key}`,
       },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        messages,
-        temperature: 0.2,
-      }),
+      body: JSON.stringify(payload),
     });
   } catch {
     throw new AiError('Không kết nối được OpenAI.', 'network');

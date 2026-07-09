@@ -9,9 +9,10 @@
 //      public trên GitHub Pages — chỉ dùng tạm khi thử nghiệm nội bộ).
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Model mặc định gpt-4.1 (code + bám chỉ thị tốt hơn 4o, rẻ hơn). Đổi qua env
-// VITE_OPENAI_MODEL nếu muốn (vd 'gpt-4o', 'o4-mini' cho logic phức tạp).
-export const OPENAI_MODEL = (import.meta.env.VITE_OPENAI_MODEL as string | undefined)?.trim() || 'gpt-4.1';
+// Model mặc định gpt-5.1 (code tốt hơn hẳn 4o/4.1, input còn rẻ hơn 4.1). Là
+// reasoning model nên client tự bỏ `temperature` (xem openai.ts). Đổi qua env
+// VITE_OPENAI_MODEL (vd 'gpt-5-mini' rẻ hơn, 'gpt-4.1', 'gpt-4o').
+export const OPENAI_MODEL = (import.meta.env.VITE_OPENAI_MODEL as string | undefined)?.trim() || 'gpt-5.1';
 export const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 
 // ⚠ Dán key vào đây chỉ khi chấp nhận key xuất hiện trong bundle tĩnh.
