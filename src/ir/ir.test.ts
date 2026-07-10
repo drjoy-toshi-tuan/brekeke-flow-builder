@@ -14,7 +14,7 @@ import {
   optionsForSource,
   BRANCH_SCHEMA,
   SAVE_MODULE_FLAG,
-  MODULE_DEFAULT_BRANCHES,
+  MODULE_FIXED_BRANCHES,
   LOGIC_MODULE_IC,
   LOGIC_MODULE_DOCC,
   CATCH_ALL_ID,
@@ -502,19 +502,19 @@ flow:
 });
 
 describe('logic module mới: Incoming Classifier / Date Of Call Classifier', () => {
-  it('bộ nhánh mặc định IC: catch-all + 非通知/海外/WebRTC/固定/携帯', () => {
-    expect(MODULE_DEFAULT_BRANCHES[LOGIC_MODULE_IC]).toEqual([
-      { id: CATCH_ALL_ID, value: '' },
-      { id: 'b0', value: '非通知' },
-      { id: 'b1', value: '海外' },
-      { id: 'b2', value: 'WebRTC' },
-      { id: 'b3', value: '固定' },
-      { id: 'b4', value: '携帯' },
+  it('bộ nhánh CỐ ĐỊNH của IC: catch-all(その他) + 非通知/海外/WebRTC/固定/携帯 (kèm label)', () => {
+    expect(MODULE_FIXED_BRANCHES[LOGIC_MODULE_IC]).toEqual([
+      { id: CATCH_ALL_ID, value: '', label: 'その他' },
+      { id: 'b0', value: '非通知', label: '非通知' },
+      { id: 'b1', value: '海外', label: '海外' },
+      { id: 'b2', value: 'WebRTC', label: 'WebRTC' },
+      { id: 'b3', value: '固定', label: '固定' },
+      { id: 'b4', value: '携帯', label: '携帯' },
     ]);
   });
 
-  it('bộ nhánh mặc định DOCC: catch-all = ^ERROR$ (giống FAILED) + 時間後/時間一致/時間前', () => {
-    expect(MODULE_DEFAULT_BRANCHES[LOGIC_MODULE_DOCC]).toEqual([
+  it('bộ nhánh CỐ ĐỊNH của DOCC: catch-all = ^ERROR$ (giống FAILED) + 時間後/時間一致/時間前', () => {
+    expect(MODULE_FIXED_BRANCHES[LOGIC_MODULE_DOCC]).toEqual([
       { id: CATCH_ALL_ID, value: 'ERROR', label: '失敗' },
       { id: 'b0', value: '時間後' },
       { id: 'b1', value: '時間一致' },
@@ -522,9 +522,51 @@ describe('logic module mới: Incoming Classifier / Date Of Call Classifier', ()
     ]);
   });
 
-  it('catchAllEditable: DOCC sửa được value catch-all (ERROR); IC thì không', () => {
-    expect(catchAllEditable('logic', { moduleType: LOGIC_MODULE_DOCC })).toBe(true);
+  it('catchAllEditable: IC/DOCC đều KHÔNG sửa được catch-all (chỉ nexus/MRB)', () => {
+    expect(catchAllEditable('logic', { moduleType: LOGIC_MODULE_DOCC })).toBe(false);
     expect(catchAllEditable('logic', { moduleType: LOGIC_MODULE_IC })).toBe(false);
+  });
+
+  it('effectiveBranches: DOCC dính nhánh của IC (data sai) vẫn trả về đúng bộ DOCC', () => {
+    // Bug cũ: chọn IC trước rồi đổi sang DOCC -> data.branches còn nguyên bộ của IC.
+    const staleData = {
+      moduleType: LOGIC_MODULE_DOCC,
+      branches: [
+        { id: CATCH_ALL_ID, value: '' },
+        { id: 'b0', value: '非通知' },
+        { id: 'b1', value: '海外' },
+        { id: 'b2', value: 'WebRTC' },
+        { id: 'b3', value: '固定' },
+        { id: 'b4', value: '携帯' },
+      ],
+    };
+    expect(effectiveBranches('logic', staleData)).toEqual([
+      { id: CATCH_ALL_ID, value: 'ERROR', label: '失敗' },
+      { id: 'b0', value: '時間後' },
+      { id: 'b1', value: '時間一致' },
+      { id: 'b2', value: '時間前' },
+    ]);
+  });
+
+  it('effectiveBranches: value IC khoá cứng cả label; DOCC giữ label người dùng đặt', () => {
+    // IC: label trong data bị bỏ qua (bộ nhãn chuẩn khoá cứng).
+    const icData = {
+      moduleType: LOGIC_MODULE_IC,
+      branches: [{ id: 'b0', value: 'gì đó', label: 'label tự đặt' }],
+    };
+    const ic = effectiveBranches('logic', icData);
+    expect(ic.find((b) => b.id === 'b0')).toEqual({ id: 'b0', value: '非通知', label: '非通知' });
+    // DOCC: value khoá nhưng label người dùng đặt được giữ.
+    const doccData = {
+      moduleType: LOGIC_MODULE_DOCC,
+      branches: [
+        { id: CATCH_ALL_ID, value: 'ERROR', label: '失敗' },
+        { id: 'b0', value: '時間後', label: 'Sau giờ hẹn' },
+      ],
+    };
+    const docc = effectiveBranches('logic', doccData);
+    expect(docc.find((b) => b.id === 'b0')).toEqual({ id: 'b0', value: '時間後', label: 'Sau giờ hẹn' });
+    expect(docc.find((b) => b.id === CATCH_ALL_ID)).toEqual({ id: CATCH_ALL_ID, value: 'ERROR', label: '失敗' });
   });
 
   it('formatTimeInput: chỉ giữ chữ số, tự chèn ":" theo HH:mm:ss', () => {
@@ -570,6 +612,14 @@ flow:
     const d = ir.nodes.find((n) => n.id === 'd')!;
     expect(d.data.compareTime).toBe('12:30:00');
     expect(readBranches(d.data)).toEqual([
+      { id: 'default', value: 'ERROR', label: '失敗' },
+      { id: 'b1', value: '時間後' },
+      { id: 'b2', value: '時間一致' },
+      { id: 'b3', value: '時間前' },
+    ]);
+    // Nhánh hiệu lực GIỮ id trong data (b1, b2, b3 theo thứ tự YAML) — dây nối từ các
+    // handle này không bị lệch khi áp bộ nhánh cố định của DOCC.
+    expect(effectiveBranches(d.type, d.data)).toEqual([
       { id: 'default', value: 'ERROR', label: '失敗' },
       { id: 'b1', value: '時間後' },
       { id: 'b2', value: '時間一致' },
