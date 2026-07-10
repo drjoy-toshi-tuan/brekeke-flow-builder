@@ -3,7 +3,7 @@ flow:
   facility: 国立成育研究医療センター
   author: トシTuan
   createdAt: 2026-07-08 10:06
-  updatedAt: 2026-07-10 09:46
+  updatedAt: 2026-07-10 12:06
   start: welcome
   startPosition:
     x: 1205
@@ -43,7 +43,7 @@ flow:
       text: 大変申し訳ございません。ご回答板田多内容が確認できませんでした。お手数ですが、代表電話番号までおかけ直しください。お電話ありがとうございました。それでは失礼いたします。
       next: flag_1
     - id: flag_1
-      type: flag
+      type: save
       name: Flag_用件_失敗
       position:
         x: 448
@@ -111,7 +111,7 @@ flow:
         }
 
         function classify(rawText) {
-          if (!rawText) return "NO_RESULT";
+          if (!rawText) return "その他問い合わせ"; // 5種に限定するため、空は「その他問い合わせ」
 
           // DTMF 単独数字判定
           var byDtmf = classifyByDtmf(rawText);
@@ -119,7 +119,7 @@ flow:
 
           var n = normalize(rawText);
           logger.info("normalized input: " + n);
-          if (n.length === 0) return "NO_RESULT";
+          if (n.length === 0) return "その他問い合わせ";
 
           // REPEAT
           if (isRepeat(n)) return "REPEAT";
@@ -143,15 +143,14 @@ flow:
             return "その他問い合わせ";
           }
 
-          // どれにもはっきり該当しない → とりあえず「その他問い合わせ」に寄せるか、NO_RESULT にするか
-          // 今回ははっきりしない場合は NO_RESULT を返し、上位ノードでリトライさせる前提
-          return "NO_RESULT";
+          // どれにもはっきり該当しない場合も、5種類に絞るため「その他問い合わせ」に寄せる
+          return "その他問い合わせ";
         }
 
         var result = classify(text);
 
-        // classification をコンテキストに保存（REPEAT/NO_RESULT は保存しない）
-        if (result !== "NO_RESULT" && result !== "REPEAT") {
+        // classification をコンテキストに保存（REPEAT は保存しない）
+        if (result !== "REPEAT") {
           try {
             $ivr.exec("save2db", "save", JSON.stringify({
               contextField: {
@@ -169,13 +168,12 @@ flow:
         logger.info("classification result: " + result);
         $runner.setResult(result);
       scriptExplanation: |-
-        - Script lấy kết quả nhập (giọng nói hoặc DTMF), chuẩn hóa, phân loại ý định khách (予約/変更/キャンセル/その他問い合わせ/REPEAT/NO_RESULT), log lại và lưu kết quả phân loại (trừ REPEAT, NO_RESULT) vào context/DB.  
-        - "予約": khách muốn đặt mới (hoặc chọn phím 1).  
-        - "変更": khách muốn thay đổi nội dung/Ngày giờ đặt (hoặc chọn phím 2).  
-        - "キャンセル": khách muốn hủy đặt chỗ (hoặc chọn phím 3).  
-        - "その他問い合わせ": khách có các hỏi đáp/trao đổi khác (hoặc chọn phím 4).  
-        - "REPEAT": khách yêu cầu lặp lại/nhắc lại nội dung.  
-        - "NO_RESULT": không hiểu/không phân loại được, để node trên xử lý retry.
+        - Script lấy text khách nói (hoặc DTMF), chuẩn hóa (chuyển full-width → half-width, katakana → hiragana, xóa khoảng trắng/ký tự thừa), phân loại ý định và lưu kết quả (trừ khi là REPEAT) vào context/DB, rồi return nhãn phân loại.  
+        - "予約": khách muốn đặt lịch mới (nút 1, từ khóa “予約/よやく/新規予約”...).  
+        - "変更": khách muốn thay đổi lịch đã đặt (nút 2, từ khóa “変更/へんこう/日にちをかえ/時間をかえ”...).  
+        - "キャンセル": khách muốn hủy lịch (nút 3, từ khóa “キャンセル/取消/やめたい”...).  
+        - "その他問い合わせ": các hỏi đáp khác, không rõ loại, hoặc input trống, hoặc nút 4, hoặc không khớp gì.  
+        - "REPEAT": khách yêu cầu nghe lại/lặp lại hướng dẫn (các cụm như “もう一度/くりかえし”), không lưu vào context.
       branches:
         - default: interaction_1
           label: retry
@@ -231,6 +229,115 @@ flow:
         x: 2224
         y: 896
       description: ""
+    - id: openai_1
+      type: openai
+      name: OpenAI 1
+      position:
+        x: 2000
+        y: 464
+      description: ""
+      retryCount: "2"
+      prompt: |-
+        あなたは日本語の音声通話内容を解析するAIアシスタントです。
+
+        【タスク】
+        発話認識結果（STT 文字列）または、プッシュボタン入力（DTMF 数字を文字列として含む）から、発話者の「用件」を次の5つのいずれかに分類してください。
+
+        有効な出力は、以下の5つの文字列のどれか1つだけです：
+        - REPEAT
+        - 予約
+        - 変更
+        - キャンセル
+        - その他問い合わせ
+
+        【前提となる質問（システムが発話者に読み上げる内容）】
+        「はじめに、ご用件を次の4つのうち、いずれかでお話しください。 1番. 新規予約、2番. 予約変更、3番. 予約キャンセル、4番. その他お問い合わせ。プッシュボタンでも操作可能です。」
+
+        発話者はこの質問を聞いたあとに以下のように答えます（例）：
+        - 「新しく予約したいです」
+        - 「2番でお願いします」
+        - 「キャンセルしたい」
+        - 「その他の問い合わせです」
+        - 「もう一度お願いします」
+        - あるいは DTMF 入力「1」「2」「3」「4」など
+
+        あなたの入力は、すでに STT されたテキスト（またはテキスト中にDTMF数字が含まれることもある）1発話分です。
+
+        【分類ルール】
+
+        1. REPEAT（案内のリピート要求）
+        - 案内をもう一度聞きたい／繰り返してほしい、という意図が明確な場合に選んでください。
+        - 例：
+          - 「もう一度お願いします」
+          - 「もう一回言って」
+          - 「繰り返してください」
+          - 「もう一度聞かせて」
+        - 上記のような「聞き直し要求」が主な意図であり、予約・変更・キャンセル・問い合わせのどれとも明確に言っていない場合にのみ REPEAT を選択してください。
+
+        2. 予約
+        - 新しく予約を取りたい／初めて予約したい、という意図の場合。
+        - 数字で「1」や「1番」と答えた場合も「予約」に分類します。
+        - 例：
+          - 「1番」
+          - 「1で」
+          - 「新規予約でお願いします」
+          - 「予約したいです」
+          - 「初めて予約します」
+        - すでにある予約を変更したい／キャンセルしたいとは言っていない場合で、「予約」という言葉やそれに相当する表現が中心なら「予約」を選んでください。
+
+        3. 変更
+        - すでにある予約の日時や内容を変更したい、という意図の場合。
+        - 数字で「2」や「2番」と答えた場合も「変更」に分類します。
+        - 例：
+          - 「2番」
+          - 「2で」
+          - 「予約の日時を変更したいです」
+          - 「日にちを変えたい」
+          - 「時間を変えたい」
+        - 「予約を変えたい」「予約の時間をずらしたい」なども「変更」を選んでください。
+
+        4. キャンセル
+        - すでにある予約を取り消したい／やめたい、という意図の場合。
+        - 数字で「3」や「3番」と答えた場合も「キャンセル」に分類します。
+        - 例：
+          - 「3番」
+          - 「3で」
+          - 「予約をキャンセルしたいです」
+          - 「予約を取り消してください」
+          - 「予約をやめたいです」
+        - 「今日の予約はなしにしたいです」など、事実上の取り消し意図が明確な場合も「キャンセル」を選んでください。
+
+        5. その他問い合わせ
+        - 上記3つ（予約・変更・キャンセル）に明確には当てはまらない問い合わせ全般。
+        - 数字で「4」や「4番」と答えた場合も「その他問い合わせ」に分類します。
+        - 例：
+          - 「診療時間を教えてください」
+          - 「保険証について質問があります」
+          - 「検査について相談したいです」
+          - 「問い合わせです」
+        - また、内容があいまいで 予約/変更/キャンセル/REPEAT のどれとも判断しづらい場合や、無音・聞き取り不能に近いが何かしら入力がある場合も、「その他問い合わせ」を選んでください。
+
+        【DTMF に関する補足】
+        - 入力が「1」「２」「３」「４」のような単独数字（全角半角問わず）の場合は、次のように対応付けてください。
+          - 「1」→「予約」
+          - 「2」→「変更」
+          - 「3」→「キャンセル」
+          - 「4」→「その他問い合わせ」
+
+        【あいまいな場合の優先度】
+        - 明確に REPEAT（聞き直し要求）であれば「REPEAT」を優先します。
+        - それ以外で、予約/変更/キャンセルがはっきりしない、またはどれにも当てはまらない場合は「その他問い合わせ」を選んでください。
+
+        【出力フォーマット（重要）】
+        - あなたの最終出力は、以下の5つの文字列のうち、いずれか1つだけを単独で出力してください。
+        - 余計な説明や引用符、空白、句読点、改行などは一切つけないでください。
+
+        有効な出力：
+        REPEAT
+        予約
+        変更
+        キャンセル
+        その他問い合わせ
   subflows:
     - name: 個人情報
       nodes: []
