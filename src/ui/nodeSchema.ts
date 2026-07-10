@@ -434,17 +434,17 @@ export const IC_FIXED_BRANCHES: readonly DataBranch[] = [
   { id: 'b4', value: '携帯', label: '携帯' },
 ] as const;
 
-// Date Of Call Classifier: catch-all chính là nhánh ^ERROR$ (vai trò giống FAILED)
-// + 3 kết quả so sánh thời gian — value CỐ ĐỊNH, label sửa được.
+// Date Of Call Classifier: catch-all chính là nhánh ^ERROR$ (vai trò giống FAILED,
+// label エラー) + 3 kết quả so sánh thời gian.
 export const DOCC_FIXED_BRANCHES: readonly DataBranch[] = [
-  { id: CATCH_ALL_ID, value: 'ERROR', label: '失敗' },
-  { id: 'b0', value: '時間後' },
-  { id: 'b1', value: '時間一致' },
-  { id: 'b2', value: '時間前' },
+  { id: CATCH_ALL_ID, value: 'ERROR', label: 'エラー' },
+  { id: 'b0', value: '時間後', label: '時間後' },
+  { id: 'b1', value: '時間一致', label: '時間一致' },
+  { id: 'b2', value: '時間前', label: '時間前' },
 ] as const;
 
-// Module có bộ nhánh CỐ ĐỊNH: value khoá cứng, không thêm/xoá nhánh. Đổi sang các
-// module này thì data.branches bị THAY HẲN bằng bộ chuẩn (xem flowStore.setDraftField)
+// Module có bộ nhánh CỐ ĐỊNH: value + label khoá cứng, không thêm/xoá nhánh. Đổi sang
+// các module này thì data.branches bị THAY HẲN bằng bộ chuẩn (xem flowStore.setDraftField)
 // — không giữ nhánh của module trước (tránh DOCC mang nhầm nhánh của IC).
 export const MODULE_FIXED_BRANCHES: Record<string, readonly DataBranch[]> = {
   [LOGIC_MODULE_IC]: IC_FIXED_BRANCHES,
@@ -458,12 +458,6 @@ export function fixedModuleBranches(
 ): readonly DataBranch[] | null {
   if (type !== 'logic') return null;
   return MODULE_FIXED_BRANCHES[logicModuleOf(data)] ?? null;
-}
-
-// Module khoá luôn cả LABEL nhánh (bộ nhãn chuẩn その他/非通知/…): chỉ Incoming
-// Classifier; DOCC vẫn cho sửa label.
-export function branchLabelsLocked(type: NodeType, data: Record<string, unknown>): boolean {
-  return type === 'logic' && logicModuleOf(data) === LOGIC_MODULE_IC;
 }
 
 // Bộ nhánh mặc định theo module — seed khi đổi module ở panel NẾU node chưa có nhánh
@@ -543,9 +537,8 @@ export function isPairBranchNode(type: NodeType, data: Record<string, unknown>):
 }
 
 // Danh sách nhánh "hiệu lực" của node:
-//   - Module có bộ nhánh CỐ ĐỊNH (IC/DOCC): LUÔN trả về bộ chuẩn — value/id khoá cứng,
-//     data.branches lệch (vd còn sót nhánh module trước) cũng bị đè lại. Label: IC khoá
-//     theo bộ chuẩn; DOCC ưu tiên label người dùng đặt trong data.
+//   - Module có bộ nhánh CỐ ĐỊNH (IC/DOCC): LUÔN trả về bộ chuẩn — value/label khoá
+//     cứng, data.branches lệch (vd còn sót nhánh module trước) cũng bị đè lại.
 //   - CMR: CHỈ các nhánh sinh từ Pair (pair1, pair2, …; value 1, 2, … hiển thị ^1$),
 //     KHÔNG có nhánh catch-all loại trừ; label giữ từ data.branches.
 //   - còn lại: đọc thẳng data.branches.
@@ -553,7 +546,6 @@ export function effectiveBranches(type: NodeType, data: Record<string, unknown>)
   const branches = readBranches(data);
   const fixed = fixedModuleBranches(type, data);
   if (fixed) {
-    const labelsLocked = branchLabelsLocked(type, data);
     // Khớp nhánh cố định với nhánh sẵn có theo VALUE (file YAML đánh id theo thứ tự
     // b1, b2… nên không so theo id được) — GIỮ id trong data để dây nối không lệch
     // handle; nhánh không khớp (data sai/thiếu) nhận id trống kế tiếp.
@@ -577,8 +569,7 @@ export function effectiveBranches(type: NodeType, data: Record<string, unknown>)
         usedIds.add(id);
       }
       const branch: DataBranch = { id, value: f.value };
-      const label = labelsLocked ? f.label : old?.label ?? f.label;
-      if (label) branch.label = label;
+      if (f.label) branch.label = f.label;
       return branch;
     });
   }

@@ -513,12 +513,12 @@ describe('logic module mới: Incoming Classifier / Date Of Call Classifier', ()
     ]);
   });
 
-  it('bộ nhánh CỐ ĐỊNH của DOCC: catch-all = ^ERROR$ (giống FAILED) + 時間後/時間一致/時間前', () => {
+  it('bộ nhánh CỐ ĐỊNH của DOCC: ^ERROR$ (catch-all, giống FAILED) + 時間後/時間一致/時間前, label khoá', () => {
     expect(MODULE_FIXED_BRANCHES[LOGIC_MODULE_DOCC]).toEqual([
-      { id: CATCH_ALL_ID, value: 'ERROR', label: '失敗' },
-      { id: 'b0', value: '時間後' },
-      { id: 'b1', value: '時間一致' },
-      { id: 'b2', value: '時間前' },
+      { id: CATCH_ALL_ID, value: 'ERROR', label: 'エラー' },
+      { id: 'b0', value: '時間後', label: '時間後' },
+      { id: 'b1', value: '時間一致', label: '時間一致' },
+      { id: 'b2', value: '時間前', label: '時間前' },
     ]);
   });
 
@@ -541,22 +541,20 @@ describe('logic module mới: Incoming Classifier / Date Of Call Classifier', ()
       ],
     };
     expect(effectiveBranches('logic', staleData)).toEqual([
-      { id: CATCH_ALL_ID, value: 'ERROR', label: '失敗' },
-      { id: 'b0', value: '時間後' },
-      { id: 'b1', value: '時間一致' },
-      { id: 'b2', value: '時間前' },
+      { id: CATCH_ALL_ID, value: 'ERROR', label: 'エラー' },
+      { id: 'b0', value: '時間後', label: '時間後' },
+      { id: 'b1', value: '時間一致', label: '時間一致' },
+      { id: 'b2', value: '時間前', label: '時間前' },
     ]);
   });
 
-  it('effectiveBranches: value IC khoá cứng cả label; DOCC giữ label người dùng đặt', () => {
-    // IC: label trong data bị bỏ qua (bộ nhãn chuẩn khoá cứng).
+  it('effectiveBranches: IC/DOCC khoá cứng cả value lẫn label (label trong data bị bỏ qua)', () => {
     const icData = {
       moduleType: LOGIC_MODULE_IC,
       branches: [{ id: 'b0', value: 'gì đó', label: 'label tự đặt' }],
     };
     const ic = effectiveBranches('logic', icData);
     expect(ic.find((b) => b.id === 'b0')).toEqual({ id: 'b0', value: '非通知', label: '非通知' });
-    // DOCC: value khoá nhưng label người dùng đặt được giữ.
     const doccData = {
       moduleType: LOGIC_MODULE_DOCC,
       branches: [
@@ -565,8 +563,9 @@ describe('logic module mới: Incoming Classifier / Date Of Call Classifier', ()
       ],
     };
     const docc = effectiveBranches('logic', doccData);
-    expect(docc.find((b) => b.id === 'b0')).toEqual({ id: 'b0', value: '時間後', label: 'Sau giờ hẹn' });
-    expect(docc.find((b) => b.id === CATCH_ALL_ID)).toEqual({ id: CATCH_ALL_ID, value: 'ERROR', label: '失敗' });
+    // Value khớp -> giữ id trong data, nhưng label bị đè về bộ chuẩn.
+    expect(docc.find((b) => b.id === 'b0')).toEqual({ id: 'b0', value: '時間後', label: '時間後' });
+    expect(docc.find((b) => b.id === CATCH_ALL_ID)).toEqual({ id: CATCH_ALL_ID, value: 'ERROR', label: 'エラー' });
   });
 
   it('formatTimeInput: chỉ giữ chữ số, tự chèn ":" theo HH:mm:ss', () => {
@@ -592,7 +591,7 @@ flow:
       branches:
         - when: "ERROR"
           default: e
-          label: "失敗"
+          label: "エラー"
         - when: "時間後"
           to: a
         - when: "時間一致"
@@ -612,18 +611,18 @@ flow:
     const d = ir.nodes.find((n) => n.id === 'd')!;
     expect(d.data.compareTime).toBe('12:30:00');
     expect(readBranches(d.data)).toEqual([
-      { id: 'default', value: 'ERROR', label: '失敗' },
+      { id: 'default', value: 'ERROR', label: 'エラー' },
       { id: 'b1', value: '時間後' },
       { id: 'b2', value: '時間一致' },
       { id: 'b3', value: '時間前' },
     ]);
     // Nhánh hiệu lực GIỮ id trong data (b1, b2, b3 theo thứ tự YAML) — dây nối từ các
-    // handle này không bị lệch khi áp bộ nhánh cố định của DOCC.
+    // handle này không bị lệch khi áp bộ nhánh cố định của DOCC; label theo bộ chuẩn.
     expect(effectiveBranches(d.type, d.data)).toEqual([
-      { id: 'default', value: 'ERROR', label: '失敗' },
-      { id: 'b1', value: '時間後' },
-      { id: 'b2', value: '時間一致' },
-      { id: 'b3', value: '時間前' },
+      { id: 'default', value: 'ERROR', label: 'エラー' },
+      { id: 'b1', value: '時間後', label: '時間後' },
+      { id: 'b2', value: '時間一致', label: '時間一致' },
+      { id: 'b3', value: '時間前', label: '時間前' },
     ]);
     const parsed = parse(toYaml(ir)) as {
       flow: { nodes: Array<{ id: string; compareTime?: string; branches?: Array<Record<string, string>> }> };
@@ -631,7 +630,7 @@ flow:
     const out = parsed.flow.nodes.find((n) => n.id === 'd')!;
     expect(out.compareTime).toBe('12:30:00');
     expect(out.branches).toEqual([
-      { when: 'ERROR', default: 'e', label: '失敗' },
+      { when: 'ERROR', default: 'e', label: 'エラー' },
       { when: '時間後', to: 'a' },
       { when: '時間一致', to: 'b' },
       { when: '時間前', to: 'c' },

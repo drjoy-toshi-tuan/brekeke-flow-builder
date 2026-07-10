@@ -10,7 +10,6 @@ import {
   effectiveBranches,
   isPairBranchNode,
   fixedModuleBranches,
-  branchLabelsLocked,
   catchAllEditable,
   optionsForSource,
   catchAllDisplay,
@@ -775,9 +774,8 @@ function BranchTab({ node, data }: { node: FlowNode; data: Record<string, unknow
   // label sửa được, KHÔNG thêm/xoá nhánh ở đây (thêm/xoá Pair bên tab Property).
   const pairMode = isPairBranchNode(node.type, data);
   // Module có bộ nhánh CỐ ĐỊNH (Incoming Classifier / Date Of Call Classifier):
-  // value khoá cứng, không thêm/xoá; IC khoá luôn cả label.
+  // value + label khoá cứng, không thêm/xoá nhánh.
   const fixedModule = fixedModuleBranches(node.type, data) !== null;
-  const labelsLocked = branchLabelsLocked(node.type, data);
   // Node logic (Module Result Binder): value catch-all SỬA ĐƯỢC (vẫn không xoá được).
   const editableCatchAll = catchAllEditable(node.type, data);
 
@@ -845,8 +843,8 @@ function BranchTab({ node, data }: { node: FlowNode; data: Record<string, unknow
                 )}
               </div>
               <div className="bk-branch-label-col">
-                {labelsLocked ? (
-                  // IC: label cũng thuộc bộ chuẩn (その他/非通知/…) — read-only.
+                {fixedModule ? (
+                  // IC/DOCC: label cũng thuộc bộ chuẩn (その他/エラー/…) — read-only.
                   <HoverTip className="bk-branch-fixed" content={b.label ?? ''}>
                     {b.label ?? ''}
                   </HoverTip>
