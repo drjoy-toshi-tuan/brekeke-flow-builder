@@ -46,7 +46,7 @@ interface FlowState {
   // Flow đang mở trên canvas: 'main' hoặc id của 1 sub flow.
   activeFlowId: string;
   mainStash: { nodes: FlowNode[]; edges: FlowEdge[] } | null;
-  // Chuyển sang main flow / sub flow khác (tự ELK layout lần đầu mở sub flow).
+  // Chuyển sang main flow / sub flow khác (tự auto-layout lần đầu mở sub flow).
   switchFlow: (id: string) => Promise<void>;
   // Tạo sub flow mới (seed node Start) rồi chuyển sang nó.
   createSubflow: (name: string) => Promise<void>;
@@ -76,7 +76,7 @@ interface FlowState {
 
   // Nạp YAML -> IR -> auto-layout, rồi set vào store.
   loadYaml: (text: string) => Promise<void>;
-  // Chạy lại ELK trên IR hiện tại.
+  // Chạy lại auto-layout trên IR hiện tại.
   autoLayout: () => Promise<void>;
   // Xuất IR hiện tại ra chuỗi YAML (round-trip).
   exportYaml: () => string;
@@ -237,7 +237,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
         mainStash = { nodes: doc.nodes, edges: doc.edges };
       }
 
-      // Sub flow đọc từ YAML chưa có toạ độ (0,0 hết) -> ELK layout lần đầu mở.
+      // Sub flow đọc từ YAML chưa có toạ độ (0,0 hết) -> auto-layout lần đầu mở.
       const needsLayout =
         next.nodes.length > 1 && next.nodes.every((n) => n.position.x === 0 && n.position.y === 0);
       if (needsLayout) next = await layout(next);
@@ -386,7 +386,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
     loadYaml: async (text) => {
       const parsed = fromYaml(text);
       // File đã lưu toạ độ (mọi lần lưu đều ghi position) -> GIỮ NGUYÊN bố cục, không
-      // auto-layout lại. Chỉ ELK layout khi toạ độ trống (file cũ / viết tay: tất cả 0,0).
+      // auto-layout lại. Chỉ auto-layout khi toạ độ trống (file cũ / viết tay: tất cả 0,0).
       const needsLayout =
         parsed.nodes.length > 1 &&
         parsed.nodes.every((n) => n.position.x === 0 && n.position.y === 0);

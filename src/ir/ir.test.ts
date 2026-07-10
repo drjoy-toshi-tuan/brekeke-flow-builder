@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { fromYaml } from './fromYaml';
 import { toYaml } from './toYaml';
+import { layout } from './layout';
 import { parse } from 'yaml';
 import { SYNTHETIC_START_ID } from './types';
 import {
@@ -111,7 +112,7 @@ flow:
     expect(ir.nodes.find((n) => n.id === 'a')?.position).toEqual({ x: 96, y: 200 });
     expect(ir.nodes.find((n) => n.id === 'b')?.position).toEqual({ x: 96, y: 360 });
     expect(ir.nodes.find((n) => n.id === SYNTHETIC_START_ID)?.position).toEqual({ x: 96, y: 40 });
-    // Toạ độ không phải toàn (0,0) -> loadYaml sẽ GIỮ NGUYÊN (không ELK layout lại).
+    // Toạ độ không phải toàn (0,0) -> loadYaml sẽ GIỮ NGUYÊN (không auto-layout lại).
     expect(ir.nodes.every((n) => n.position.x === 0 && n.position.y === 0)).toBe(false);
     // Round-trip: toYaml ghi lại position từng node + flow.startPosition.
     const parsed = parse(toYaml(ir)) as {
@@ -490,6 +491,137 @@ flow:
     expect(parsed.flow.subflows![0].start).toBeUndefined();
     expect(parsed.flow.subflows![0].nodes.map((n) => n.id)).toEqual(['s1', 's2']);
     expect(parsed.flow.subflows![0].nodes[0].type).toBe('interaction');
+  });
+});
+
+describe('auto-layout (quy tắc bố cục chuẩn)', () => {
+  // Cấu trúc mô phỏng flow 診療 thật: mạch chính dọc + chuỗi failed + nexus 4 nhánh
+  // + vòng lặp retry (logic quay lại interaction).
+  const FLOW = `
+flow:
+  name: "診療"
+  start: welcome
+  nodes:
+    - id: welcome
+      type: announce
+      text: "hi"
+      next: ask
+    - id: ask
+      type: interaction
+      announce: "用件?"
+      next: classify
+      failed: sorry
+    - id: sorry
+      type: announce
+      text: "sorry"
+      next: flag_ng
+    - id: flag_ng
+      type: flag
+      next: bye_ng
+    - id: bye_ng
+      type: hangup
+    - id: classify
+      type: logic
+      branches:
+        - default: ask
+          label: retry
+        - when: "OK"
+          to: route
+          label: success
+    - id: route
+      type: nexus
+      branches:
+        - default: jump_1
+        - when: "変更"
+          to: jump_2
+        - when: "キャンセル"
+          to: jump_3
+        - when: "その他"
+          to: jump_4
+    - id: jump_1
+      type: jump
+    - id: jump_2
+      type: jump
+    - id: jump_3
+      type: jump
+    - id: jump_4
+      type: jump
+`;
+
+  const centerX = (ir: Awaited<ReturnType<typeof layout>>, id: string) =>
+    ir.nodes.find((n) => n.id === id)!.position.x + 122; // NODE_WIDTH / 2
+  const posY = (ir: Awaited<ReturnType<typeof layout>>, id: string) =>
+    ir.nodes.find((n) => n.id === id)!.position.y;
+
+  it('mạch chính đi thẳng đứng, khoảng cách tầng LUÔN bằng nhau', async () => {
+    const ir = await layout(fromYaml(FLOW));
+    const chain = [SYNTHETIC_START_ID, 'welcome', 'ask', 'classify', 'route'];
+    // Cùng 1 đường dọc (tâm x bằng nhau).
+    const xs = chain.map((id) => centerX(ir, id));
+    expect(new Set(xs).size).toBe(1);
+    // Bước y giữa các tầng liên tiếp bằng nhau tuyệt đối.
+    const ys = chain.map((id) => posY(ir, id));
+    const steps = ys.slice(1).map((y, i) => y - ys[i]);
+    expect(new Set(steps).size).toBe(1);
+    expect(steps[0]).toBeGreaterThan(0);
+  });
+
+  it('chuỗi failed nằm NGANG cùng hàng với node nguồn, lấn dần sang trái', async () => {
+    const ir = await layout(fromYaml(FLOW));
+    const rowY = posY(ir, 'ask');
+    for (const id of ['sorry', 'flag_ng', 'bye_ng']) expect(posY(ir, id)).toBe(rowY);
+    // Thứ tự trái dần: ask > sorry > flag_ng > bye_ng, bước ngang đều nhau.
+    const xs = ['ask', 'sorry', 'flag_ng', 'bye_ng'].map((id) => centerX(ir, id));
+    const steps = xs.slice(1).map((x, i) => xs[i] - x);
+    expect(steps.every((s) => s > 0)).toBe(true);
+    expect(new Set(steps).size).toBe(1);
+  });
+
+  it('nhánh nexus dàn hàng dưới, cách đều & đối xứng quanh tâm node cha', async () => {
+    const ir = await layout(fromYaml(FLOW));
+    const jumps = ['jump_1', 'jump_2', 'jump_3', 'jump_4'];
+    // Cùng 1 hàng, ngay dưới nexus.
+    const ys = new Set(jumps.map((id) => posY(ir, id)));
+    expect(ys.size).toBe(1);
+    expect([...ys][0]).toBeGreaterThan(posY(ir, 'route'));
+    // Cách đều nhau với khoảng cách lớn (mép–mép >= 320) và giữ thứ tự nhánh.
+    const xs = jumps.map((id) => centerX(ir, id));
+    const steps = xs.slice(1).map((x, i) => x - xs[i]);
+    expect(new Set(steps).size).toBe(1);
+    expect(steps[0]).toBeGreaterThanOrEqual(244 + 320);
+    // Cụm nhánh đối xứng qua tâm node cha.
+    expect((xs[0] + xs[3]) / 2).toBe(centerX(ir, 'route'));
+  });
+
+  it('node không chồng chéo nhau (bounding box rời nhau)', async () => {
+    const ir = await layout(fromYaml(FLOW));
+    for (let i = 0; i < ir.nodes.length; i++) {
+      for (let j = i + 1; j < ir.nodes.length; j++) {
+        const a = ir.nodes[i].position;
+        const b = ir.nodes[j].position;
+        const overlap = Math.abs(a.x - b.x) < 244 && Math.abs(a.y - b.y) < 80;
+        expect(overlap, `${ir.nodes[i].id} đè lên ${ir.nodes[j].id}`).toBe(false);
+      }
+    }
+  });
+
+  it('cụm node rời nhau (không dây nối) xếp cạnh nhau, không đè lên nhau', async () => {
+    const TWO = `
+flow:
+  name: "f"
+  start: a
+  nodes:
+    - id: a
+      type: announce
+      text: "hi"
+    - id: b
+      type: announce
+      text: "đảo rời"
+`;
+    const ir = await layout(fromYaml(TWO));
+    const a = ir.nodes.find((n) => n.id === 'a')!.position;
+    const b = ir.nodes.find((n) => n.id === 'b')!.position;
+    expect(Math.abs(a.x - b.x) >= 244 || Math.abs(a.y - b.y) >= 80).toBe(true);
   });
 });
 

@@ -72,7 +72,7 @@ export interface FlowNode {
   id: string;
   type: NodeType;
   label: string;
-  position: { x: number; y: number }; // do ELK auto-layout điền; người dùng có thể kéo
+  position: { x: number; y: number }; // do auto-layout (ir/layout.ts) điền; người dùng có thể kéo
   data: Record<string, unknown>; // tham số riêng theo type (vd announce: { text })
 }
 
