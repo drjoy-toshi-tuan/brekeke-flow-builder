@@ -443,6 +443,7 @@ export function FileManagerScreen() {
 
           {/* Thanh hành động */}
           <div className="mb-4 flex flex-wrap items-center gap-2">
+            {/* Tải file lên */}
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
@@ -452,6 +453,7 @@ export function FileManagerScreen() {
               <Icon icon="line-md:upload-loop" width={17} height={17} />
               {t('fmUpload')}
             </button>
+            {/* Tạo flow mới */}
             <button
               type="button"
               onClick={openNewModal}
@@ -461,74 +463,69 @@ export function FileManagerScreen() {
               <Icon icon="line-md:plus" width={17} height={17} />
               {t('fmNew')}
             </button>
+            {/* Làm mới — giữ cạnh nút Tạo flow mới */}
+            <button
+              type="button"
+              onClick={() => void refresh()}
+              disabled={loading || busy}
+              title={t('fmRefresh')}
+              aria-label={t('fmRefresh')}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--bk-text-muted)] transition-all duration-200 hover:-translate-y-0.5 hover:text-[var(--bk-accent)] active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-60"
+            >
+              <Icon icon="lucide:refresh-cw" width={18} height={18} className={loading ? 'animate-spin' : ''} />
+            </button>
+            {/* Nút tìm kiếm (icon line-md:search) — ngay sau nút Làm mới */}
+            <button
+              type="button"
+              onClick={toggleSearch}
+              title={t('fmSearch')}
+              aria-label={t('fmSearch')}
+              aria-pressed={searchOpen}
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 ${
+                searchOpen
+                  ? 'bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]'
+                  : 'text-[var(--bk-text-muted)] hover:text-[var(--bk-accent)]'
+              }`}
+            >
+              <Icon icon="line-md:search" width={18} height={18} />
+            </button>
 
-            {/* ── Cụm bên phải: tìm kiếm (kéo dài) · làm mới · số dòng/trang · phân trang ── */}
-            <div className="ml-auto flex flex-1 flex-wrap items-center justify-end gap-2">
-              {/* Ô tìm kiếm: bấm nút kính lúp -> input trượt ra kéo dài về phía cụm chọn trang */}
-              <div
-                className={`relative flex min-w-0 items-center overflow-hidden transition-[width,opacity] duration-300 ease-out ${
-                  searchOpen ? 'w-full opacity-100 sm:w-72 md:w-80 lg:w-96' : 'w-0 opacity-0'
-                }`}
-              >
-                <input
-                  ref={searchInputRef}
-                  type="search"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') toggleSearch();
-                  }}
-                  placeholder={t('fmSearchPlaceholder')}
-                  aria-label={t('fmSearch')}
-                  className="w-full rounded-lg border border-[var(--bk-border)] bg-[var(--bk-bg)] py-2 pl-3 pr-8 text-sm text-[var(--bk-text)] outline-none transition focus:border-[var(--bk-accent)] focus:ring-2 focus:ring-[var(--bk-accent-soft)]"
-                />
-                {query && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setQuery('');
-                      searchInputRef.current?.focus();
-                    }}
-                    title={t('fmSearchClear')}
-                    aria-label={t('fmSearchClear')}
-                    className="absolute right-1.5 flex h-6 w-6 items-center justify-center rounded-md text-[var(--bk-text-faint)] transition hover:bg-[var(--bk-surface-2)] hover:text-[var(--bk-text)]"
-                  >
-                    <Icon icon="lucide:x" width={14} height={14} />
-                  </button>
-                )}
-              </div>
-
-              {/* Nút tìm kiếm (icon line-md:search) */}
-              <button
-                type="button"
-                onClick={toggleSearch}
-                title={t('fmSearch')}
+            {/* Ô tìm kiếm: bấm nút kính lúp -> input trượt ra, kéo dài về phía cụm chọn trang */}
+            <div
+              className={`relative flex items-center overflow-hidden transition-[flex-grow,opacity,margin] duration-300 ease-out ${
+                searchOpen ? 'ml-0.5 min-w-[160px] flex-1 opacity-100' : 'ml-0 w-0 flex-none opacity-0'
+              }`}
+            >
+              <input
+                ref={searchInputRef}
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') toggleSearch();
+                }}
+                placeholder={t('fmSearchPlaceholder')}
                 aria-label={t('fmSearch')}
-                aria-pressed={searchOpen}
-                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 ${
-                  searchOpen
-                    ? 'bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]'
-                    : 'text-[var(--bk-text-muted)] hover:text-[var(--bk-accent)]'
-                }`}
-              >
-                <Icon icon="line-md:search" width={18} height={18} />
-              </button>
+                className="w-full rounded-lg border border-[var(--bk-border)] bg-[var(--bk-bg)] py-2 pl-3 pr-8 text-sm text-[var(--bk-text)] outline-none transition focus:border-[var(--bk-accent)] focus:ring-2 focus:ring-[var(--bk-accent-soft)]"
+              />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuery('');
+                    searchInputRef.current?.focus();
+                  }}
+                  title={t('fmSearchClear')}
+                  aria-label={t('fmSearchClear')}
+                  className="absolute right-1.5 flex h-6 w-6 items-center justify-center rounded-md text-[var(--bk-text-faint)] transition hover:bg-[var(--bk-surface-2)] hover:text-[var(--bk-text)]"
+                >
+                  <Icon icon="lucide:x" width={14} height={14} />
+                </button>
+              )}
+            </div>
 
-              {/* Làm mới */}
-              <button
-                type="button"
-                onClick={() => void refresh()}
-                disabled={loading || busy}
-                title={t('fmRefresh')}
-                aria-label={t('fmRefresh')}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--bk-text-muted)] transition-all duration-200 hover:-translate-y-0.5 hover:text-[var(--bk-accent)] active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-60"
-              >
-                <Icon icon="lucide:refresh-cw" width={18} height={18} className={loading ? 'animate-spin' : ''} />
-              </button>
-
-              {/* Ngăn cách */}
-              <div aria-hidden className="mx-0.5 hidden h-6 w-px bg-[var(--bk-border)] sm:block" />
-
+            {/* ── Phần trang: số kết quả · số dòng mỗi trang · điều hướng (đẩy về bên phải) ── */}
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
               {/* Số kết quả (khi màn đủ rộng) */}
               <span className="hidden whitespace-nowrap text-xs text-[var(--bk-text-faint)] lg:inline">
                 {t('fmResultCount', { n: filtered.length })}
