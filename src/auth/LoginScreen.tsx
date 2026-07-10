@@ -26,6 +26,14 @@ export function LoginScreen() {
   // Sinh nonce một lần cho mỗi lần mở màn login (chống replay). Gắn vào <GoogleLogin>.
   const nonce = useMemo(() => createNonce(), []);
 
+  // Icon spinner (SMIL loop) giữ nguyên element giữa các lần render (đổi theme/lang/
+  // error đều re-render màn này) — nếu không, animation chết sau lần render thứ 2
+  // (xem giải thích ở FlowsPanel).
+  const logoIcon = useMemo(
+    () => <Icon icon="svg-spinners:gooey-balls-1" width={34} height={34} />,
+    [],
+  );
+
   return (
     <div className="relative flex h-full flex-col bg-[var(--bk-bg)]">
       {/* ── Top bar: thương hiệu + menu giao diện — đồng bộ hệt màn Quản lý file ── */}
@@ -48,7 +56,12 @@ export function LoginScreen() {
             className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-transparent via-[var(--bk-accent)] to-transparent opacity-70"
           />
           <div className="mb-6 text-center">
-            <h2 className="text-xl font-bold tracking-tight text-[var(--bk-text)]">
+            {/* Icon spinner cam như thiết kế cũ (không kèm chữ "Brekeke Flow Builder"
+                vì thương hiệu đã nằm ở header trên cùng bên trái). */}
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--bk-accent)] text-white shadow-lg ring-4 ring-[var(--bk-accent-soft)]">
+              {logoIcon}
+            </div>
+            <h2 className="mt-4 text-xl font-bold tracking-tight text-[var(--bk-text)]">
               {t('loginTitle')}
             </h2>
             <p className="mt-2 text-sm leading-relaxed text-[var(--bk-text-muted)]">
