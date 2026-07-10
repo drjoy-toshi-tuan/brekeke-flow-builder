@@ -132,22 +132,36 @@ function computeLoopBackPath(
   const laneTop = Math.min(riseY, dropY);
   const laneBottom = Math.max(riseY, dropY);
 
-  // Hướng vòng theo VỊ TRÍ node đích so với node nguồn (không theo handle). Hoà (đích nằm
-  // ngay trên nguồn) -> nghiêng TRÁI để giữ hành vi cũ cho case loop dọc.
-  const targetIsLeft = tBox.cx <= sBox.cx;
-  // Khe hở ngang giữa 2 node ở phía đối diện nhau.
-  const gap = targetIsLeft ? sBox.left - tBox.right : tBox.left - sBox.right;
-  // Làn dọc luồn vào GIỮA khe (co theo khoảng cách 2 node).
-  const gapLaneX = targetIsLeft ? (tBox.right + sBox.left) / 2 : (sBox.right + tBox.left) / 2;
+  // ── Chọn HƯỚNG vòng (trái/phải) ──────────────────────────────────────────
+  // Khe hở ngang: đích nằm HẲN bên trái nếu gapLeft > 0, hẳn bên phải nếu gapRight > 0.
+  const gapLeft = sBox.left - tBox.right;
+  const gapRight = tBox.left - sBox.right;
+  let goLeft: boolean;
+  if (gapLeft >= LANE_MIN_GAP) {
+    goLeft = true; // đích rõ ràng nằm bên trái -> vòng trái
+  } else if (gapRight >= LANE_MIN_GAP) {
+    goLeft = false; // đích rõ ràng nằm bên phải -> vòng phải
+  } else {
+    // Đích ~ NGAY TRÊN nguồn (2 node chồng ngang): quyết định theo phía CHẤM OUTPUT.
+    // Node nhiều output: chấm lệch TRÁI -> vòng trái, lệch PHẢI -> vòng phải (mỗi dây bám
+    // đúng bên chấm của nó, không chéo qua thân node). Chấm ở giữa (1 output) -> theo tâm đích.
+    const handleOffset = sx - sBox.cx;
+    goLeft = Math.abs(handleOffset) > 1 ? handleOffset < 0 : tBox.cx <= sBox.cx;
+  }
 
+  // ── Đặt LÀN DỌC ────────────────────────────────────────────────────────────
+  // Còn khe đủ rộng ở phía đã chọn & không bị node khác chắn -> luồn vào GIỮA khe (gọn,
+  // tự co theo khoảng cách 2 node). Ngược lại (khe hẹp / chồng ngang / bị chắn) -> vòng
+  // hẳn RA NGOÀI mép ngoài của cả 2 node, đúng phía đã chọn.
+  const gap = goLeft ? gapLeft : gapRight;
+  const gapLaneX = goLeft ? (tBox.right + sBox.left) / 2 : (sBox.right + tBox.left) / 2;
   let laneX: number;
   if (gap >= LANE_MIN_GAP && !laneBlocked(gapLaneX, laneTop, laneBottom, obstacles)) {
-    // 2 node đứng cạnh, khe đủ rộng & không bị chắn -> luồn dây vào giữa khe (gọn).
     laneX = gapLaneX;
   } else {
-    // Khe quá hẹp / node chồng ngang (đích ngay trên nguồn) / bị node khác chắn ->
-    // vòng hẳn ra NGOÀI mép node ĐÍCH, đúng phía target.
-    laneX = targetIsLeft ? tBox.left - LOOP_LANE : tBox.right + LOOP_LANE;
+    laneX = goLeft
+      ? Math.min(sBox.left, tBox.left) - LOOP_LANE
+      : Math.max(sBox.right, tBox.right) + LOOP_LANE;
   }
 
   const points = [
