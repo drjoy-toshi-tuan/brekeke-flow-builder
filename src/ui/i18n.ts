@@ -485,7 +485,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     exJump: 'サブフローへジャンプする',
     exHangup: '通話を終了して切断する',
     loginTitle: 'ログイン',
-    loginSubtitle: '@{domain} の Google アカウントでログインしてアクセスします。',
+    loginSubtitle: '【@{domain}】のGoogleアカウントでログインしてください。',
     loginReadError: 'ログイン情報を読み取れませんでした。',
     loginDomainError: '@{domain} のアカウントのみアクセスできます。',
     loginGoogleError: 'Googleログインに失敗しました。もう一度お試しください。',
