@@ -211,7 +211,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     exJump: 'Nhảy tới sub flow khác',
     exHangup: 'Kết thúc và ngắt cuộc gọi',
     loginTitle: 'Đăng nhập',
-    loginSubtitle: 'Đăng nhập bằng tài khoản Google @{domain} để truy cập.',
+    loginSubtitle: 'Đăng nhập bằng tài khoản Google [@{domain}] để truy cập.',
     loginReadError: 'Không đọc được thông tin đăng nhập.',
     loginDomainError: 'Chỉ tài khoản @{domain} mới truy cập được.',
     loginGoogleError: 'Đăng nhập Google thất bại. Thử lại.',
