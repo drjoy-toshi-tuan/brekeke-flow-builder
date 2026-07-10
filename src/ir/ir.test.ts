@@ -12,6 +12,8 @@ import {
   catchAllEditable,
   effectiveBranches,
   optionsForSource,
+  BRANCH_SCHEMA,
+  SAVE_MODULE_FLAG,
 } from '../ui/nodeSchema';
 import { parseFlowMeta, updateFlowMeta } from './flowMeta';
 
@@ -491,6 +493,51 @@ flow:
     expect(parsed.flow.subflows![0].start).toBeUndefined();
     expect(parsed.flow.subflows![0].nodes.map((n) => n.id)).toEqual(['s1', 's2']);
     expect(parsed.flow.subflows![0].nodes[0].type).toBe('interaction');
+  });
+});
+
+describe('node Save (thay node Flag cũ)', () => {
+  it('file cũ type flag -> node save, giữ nguyên Status/SMS Flag; toYaml ghi type save', () => {
+    const LEGACY = `
+flow:
+  name: "f"
+  start: fl
+  nodes:
+    - id: fl
+      type: flag
+      statusFlag: "3"
+      smsFlag: "1"
+      next: bye
+    - id: bye
+      type: hangup
+`;
+    const ir = fromYaml(LEGACY);
+    const fl = ir.nodes.find((n) => n.id === 'fl')!;
+    expect(fl.type).toBe('save');
+    expect(fl.data.statusFlag).toBe('3');
+    expect(fl.data.smsFlag).toBe('1');
+    // Chưa có moduleType -> panel hiểu là module Flag (mặc định), không cần migrate data.
+    expect(fl.data.moduleType).toBeUndefined();
+    const parsed = parse(toYaml(ir)) as { flow: { nodes: Array<{ id: string; type: string }> } };
+    expect(parsed.flow.nodes.find((n) => n.id === 'fl')?.type).toBe('save');
+  });
+
+  it('defaultDataFor(save): seed module mặc định Flag, nhánh cố định NEXT', () => {
+    const data = defaultDataFor('save');
+    expect(data.moduleType).toBe(SAVE_MODULE_FLAG);
+    expect(data.branches).toBeUndefined(); // nhánh cố định, không có nhánh tự do
+    expect(BRANCH_SCHEMA.save.mode).toBe('fixed');
+  });
+
+  it('nhánh cố định NEXT hiển thị VALUE ^.*$ (FAILED giữ ^FAILED$)', () => {
+    // name là phần giữa ^…$ ở cột VALUE của Branch Settings.
+    expect(BRANCH_SCHEMA.announce.fixed![0]).toMatchObject({ id: 'default', name: '.*' });
+    expect(BRANCH_SCHEMA.save.fixed![0]).toMatchObject({ id: 'default', name: '.*' });
+    expect(BRANCH_SCHEMA.interaction.fixed).toEqual([
+      expect.objectContaining({ id: 'failed', name: 'FAILED' }),
+      expect.objectContaining({ id: 'default', name: '.*' }),
+    ]);
+    expect(BRANCH_SCHEMA.start.fixed![0].name).toBe('.*');
   });
 });
 

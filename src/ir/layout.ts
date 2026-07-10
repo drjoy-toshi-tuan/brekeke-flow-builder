@@ -7,7 +7,7 @@ import { SYNTHETIC_START_ID } from './types';
 //
 //   1. Mạch chính đi TỪ TRÊN XUỐNG; khoảng cách tầng trên–dưới LUÔN bằng nhau.
 //   2. Nhánh `failed` rẽ SANG NGANG: cả chuỗi failed nằm cùng hàng với node
-//      nguồn, kéo dần về bên trái (announce → flag → hangup…).
+//      nguồn, kéo dần về bên trái (announce → save → hangup…).
 //   3. Node phân nhánh (nexus/logic nhiều branch): các nhánh con dàn hàng dưới,
 //      cách đều nhau quanh tâm node cha với khoảng cách lớn, KHÔNG chồng chéo
 //      (kiểm tra va chạm theo contour từng tầng của cả subtree).

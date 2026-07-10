@@ -172,6 +172,27 @@ const MRB_CONTEXT_TYPE_OPTIONS: FieldOption[] = [
 
 const CDC_CONTEXT_TYPE_OPTIONS: FieldOption[] = ['TEXT', 'DATE'].map((v) => ({ value: v, label: v }));
 
+// ── Module của node Save ──
+// Save = node lưu dữ liệu, chọn module giống node Logic:
+//   - Flag: 2 tham số Status Flag / SMS Flag (hành vi node Flag cũ).
+//   - Save Data 2 Dr.JOY: không có tham số.
+export const SAVE_MODULE_FLAG = 'Flag';
+export const SAVE_MODULE_DRJOY = 'Save Data 2 Dr.JOY';
+
+const SAVE_MODULE_OPTIONS: FieldOption[] = [
+  { value: SAVE_MODULE_FLAG, label: SAVE_MODULE_FLAG },
+  { value: SAVE_MODULE_DRJOY, label: SAVE_MODULE_DRJOY },
+];
+
+// Module đang chọn của node save (mặc định Flag khi chưa chọn — khớp node Flag cũ
+// đọc từ file YAML không có moduleType).
+export function saveModuleOf(data: Record<string, unknown>): string {
+  const v = data.moduleType;
+  return typeof v === 'string' && v ? v : SAVE_MODULE_FLAG;
+}
+
+const saveModuleIsFlag = (d: Record<string, unknown>) => saveModuleOf(d) === SAVE_MODULE_FLAG;
+
 // Input Type có STT (STT hoặc STT & DTMF) -> mới hiện Voice Type.
 function inputHasStt(data: Record<string, unknown>): boolean {
   const v = data.inputType;
@@ -317,28 +338,30 @@ export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
     { key: 'transferType', labelKey: 'fTransferType', kind: 'select', options: TRANSFER_TYPE_OPTIONS, default: 'ATTENDED' },
     { key: 'announce', labelKey: 'fAnnounce', kind: 'autoText' },
   ],
-  // Flag (フラグ): 2 tham số chỉ nhận số — Status Flag & SMS Flag.
-  flag: [
-    { key: 'statusFlag', labelKey: 'fStatusFlag', kind: 'number' },
-    { key: 'smsFlag', labelKey: 'fSmsFlag', kind: 'number' },
+  // Save: chọn module như node Logic — Flag hiện Status/SMS Flag, Save Data 2 Dr.JOY không tham số.
+  save: [
+    { key: 'moduleType', labelKey: 'fModule', kind: 'select', options: SAVE_MODULE_OPTIONS, default: SAVE_MODULE_FLAG },
+    { key: 'statusFlag', labelKey: 'fStatusFlag', kind: 'number', showIf: saveModuleIsFlag },
+    { key: 'smsFlag', labelKey: 'fSmsFlag', kind: 'number', showIf: saveModuleIsFlag },
   ],
   // Jump: chọn sub flow để nhảy tới (danh sách sub flow sẽ bổ sung sau).
   jump: [{ key: 'subflow', labelKey: 'fSubflow', kind: 'searchSelect', optionsFrom: 'subflows' }],
   hangup: [],
 };
 
-// Nhánh cố định: VALUE (name, hiển thị ^name$) giữ nguyên NEXT/FAILED;
-// LABEL mặc định là 次へ (NEXT) / 失敗 (FAILED) — cũng là nhãn hiện trên dây.
-//   - NEXT  = handle 'default' (khớp `next` trong YAML)
-//   - FAILED = handle 'failed'
+// Nhánh cố định: VALUE (name, hiển thị ^name$); LABEL mặc định là 次へ / 失敗 —
+// cũng là nhãn hiện trên dây.
+//   - Nhánh NEXT  = handle 'default' (khớp `next` trong YAML) — VALUE hiển thị ^.*$
+//     (khớp mọi kết quả; trước đây hiển thị ^NEXT$).
+//   - Nhánh FAILED = handle 'failed' — VALUE giữ ^FAILED$.
 export const NEXT_BRANCH_LABEL = '次へ';
 export const FAILED_BRANCH_LABEL = '失敗';
 
-const NEXT_ONLY: BranchDescriptor[] = [{ id: 'default', name: 'NEXT', label: NEXT_BRANCH_LABEL }];
+const NEXT_ONLY: BranchDescriptor[] = [{ id: 'default', name: '.*', label: NEXT_BRANCH_LABEL }];
 // FAILED + NEXT dùng chung cho interaction/openai/faq/transfer.
 const FAILED_NEXT: BranchDescriptor[] = [
   { id: 'failed', name: 'FAILED', label: FAILED_BRANCH_LABEL },
-  { id: 'default', name: 'NEXT', label: NEXT_BRANCH_LABEL },
+  { id: 'default', name: '.*', label: NEXT_BRANCH_LABEL },
 ];
 
 export const BRANCH_SCHEMA: Record<NodeType, BranchSchema> = {
@@ -351,8 +374,8 @@ export const BRANCH_SCHEMA: Record<NodeType, BranchSchema> = {
   faq: { mode: 'fixed', fixed: FAILED_NEXT },
   // Transfer: nhánh FAILED (nối máy thất bại) nằm trên nhánh NEXT.
   transfer: { mode: 'fixed', fixed: FAILED_NEXT },
-  // Flag: chỉ có nhánh NEXT.
-  flag: { mode: 'fixed', fixed: NEXT_ONLY },
+  // Save: chỉ có nhánh NEXT.
+  save: { mode: 'fixed', fixed: NEXT_ONLY },
   // Jump: nhánh tự do (thêm được nhánh) giống nexus/logic.
   jump: { mode: 'editable' },
   hangup: { mode: 'none' },

@@ -38,7 +38,7 @@ export type NodeType =
   | 'openai' // gọi OpenAI / LLM (tên cũ: llm)
   | 'faq' // hỏi-đáp (FAQ)
   | 'transfer' // chuyển máy
-  | 'flag' // đặt cờ (ステータスフラグ / SMSフラグ)
+  | 'save' // lưu dữ liệu — module Flag (ステータスフラグ / SMSフラグ) hoặc Save Data 2 Dr.JOY
   | 'jump' // nhảy sang sub flow khác
   | 'hangup';
 
@@ -51,7 +51,7 @@ export const NODE_TYPES: readonly NodeType[] = [
   'openai',
   'faq',
   'transfer',
-  'flag',
+  'save',
   'jump',
   'hangup',
 ] as const;
@@ -62,6 +62,7 @@ export const LEGACY_TYPE_ALIASES: Record<string, NodeType> = {
   condition: 'nexus',
   script: 'logic',
   llm: 'openai',
+  flag: 'save',
 };
 
 // Loại node có nhánh TỰ DO (data.branches) — dùng chung cho fromYaml/toYaml/nodeSchema
