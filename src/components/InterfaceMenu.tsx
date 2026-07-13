@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTheme } from '../ui/theme';
 import { useLang, useT } from '../ui/i18n';
-import { Icon } from '../ui/icons';
 import { SlideToggle } from './SlideToggle';
 import { MenuBrandHeader } from './MenuBrandHeader';
+import { MenuToggleIcon } from './MenuToggleIcon';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Menu tối giản chỉ gồm cài đặt giao diện (ngôn ngữ + theme). Dùng cho màn login
@@ -44,7 +44,7 @@ export function InterfaceMenu() {
         aria-label={t('menu')}
         title={t('menu')}
       >
-        <Icon icon="line-md:close-to-menu-transition" width={22} height={22} />
+        <MenuToggleIcon open={open} />
       </button>
 
       {render && (
