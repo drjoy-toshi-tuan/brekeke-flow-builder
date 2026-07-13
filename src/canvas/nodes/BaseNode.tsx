@@ -30,6 +30,7 @@ export function makeNode(nodeType: NodeType) {
     const handles = d.sourceHandles;
     const selectNode = useFlowStore((s) => s.selectNode);
     const requestDeleteNode = useFlowStore((s) => s.requestDeleteNode);
+    const duplicateNode = useFlowStore((s) => s.duplicateNode);
     const isPanning = useFlowStore((s) => s.isPanning);
     // Số node đang chọn: khi chọn NHIỀU node (kéo khung / Shift-click) thì KHÔNG hiện
     // thanh Sửa/Xoá trên từng node — chỉ đơn thuần là chọn. Chỉ hiện khi chọn đúng 1 node.
@@ -88,6 +89,21 @@ export function makeNode(nodeType: NodeType) {
           align="center"
         >
           <div className="bk-node-toolbar">
+            {/* Duplicate: chỉ hiện cho node nhân bản được (Start là duy nhất -> ẩn). */}
+            {nodeType !== 'start' && (
+              <>
+                <button
+                  type="button"
+                  className="bk-node-toolbar-btn"
+                  onClick={() => duplicateNode(id)}
+                  title={t('duplicateNodeTitle')}
+                >
+                  <Icon icon="lucide:copy" width={14} height={14} />
+                  <span>{t('duplicate')}</span>
+                </button>
+                <span className="bk-node-toolbar-sep" />
+              </>
+            )}
             <button
               type="button"
               className="bk-node-toolbar-btn"

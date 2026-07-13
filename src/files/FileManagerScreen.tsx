@@ -22,6 +22,7 @@ import { useFlowStore } from '../store/flowStore';
 import { useFileStore } from '../store/fileStore';
 import { useT, type TKey } from '../ui/i18n';
 import { Icon } from '../ui/icons';
+import { FlowGlyph } from '../ui/FlowGlyph';
 import { BrandLockup } from '../ui/BrandLockup';
 
 // File kèm metadata đọc từ header YAML (để hiển thị theo cột).
@@ -76,6 +77,25 @@ function isValidFlowYaml(text: string): boolean {
   } catch {
     return false;
   }
+}
+
+// Cấu trúc flow cạnh tên kịch bản: logo Main Flow (luôn 1) | logo Sub Flow · số
+// lượng sub flow. Main & Sub ngăn cách bằng dấu gạch đứng. Dùng logo đồng bộ toàn app.
+function FlowStructureBadge({ subflowCount }: { subflowCount: number }) {
+  const t = useT();
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-[var(--bk-text-muted)]">
+      <span className="flex items-center gap-1" title={t('mainFlowBadge')}>
+        <FlowGlyph isMain size={15} />
+        <span>1</span>
+      </span>
+      <span aria-hidden className="h-3.5 w-px bg-[var(--bk-border)]" />
+      <span className="flex items-center gap-1" title={t('subFlowBadge')}>
+        <FlowGlyph isMain={false} size={15} />
+        <span>{subflowCount}</span>
+      </span>
+    </span>
+  );
 }
 
 export function FileManagerScreen() {
@@ -638,15 +658,19 @@ export function FileManagerScreen() {
                     >
                       <td className={`${cell} text-[var(--bk-text-muted)]`}>{file.meta.facility ?? '—'}</td>
                       <td className={cell}>
-                        <button
-                          type="button"
-                          onClick={() => void handleOpen(file)}
-                          disabled={busy}
-                          className="flex items-center gap-2 text-left font-medium text-[var(--bk-text)] transition hover:text-[var(--bk-accent)] disabled:opacity-60"
-                        >
-                          <Icon icon="lucide:file-text" width={16} height={16} className="shrink-0 text-[var(--bk-accent)]" />
-                          <span className="truncate">{file.meta.name ?? stripExt(file.name)}</span>
-                        </button>
+                        <div className="flex items-center gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => void handleOpen(file)}
+                            disabled={busy}
+                            className="flex min-w-0 items-center gap-2 text-left font-medium text-[var(--bk-text)] transition hover:text-[var(--bk-accent)] disabled:opacity-60"
+                          >
+                            <Icon icon="lucide:file-text" width={16} height={16} className="shrink-0 text-[var(--bk-accent)]" />
+                            <span className="truncate">{file.meta.name ?? stripExt(file.name)}</span>
+                          </button>
+                          {/* Cấu trúc flow: Main Flow (luôn có 1) | Sub Flow · số lượng. */}
+                          <FlowStructureBadge subflowCount={file.meta.subflowCount ?? 0} />
+                        </div>
                       </td>
                       <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>
                         {file.meta.createdAt ?? '—'}

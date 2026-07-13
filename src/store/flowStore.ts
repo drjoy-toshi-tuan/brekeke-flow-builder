@@ -96,6 +96,15 @@ interface FlowState {
   addNode: (type: NodeType, position: { x: number; y: number }) => string;
   // Xoá 1 module (node) + mọi dây nối tới/từ nó.
   removeNode: (id: string) => void;
+  // Nhân bản 1 node (menu Duplicate): tạo bản sao cạnh node gốc, tên "<gốc>_<số>"
+  // duy nhất trong flow, rồi chọn node mới (mở panel). Không nhân bản node Start.
+  duplicateNode: (id: string) => void;
+
+  // Clipboard node cho Ctrl+C / Ctrl+V. copyNodes chụp các node đang chọn; pasteNodes
+  // dán ra bản sao (id + tên mới, lệch vị trí). Sống trong store để giữ qua re-render.
+  clipboard: NodeClipboardItem[] | null;
+  copyNodes: (ids: string[]) => void;
+  pasteNodes: () => void;
 
   // Xoá node có xác nhận: nút "Xoá" chỉ đặt pendingDelete -> modal hỏi lại;
   // confirm mới thực sự removeNode, cancel thì bỏ ý định.
@@ -148,6 +157,36 @@ function draftFromNode(node: FlowNode): NodeDraft {
 
 // Số bước Undo tối đa giữ trong bộ nhớ.
 const HISTORY_LIMIT = 50;
+
+// Bỏ hậu tố "_<số>" ở cuối tên node để lấy phần gốc (stem). "Announce_3" -> "Announce".
+function labelStem(label: string): string {
+  const m = label.match(/^(.*)_\d+$/);
+  return m ? m[1] : label;
+}
+
+// Tên node DUY NHẤT trong 1 flow theo mẫu "<stem>_<k>" (k nhỏ nhất >= 1 chưa dùng).
+// Dùng cho tên mặc định khi thêm node mới và khi nhân bản (duplicate).
+function uniqueLabel(stem: string, taken: Set<string>): string {
+  let k = 1;
+  while (taken.has(`${stem}_${k}`)) k++;
+  return `${stem}_${k}`;
+}
+
+// id node duy nhất theo loại: "<type>_<i>" (i nhỏ nhất >= 1 chưa dùng).
+function uniqueId(type: string, taken: Set<string>): string {
+  let i = 1;
+  let id = `${type}_${i}`;
+  while (taken.has(id)) id = `${type}_${++i}`;
+  return id;
+}
+
+// Ảnh chụp 1 node để copy/paste (Ctrl+C/V) — không giữ id (paste sinh id mới).
+export interface NodeClipboardItem {
+  type: NodeType;
+  label: string;
+  data: Record<string, unknown>;
+  position: { x: number; y: number };
+}
 
 // Slug id cho sub flow (suy từ tên, bảo đảm khác rỗng).
 function slugifyName(name: string): string {
@@ -464,15 +503,14 @@ export const useFlowStore = create<FlowState>((set, get) => {
       if (type === 'start' && (activeFlowId !== 'main' || ir.nodes.some((n) => n.type === 'start')))
         return '';
       // id duy nhất theo loại: announce_1, announce_2, …
-      const existing = new Set(ir.nodes.map((n) => n.id));
-      let i = 1;
-      let id = `${type}_${i}`;
-      while (existing.has(id)) id = `${type}_${++i}`;
+      const id = uniqueId(type, new Set(ir.nodes.map((n) => n.id)));
+      // Tên mặc định "<Tên loại node>_<số>" (bắt đầu từ 1), duy nhất trong flow.
+      const label = uniqueLabel(NODE_CONFIG[type].typeLabel, new Set(ir.nodes.map((n) => n.label)));
 
       const node: FlowNode = {
         id,
         type,
-        label: `${NODE_CONFIG[type].typeLabel} ${i}`,
+        label,
         position,
         // Tham số + nhánh mặc định theo loại node (xem nodeSchema.defaultDataFor).
         data: defaultDataFor(type),
@@ -508,6 +546,84 @@ export const useFlowStore = create<FlowState>((set, get) => {
         draft: closing ? null : get().draft,
         pendingSelect: closing ? null : get().pendingSelect,
         pendingDelete: null,
+      });
+    },
+
+    duplicateNode: (id) => {
+      const { ir } = get();
+      if (!ir) return;
+      const src = ir.nodes.find((n) => n.id === id);
+      // Start là điểm bắt đầu duy nhất -> không nhân bản.
+      if (!src || src.type === 'start') return;
+      const newId = uniqueId(src.type, new Set(ir.nodes.map((n) => n.id)));
+      const newLabel = uniqueLabel(labelStem(src.label), new Set(ir.nodes.map((n) => n.label)));
+      const node: FlowNode = {
+        id: newId,
+        type: src.type,
+        label: newLabel,
+        // Lệch nhẹ để bản sao không đè đúng node gốc.
+        position: { x: src.position.x + 40, y: src.position.y + 40 },
+        data: JSON.parse(JSON.stringify(src.data)) as Record<string, unknown>,
+      };
+      set({
+        ...snapshot(),
+        ir: {
+          ...ir,
+          meta: { ...ir.meta, updatedAt: new Date().toISOString() },
+          nodes: [...ir.nodes, node],
+        },
+        // Chọn node mới (mở panel) để sửa/đổi tên ngay, giống khi thêm node.
+        selectedNodeId: newId,
+        draft: draftFromNode(node),
+        pendingSelect: null,
+      });
+    },
+
+    clipboard: null,
+    copyNodes: (ids) => {
+      const { ir } = get();
+      if (!ir) return;
+      const items: NodeClipboardItem[] = ids
+        .map((id) => ir.nodes.find((n) => n.id === id))
+        .filter((n): n is FlowNode => !!n)
+        .map((n) => ({
+          type: n.type,
+          label: n.label,
+          data: JSON.parse(JSON.stringify(n.data)) as Record<string, unknown>,
+          position: { ...n.position },
+        }));
+      if (items.length > 0) set({ clipboard: items });
+    },
+
+    pasteNodes: () => {
+      const { ir, clipboard } = get();
+      if (!ir || !clipboard || clipboard.length === 0) return;
+      const usedIds = new Set(ir.nodes.map((n) => n.id));
+      const usedLabels = new Set(ir.nodes.map((n) => n.label));
+      const added: FlowNode[] = [];
+      for (const item of clipboard) {
+        // Start duy nhất & chỉ ở main flow -> bỏ qua khi dán nếu đã có Start.
+        if (item.type === 'start' && ir.nodes.some((n) => n.type === 'start')) continue;
+        const id = uniqueId(item.type, usedIds);
+        usedIds.add(id);
+        const label = uniqueLabel(labelStem(item.label), usedLabels);
+        usedLabels.add(label);
+        added.push({
+          id,
+          type: item.type,
+          label,
+          position: { x: item.position.x + 40, y: item.position.y + 40 },
+          data: JSON.parse(JSON.stringify(item.data)) as Record<string, unknown>,
+        });
+      }
+      if (added.length === 0) return;
+      set({
+        ...snapshot(),
+        ir: {
+          ...ir,
+          meta: { ...ir.meta, updatedAt: new Date().toISOString() },
+          nodes: [...ir.nodes, ...added],
+        },
       });
     },
 

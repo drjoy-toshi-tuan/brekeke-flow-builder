@@ -55,6 +55,8 @@ export function FlowCanvas() {
   const removeEdge = useFlowStore((s) => s.removeEdge);
   const setPanning = useFlowStore((s) => s.setPanning);
   const selectNode = useFlowStore((s) => s.selectNode);
+  const copyNodes = useFlowStore((s) => s.copyNodes);
+  const pasteNodes = useFlowStore((s) => s.pasteNodes);
   const undo = useFlowStore((s) => s.undo);
   const redo = useFlowStore((s) => s.redo);
   const canUndo = useFlowStore((s) => s.past.length > 0);
@@ -121,6 +123,29 @@ export function FlowCanvas() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [undo, redo]);
+
+  // Ctrl/⌘ + C: copy node đang chọn · Ctrl/⌘ + V: dán (nhân bản). Bỏ qua khi đang
+  // gõ trong ô nhập để không cướp copy/paste text. Đọc node đang chọn từ RF store.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      const key = e.key.toLowerCase();
+      if (key === 'c') {
+        const ids = [...store.getState().nodeLookup.values()].filter((n) => n.selected).map((n) => n.id);
+        if (ids.length === 0) return;
+        e.preventDefault();
+        copyNodes(ids);
+      } else if (key === 'v') {
+        if (!useFlowStore.getState().clipboard?.length) return;
+        e.preventDefault();
+        pasteNodes();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [store, copyNodes, pasteNodes]);
 
   // Kéo xong 1 node -> commit vị trí vào IR (để auto-layout/re-derive không mất chỗ).
   const onNodeDragStop = useCallback(() => {

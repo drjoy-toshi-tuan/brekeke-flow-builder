@@ -9,6 +9,7 @@ import {
 } from '../ai/context';
 import { useT } from '../ui/i18n';
 import { Icon } from '../ui/icons';
+import { FlowGlyph } from '../ui/FlowGlyph';
 import { AiSparkleIcon } from './AiSparkleIcon';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -167,13 +168,10 @@ export function AiGenerateModal({ kind, nodeId, current, onGenerate, onClose }: 
   );
 }
 
-// Icon Main/Sub flow — cùng bộ với panel cài đặt flow (FlowsPanel).
-const FLOW_ICON_MAIN = 'tabler:square-rounded-letter-m-filled';
-const FLOW_ICON_SUB = 'tabler:square-rounded-letter-s-filled';
-
 // Bộ chọn node câu hỏi. Native <select> không render được icon, nên tự vẽ dropdown:
 //   - Option "không chọn" -> chỉ 1 dấu gạch "—".
-//   - Các option khác -> tên node + icon Main/Sub flow (bỏ text "— <flow>").
+//   - Các option khác -> tên node + logo Main/Sub flow NẰM SÁT text (không dạt rìa
+//     phải): text ngắn thì logo gần text, text dài thì cắt "…" và logo về sát chevron.
 function QuestionNodeSelect({
   candidates,
   value,
@@ -202,20 +200,17 @@ function QuestionNodeSelect({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-3 py-2 text-left text-sm text-[var(--bk-text)] outline-none transition focus:border-[var(--bk-accent)]"
+        className="flex w-full items-center rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-3 py-2 text-left text-sm text-[var(--bk-text)] outline-none transition focus:border-[var(--bk-accent)]"
         aria-haspopup="listbox"
         aria-expanded={open}
       >
         {selected ? (
-          <>
-            <span className="min-w-0 flex-1 truncate">{selected.label}</span>
-            <Icon
-              icon={selected.isMain ? FLOW_ICON_MAIN : FLOW_ICON_SUB}
-              width={16}
-              height={16}
-              className="shrink-0 text-[var(--bk-text-muted)]"
-            />
-          </>
+          // Wrapper flex-1 để logo bám ngay sau text: text ngắn -> logo gần text
+          // (phần trống dồn về phải); text dài -> text cắt "…" và logo dạt sát chevron.
+          <span className="flex min-w-0 flex-1 items-center gap-1.5 pr-2">
+            <span className="min-w-0 truncate">{selected.label}</span>
+            <FlowGlyph isMain={selected.isMain} />
+          </span>
         ) : (
           <span className="flex-1 text-[var(--bk-text-muted)]">—</span>
         )}
@@ -252,18 +247,14 @@ function QuestionNodeSelect({
                 onChange(c.id);
                 setOpen(false);
               }}
-              className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm transition hover:bg-[var(--bk-surface-2)] ${
+              className={`flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-sm transition hover:bg-[var(--bk-surface-2)] ${
                 value === c.id ? 'bg-[var(--bk-accent-soft)] font-semibold text-[var(--bk-accent)]' : 'text-[var(--bk-text)]'
               }`}
               title={`${c.label} · ${c.flowName}`}
             >
-              <span className="min-w-0 flex-1 truncate">{c.label}</span>
-              <Icon
-                icon={c.isMain ? FLOW_ICON_MAIN : FLOW_ICON_SUB}
-                width={16}
-                height={16}
-                className={`shrink-0 ${value === c.id ? 'text-[var(--bk-accent)]' : 'text-[var(--bk-text-muted)]'}`}
-              />
+              {/* Logo bám sát text (không dạt rìa phải). */}
+              <span className="min-w-0 truncate">{c.label}</span>
+              <FlowGlyph isMain={c.isMain} className="ml-1.5" />
             </button>
           ))}
         </div>
