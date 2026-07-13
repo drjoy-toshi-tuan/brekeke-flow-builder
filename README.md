@@ -1,28 +1,53 @@
-# AI電話 Flow Builder — Phase 1 (UI demo)
+# AI電話 Flow Builder
 
 Webapp visualize flow của hệ thống **AI電話** (Brekeke-based) dưới dạng sơ đồ node giống
 [n8n](https://n8n.io), đọc/ghi từ file YAML. **IR** (Intermediate Representation) là source
-of truth duy nhất; YAML chỉ là adapter import/export.
+of truth duy nhất; YAML chỉ là adapter import/export quanh IR.
 
-> Phase 1 tập trung **test UI online trên GitHub Pages**, có đăng nhập Google giới hạn
-> domain `drjoy.jp`. Chưa sinh `.bivr`, chưa có AI, chưa có backend.
+> App là **static site chạy trên GitHub Pages, không có backend**. Đăng nhập Google giới hạn
+> domain `drjoy.jp` (cổng UX + siết claim ở client). Chưa sinh `.bivr`, chưa có database/lưu server.
+> Có sẵn tính năng **AI sinh/sửa script & prompt** (OpenAI) gọi thẳng từ trình duyệt.
 
-![node types](https://img.shields.io/badge/nodes-9%20types-blue) ![phase](https://img.shields.io/badge/phase-1%20(UI%20demo)-green)
+![node types](https://img.shields.io/badge/nodes-11%20types-blue) ![i18n](https://img.shields.io/badge/i18n-VI%20%2F%20JA-orange) ![theme](https://img.shields.io/badge/theme-light%20%2F%20dark-lightgrey)
 
 ---
 
-## Tính năng phase 1
+## Tính năng
 
 - 📥 Đọc YAML flow → **IR** → **auto-layout** (top-down, thuật toán cây tự viết) → canvas React Flow.
 - 🖱️ Kéo-thả node, chọn nhiều node (rê vùng), zoom/pan, minimap, fit-view.
 - 🔌 Nối dây (kéo từ output → input), **xoá dây** bằng icon 🗑 hiện khi hover.
-- ✏️ **Double-click node** mở panel sửa `label` và các field trong `data`.
-- 📤 **Export YAML** (round-trip IR ↔ YAML) để kiểm chứng.
+- ➕ **Thêm node** từ palette; ✏️ **double-click node** mở panel sửa `label`, mô tả và tham số (`data`)
+  theo từng loại — chia tab **General / Property / Branch**.
+- 🌿 **Sub Flow** trong cùng file: node **Jump** trỏ tới sub flow theo tên; xử lý xong quay lại main flow.
+- 🤖 **AI sinh/sửa** (OpenAI): nút *AIで生成・修正* trong node **Logic** (script JS) và **OpenAI** (prompt),
+  kèm **giải thích script** tự động (lưu vào file, mở lại không cần gen lại).
+- ⚙️ **IVR Property**: panel read-only sinh cấu hình IVR (施設名, Office ID, môi trường Demo/Master,
+  TTS/STT engine) liên động với các câu announce trong flow.
+- 📤 **Export YAML** (round-trip IR ↔ YAML) và 💾 **lưu thẳng về repo** qua GitHub API.
 - 🔐 Đăng nhập Google, chỉ tài khoản `@drjoy.jp` — verify claim kỹ + nonce (xem [Bảo mật](#-bảo-mật)).
-- 📁 **Quản lý file YAML** trên repo: mở / tải lên / tạo / lưu về `flows/` qua GitHub API.
+- 📁 **Quản lý file YAML** trên repo: mở / tải lên / tạo / xoá / lưu về `flows/` qua GitHub Contents API.
+- 🌐 **Đa ngôn ngữ** giao diện: Tiếng Việt / 日本語. 🎨 **Giao diện sáng/tối**.
 - 🚀 Deploy GitHub Pages qua GitHub Actions.
 
-9 loại node: `start · announce · input · condition · script · llm · transfer · hangup · end`.
+### 11 loại node
+
+| Type | Nhãn | Vai trò |
+|------|------|---------|
+| `start` | Start | Điểm bắt đầu flow (node tổng hợp từ `flow.start`) |
+| `announce` | Announce | Phát TTS / audio |
+| `interaction` | Interaction | Thu DTMF hoặc STT (tên cũ: `input`) |
+| `nexus` | Nexus | Phân nhánh theo điều kiện (tên cũ: `condition`) |
+| `logic` | Logic | Module logic / script JavaScript (tên cũ: `script`) |
+| `openai` | OpenAI | Gọi OpenAI / LLM (tên cũ: `llm`) |
+| `faq` | FAQ | Hỏi–đáp (FAQ) |
+| `transfer` | Transfer | Chuyển máy |
+| `save` | Save | Lưu dữ liệu — module Flag / Save Data 2 Dr.JOY (tên cũ: `flag`) |
+| `jump` | Jump | Nhảy sang sub flow khác |
+| `hangup` | Hangup | Kết thúc / cúp máy |
+
+> Tên type cũ (`input · condition · script · llm · flag`) **vẫn mở được** nhờ `LEGACY_TYPE_ALIASES`
+> trong [`src/ir/types.ts`](src/ir/types.ts).
 
 ---
 
@@ -36,31 +61,41 @@ npm run dev        # mở http://localhost:5173
 Sau khi đăng nhập, chọn/tải file từ màn **Quản lý file YAML** (xem [§Quản lý file YAML](#-quản-lý-file-yaml-github))
 để mở trên canvas. File mẫu có sẵn trong [`flows/`](flows/).
 
-> **Chế độ demo (chỉ khi chạy `npm run dev`):** nếu chưa set `VITE_GOOGLE_CLIENT_ID`, màn login
+> **Chế độ demo (mặc định khi chạy `npm run dev`):** nếu chưa set `VITE_GOOGLE_CLIENT_ID`, màn login
 > có nút **“Vào chế độ demo (bỏ qua đăng nhập)”** để xem UI ngay. **Bản build/deploy TẮT demo**
 > → luôn bắt đăng nhập Google (muốn bật demo trên bản build phải đặt `VITE_ALLOW_DEMO=true`).
-> (Vẫn cần GitHub token để đọc/ghi file YAML.)
+> (Vẫn cần GitHub token để đọc/ghi file YAML; cần `VITE_OPENAI_API_KEY` để dùng tính năng AI.)
 
 Các lệnh khác:
 
 ```bash
 npm run build      # tsc -b && vite build  -> dist/
 npm run preview    # xem thử bản build
-npm test           # unit test cho fromYaml / toYaml (round-trip)
+npm test           # vitest run — unit test cho fromYaml/toYaml, verifyIdToken, github API, icon…
+npm run test:watch # vitest ở chế độ watch
 ```
 
 ---
 
 ## Biến môi trường
 
-Tạo `.env` (xem `.env.example`):
+Tạo `.env` / `.env.local` (xem [`.env.example`](.env.example)):
 
-```
-VITE_GOOGLE_CLIENT_ID=xxxxxxxx.apps.googleusercontent.com
-```
+| Biến | Bắt buộc | Ý nghĩa |
+|------|:--------:|---------|
+| `VITE_GOOGLE_CLIENT_ID` | ✅¹ | Google OAuth 2.0 Client ID (Web). **Không phải secret** — an toàn trong bundle SPA. |
+| `VITE_OPENAI_API_KEY` | – | API key OpenAI cho tính năng AI. ⚠ App không backend nên key **sẽ nằm trong bundle tĩnh** — chỉ dùng key nội bộ/hạn mức thấp. |
+| `VITE_OPENAI_MODEL` | – | Model OpenAI, mặc định `gpt-5.1` (xem [`src/ai/config.ts`](src/ai/config.ts)). |
+| `VITE_ALLOW_DEMO` | – | `true` để bật chế độ demo trên bản build (mặc định chỉ bật khi `npm run dev`). |
+| `VITE_SESSION_IDLE_MINUTES` | – | Thời hạn phiên theo cửa sổ idle trượt (phút), mặc định `720` (12 giờ). |
+| `VITE_GITHUB_OWNER` / `VITE_GITHUB_REPO` | – | Repo chứa YAML, mặc định `drjoy-toshi-tuan/brekeke-flow-builder`. |
+| `VITE_FLOWS_BRANCH` / `VITE_FLOWS_DIR` | – | Nhánh & thư mục chứa YAML, mặc định `main` / `flows`. |
 
-Client ID **không phải secret** — an toàn để nằm trong bundle SPA. **Không** dùng client
-secret cho SPA.
+> ¹ Không có Client ID thì chỉ vào được chế độ demo (local). Bản deploy production **bắt buộc** có.
+> Client ID **không** dùng client secret cho SPA.
+
+> **OpenAI key** ngoài `VITE_OPENAI_API_KEY` còn có thể nhập tay lưu `localStorage` (`bk-openai-key`).
+> Thứ tự ưu tiên: env → localStorage → hardcoded (xem [`src/ai/config.ts`](src/ai/config.ts)).
 
 ---
 
@@ -80,16 +115,56 @@ Claude Code không làm được các bước này — bạn (Tuan) cần tự l
 ## Deploy GitHub Pages
 
 1. **Bật Pages:** repo → **Settings → Pages → Build and deployment → Source: GitHub Actions**.
-2. **Thêm Client ID:** repo → **Settings → Secrets and variables → Actions**
+2. **Thêm Client ID & (tuỳ chọn) OpenAI key:** repo → **Settings → Secrets and variables → Actions**
    - Vào tab **Secrets** (hoặc **Variables** đều được — workflow đọc cả hai) → **New**
-   - Name: `VITE_GOOGLE_CLIENT_ID`
-   - Value: Client ID ở trên.
-   - ⚠️ Sau khi thêm phải **chạy lại deploy** (push `main` hoặc **Actions → Deploy → Run workflow**)
-     thì bản build mới có Client ID. Nếu thiếu, màn login sẽ báo *"Chưa cấu hình đăng nhập Google"*.
-3. **Push `main`** → workflow `.github/workflows/deploy.yml` build & deploy.
+   - `VITE_GOOGLE_CLIENT_ID` = Client ID ở trên.
+   - `VITE_OPENAI_API_KEY` (tuỳ chọn) = API key OpenAI để bật AI trên bản deploy.
+   - ⚠️ Phải đặt ở **Repository** secret/variable (KHÔNG phải Environment secret của môi trường
+     `github-pages` — job build không đọc được). Sau khi thêm phải **chạy lại deploy** (push `main`
+     hoặc **Actions → Deploy → Run workflow**). Thiếu Client ID → màn login báo
+     *"Chưa cấu hình đăng nhập Google"*.
+3. **Push `main`** → workflow [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) build & deploy
+   (có bước log kiểm tra biến build không lộ giá trị, và tự thử lại deploy khi Pages lỗi tạm thời).
 4. URL: `https://drjoy-toshi-tuan.github.io/brekeke-flow-builder/`
 
 > `vite.config.ts` đã set `base: '/brekeke-flow-builder/'` khớp tên repo.
+
+---
+
+## 🤖 Tính năng AI (OpenAI)
+
+Gọi thẳng **OpenAI Chat Completions API** từ trình duyệt (không backend). Dùng ở 2 chỗ:
+
+- **AIで生成・修正** — nút trong node **Logic** (sinh/sửa *script* JavaScript) và node **OpenAI**
+  (sinh/sửa *prompt*). Modal dựng bối cảnh (`#Role` → `#Scenario Flow Context` → `#Question Context`
+  tự fill từ câu announce liên quan) rồi để field tự gõ kết quả vào ô code/prompt.
+- **Giải thích script** — sau khi lưu node Logic, chạy nền để làm mới `data.scriptExplanation`
+  (lưu theo file YAML, mở lại không cần gen lại).
+
+Cấu hình ở [`src/ai/config.ts`](src/ai/config.ts): model mặc định `gpt-5.1` (reasoning model nên client
+tự bỏ `temperature`). Không có key → nút AI vẫn hiện nhưng báo lỗi thiếu key khi bấm; giải thích nền
+bỏ qua im lặng. Có sẵn vài **sample module** JS trong [`src/ai/samples/`](src/ai/samples/) làm ngữ cảnh.
+
+---
+
+## ⚙️ IVR Property
+
+Panel **read-only** ([`src/ir/ivrProperty.ts`](src/ir/ivrProperty.ts), hàm thuần) sinh nội dung cấu hình
+IVR từ IR + form cài đặt. Liên động:
+
+- 施設名 / Office ID / môi trường **Demo** hoặc **Master** (đổi host & service URL).
+- **TTS engine** (Amivoice → token `{tts_g:…}` / AI Talk → `{tts_ai:…}`).
+- **STT engine** (Amivoice → khối `# Amivoice` / Soniox → `# Soniox`).
+- Các dòng `*.prompt=` sinh từ câu announce của node `announce` / `interaction` / `openai` trong flow.
+
+---
+
+## 🌐 Ngôn ngữ & giao diện
+
+- **i18n** tối giản, không thêm thư viện ([`src/ui/i18n.ts`](src/ui/i18n.ts)): store zustand giữ ngôn
+  ngữ + từ điển **VI / JA** (cùng bộ key), lưu `localStorage` (`bk-lang`). Đổi ngôn ngữ trong menu →
+  cả node trên canvas cũng re-render.
+- **Theme** sáng/tối đổi trong menu ([`src/ui/theme.ts`](src/ui/theme.ts)).
 
 ---
 
@@ -166,9 +241,6 @@ liên tục quá thời hạn** (mặc định **12 giờ**, đổi qua `VITE_SE
 tách khỏi `exp` của token Google — hợp lý vì gating domain ở client chỉ là **cổng UX** (khi có
 dữ liệu thật, verify server-side mới là ranh giới bảo mật thật, xem trên).
 
-Cấu hình repo/nhánh/thư mục qua biến `VITE_GITHUB_OWNER` / `VITE_GITHUB_REPO` /
-`VITE_FLOWS_BRANCH` / `VITE_FLOWS_DIR` (xem `.env.example`).
-
 ---
 
 ## Kiến trúc
@@ -180,5 +252,19 @@ render từ IR; `irAdapter.ts` là 2 hàm thuần IR ↔ React Flow.
 YAML ──fromYaml──► IR ──layout(cây)──► IR(+position) ──irToReactFlow──► Canvas
                     ▲                                                      │
                     └──────────── reactFlowToIr / store actions ◄──────────┘
-IR ──toYaml──► YAML (Export)
+IR ──toYaml──► YAML (Export / Lưu về repo)
+```
+
+Bố cục thư mục `src/` (chi tiết trong [`CLAUDE.md`](CLAUDE.md)):
+
+```
+ir/         # thuần TS — types (SOURCE OF TRUTH), fromYaml, toYaml, layout, ivrProperty, flowMeta
+canvas/     # React Flow — FlowCanvas, irAdapter, nodes/, edges/
+auth/       # AuthProvider, useAuth, config (ALLOWED_DOMAIN), LoginScreen, verifyIdToken, nonce
+github/     # config + Contents API (thuần fetch), token store (localStorage), errors
+files/      # FileManagerScreen, GithubConnectPanel (màn quản lý YAML trước canvas)
+ai/         # OpenAI client, context builder, explain, knowledge, samples/ (module JS mẫu)
+store/      # zustand: flowStore (FlowIR + actions), fileStore (file đang mở / routing)
+components/ # Toolbar, NodeSettingsPanel, HeaderMenu, AddModulePanel, AiGenerateModal, IvrPropertyModal…
+ui/         # i18n (VI/JA), theme, icons, nodeConfig, nodeSchema, scriptLint, Toast…
 ```
