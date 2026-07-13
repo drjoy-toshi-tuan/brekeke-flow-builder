@@ -163,6 +163,48 @@ describe('Template (Interaction) khoá tham số', () => {
   });
 });
 
+// Node ở nhánh retry (failed) của Interaction nối VÒNG về lại Interaction = dùng
+// chung phần retry với Interaction. YAML "hiểu" điều này qua chính dây vòng (edge
+// tới id của Interaction) — không cần schema riêng; phải round-trip nguyên vẹn.
+describe('retry loop: node nhánh failed nối vòng về Interaction', () => {
+  const LOOP = `
+flow:
+  name: "f"
+  start: ask
+  nodes:
+    - id: ask
+      type: interaction
+      announce: "ご用件は？"
+      retryCount: "2"
+      retryAnnounce: "もう一度お願いします"
+      next: done
+      failed: retry_note
+    - id: retry_note
+      type: announce
+      text: "確認できませんでした"
+      next: ask
+    - id: done
+      type: hangup
+`;
+
+  it('fromYaml dựng dây vòng: failed -> retry_note -> (next) ask', () => {
+    const ir = fromYaml(LOOP);
+    const failed = ir.edges.find((e) => e.source === 'ask' && e.sourceHandle === 'failed');
+    expect(failed?.target).toBe('retry_note');
+    const back = ir.edges.find((e) => e.source === 'retry_note');
+    expect(back?.target).toBe('ask'); // nối vòng về lại Interaction
+  });
+
+  it('toYaml giữ nguyên dây vòng qua round-trip', () => {
+    const reopened = fromYaml(toYaml(fromYaml(LOOP)));
+    const ask = reopened.nodes.find((n) => n.id === 'ask')!;
+    // Interaction giữ retryCount/retryAnnounce (phần retry dùng chung).
+    expect(ask.data.retryCount).toBe('2');
+    expect(reopened.edges.find((e) => e.source === 'ask' && e.sourceHandle === 'failed')?.target).toBe('retry_note');
+    expect(reopened.edges.find((e) => e.source === 'retry_note')?.target).toBe('ask');
+  });
+});
+
 describe('toYaml round-trip', () => {
   it('giữ TOẠ ĐỘ node (position) qua save/reopen — không auto-layout lại', () => {
     const withPos = `
