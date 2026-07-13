@@ -6,6 +6,7 @@ import { useLang, useT } from '../ui/i18n';
 import { Icon } from '../ui/icons';
 import { SlideToggle } from '../components/SlideToggle';
 import { MenuBrandHeader } from '../components/MenuBrandHeader';
+import { MenuToggleIcon } from '../components/MenuToggleIcon';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Menu dọc cho màn Quản lý file (giống HeaderMenu ở canvas: nút icon -> panel
@@ -51,7 +52,7 @@ export function FileManagerMenu() {
         aria-label={t('menu')}
         title={t('menu')}
       >
-        <Icon icon="line-md:close-to-menu-transition" width={22} height={22} />
+        <MenuToggleIcon open={open} />
       </button>
 
       {render && (
