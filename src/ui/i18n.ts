@@ -126,6 +126,18 @@ const DICT: Record<Lang, Record<string, string>> = {
     deptOutputPh: 'Tên output',
     // ── Logic: Date Of Call Classifier ──
     fCompareTime: 'Mốc thời gian để so sánh',
+    // ── Logic: Phone Normalization ──
+    fMode: 'Mode',
+    pnModeIncoming: 'Incoming Check',
+    pnModeReconfirm: 'Re-confirm',
+    fPhoneReadingMode: 'Kiểu đọc',
+    prmAll: 'Toàn bộ số',
+    prmLast4: '4 số cuối',
+    // ── Logic: DOB Re-confirmation ──
+    fDateReadingMode: 'Kiểu đọc',
+    drmAuto: 'Tự động',
+    drmWestern: 'Lịch tây',
+    drmJapanese: 'Lịch Nhật',
     // ── searchSelect ──
     searchSelectPlaceholder: 'Chọn hoặc gõ để lọc…',
     searchSelectEmpty: 'Không có lựa chọn',
@@ -425,6 +437,18 @@ const DICT: Record<Lang, Record<string, string>> = {
     deptOutputPh: 'アウトプット名',
     // ── Logic: Date Of Call Classifier ──
     fCompareTime: '比較時点',
+    // ── Logic: Phone Normalization ──
+    fMode: 'モード',
+    pnModeIncoming: '着信番号確認',
+    pnModeReconfirm: '復唱',
+    fPhoneReadingMode: '読み上げモード',
+    prmAll: '全桁',
+    prmLast4: '下4桁',
+    // ── Logic: DOB Re-confirmation ──
+    fDateReadingMode: '生年読み上げモード',
+    drmAuto: '自動',
+    drmWestern: '西暦',
+    drmJapanese: '和暦',
     // ── searchSelect ──
     searchSelectPlaceholder: '選択または入力で絞り込み…',
     searchSelectEmpty: '候補がありません',

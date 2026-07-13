@@ -19,7 +19,10 @@ import {
   LOGIC_MODULE_DOCC,
   LOGIC_MODULE_CDEPT,
   LOGIC_MODULE_NULLCHECK,
+  LOGIC_MODULE_PHONE_NORM,
+  LOGIC_MODULE_DOB_RECONFIRM,
   NULL_CHECK_FIXED_BRANCHES,
+  INVALID_SUCCESS_FIXED_BRANCHES,
   clinicalDepartmentBranches,
   readClinicalDepartments,
   CATCH_ALL_ID,
@@ -803,6 +806,123 @@ flow:
     expect(out.branches).toEqual([
       { when: 'true', default: 'y', label: 'Null' },
       { when: 'false', to: 'n', label: 'Not Null' },
+    ]);
+  });
+});
+
+describe('logic module mới: Phone Normalization / DOB Re-confirmation', () => {
+  it('bộ nhánh CỐ ĐỊNH INVALID (else, trên cùng) + SUCCESS dùng chung cho cả 2 module', () => {
+    expect(INVALID_SUCCESS_FIXED_BRANCHES).toEqual([
+      { id: CATCH_ALL_ID, value: 'INVALID', label: 'INVALID' },
+      { id: 'b0', value: 'SUCCESS', label: 'SUCCESS' },
+    ]);
+    expect(MODULE_FIXED_BRANCHES[LOGIC_MODULE_PHONE_NORM]).toBe(INVALID_SUCCESS_FIXED_BRANCHES);
+    expect(MODULE_FIXED_BRANCHES[LOGIC_MODULE_DOB_RECONFIRM]).toBe(INVALID_SUCCESS_FIXED_BRANCHES);
+  });
+
+  it('effectiveBranches: Phone Normalization khoá cứng, bỏ qua nhánh module khác còn sót', () => {
+    const staleData = {
+      moduleType: LOGIC_MODULE_PHONE_NORM,
+      branches: [
+        { id: CATCH_ALL_ID, value: '' },
+        { id: 'b0', value: '非通知', label: 'x' },
+      ],
+    };
+    expect(effectiveBranches('logic', staleData)).toEqual([
+      { id: CATCH_ALL_ID, value: 'INVALID', label: 'INVALID' },
+      { id: 'b0', value: 'SUCCESS', label: 'SUCCESS' },
+    ]);
+  });
+
+  it('Phone Normalization round-trip YAML: mode/prompt/phoneReadingMode + INVALID/SUCCESS', () => {
+    const PN = `
+flow:
+  name: "f"
+  start: p
+  nodes:
+    - id: p
+      type: logic
+      moduleType: Phone Normalization
+      mode: "Re-confirm"
+      prompt: "電話番号を確認します"
+      module: menu
+      phoneReadingMode: "下4桁"
+      saveAdditionalPhoneNumber2DB: "yes"
+      branches:
+        - when: "INVALID"
+          default: e
+          label: "INVALID"
+        - when: "SUCCESS"
+          to: s
+          label: "SUCCESS"
+    - id: e
+      type: hangup
+    - id: s
+      type: hangup
+`;
+    const ir = fromYaml(PN);
+    const p = ir.nodes.find((n) => n.id === 'p')!;
+    expect(p.data.mode).toBe('Re-confirm');
+    expect(p.data.prompt).toBe('電話番号を確認します');
+    expect(p.data.phoneReadingMode).toBe('下4桁');
+    expect(p.data.saveAdditionalPhoneNumber2DB).toBe('yes');
+    expect(effectiveBranches(p.type, p.data)).toEqual([
+      { id: 'default', value: 'INVALID', label: 'INVALID' },
+      { id: 'b1', value: 'SUCCESS', label: 'SUCCESS' },
+    ]);
+    const parsed = parse(toYaml(ir)) as {
+      flow: { nodes: Array<{ id: string; mode?: string; phoneReadingMode?: string; branches?: Array<Record<string, string>> }> };
+    };
+    const out = parsed.flow.nodes.find((n) => n.id === 'p')!;
+    expect(out.mode).toBe('Re-confirm');
+    expect(out.phoneReadingMode).toBe('下4桁');
+    expect(out.branches).toEqual([
+      { when: 'INVALID', default: 'e', label: 'INVALID' },
+      { when: 'SUCCESS', to: 's', label: 'SUCCESS' },
+    ]);
+  });
+
+  it('DOB Re-confirmation round-trip YAML: dateReadingMode/module + INVALID/SUCCESS', () => {
+    const DOB = `
+flow:
+  name: "f"
+  start: d
+  nodes:
+    - id: d
+      type: logic
+      moduleType: DOB Re-confirmation
+      prompt: "生年月日を確認します"
+      module: dob_input
+      dateReadingMode: "和暦"
+      saveDOB2db: "no"
+      branches:
+        - when: "INVALID"
+          default: e
+          label: "INVALID"
+        - when: "SUCCESS"
+          to: s
+          label: "SUCCESS"
+    - id: e
+      type: hangup
+    - id: s
+      type: hangup
+`;
+    const ir = fromYaml(DOB);
+    const d = ir.nodes.find((n) => n.id === 'd')!;
+    expect(d.data.dateReadingMode).toBe('和暦');
+    expect(d.data.module).toBe('dob_input');
+    expect(effectiveBranches(d.type, d.data)).toEqual([
+      { id: 'default', value: 'INVALID', label: 'INVALID' },
+      { id: 'b1', value: 'SUCCESS', label: 'SUCCESS' },
+    ]);
+    const parsed = parse(toYaml(ir)) as {
+      flow: { nodes: Array<{ id: string; dateReadingMode?: string; branches?: Array<Record<string, string>> }> };
+    };
+    const out = parsed.flow.nodes.find((n) => n.id === 'd')!;
+    expect(out.dateReadingMode).toBe('和暦');
+    expect(out.branches).toEqual([
+      { when: 'INVALID', default: 'e', label: 'INVALID' },
+      { when: 'SUCCESS', to: 's', label: 'SUCCESS' },
     ]);
   });
 });

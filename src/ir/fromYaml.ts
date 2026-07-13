@@ -97,6 +97,8 @@ const LOGIC_MODULE_NAMES = new Set([
   'Date Of Call Classifier',
   'Clinical Department Classifier',
   'Null Check',
+  'Phone Normalization',
+  'DOB Re-confirmation',
 ]);
 
 function edgeId(source: string, target: string, suffix?: string): string {
