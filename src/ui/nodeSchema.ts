@@ -130,18 +130,25 @@ export const LOGIC_MODULE_DOCC = 'Date Of Call Classifier';
 export const LOGIC_MODULE_CDEPT = 'Clinical Department Classifier';
 // Null Check: kiểm tra biến/kết quả có rỗng không — 2 nhánh cố định true/false.
 export const LOGIC_MODULE_NULLCHECK = 'Null Check';
+// Phone Normalization: chuẩn hoá số điện thoại (kiểm tra số gọi đến /復唱) — 2 nhánh
+// cố định INVALID/SUCCESS.
+export const LOGIC_MODULE_PHONE_NORM = 'Phone Normalization';
+// DOB Re-confirmation: xác nhận lại ngày sinh — 2 nhánh cố định INVALID/SUCCESS.
+export const LOGIC_MODULE_DOB_RECONFIRM = 'DOB Re-confirmation';
 
 // Bộ chọn module lưu ở data.moduleType ('module' là THAM SỐ của CDC/MRB — 参照元モジュール).
 // Script đứng đầu pulldown (module mặc định, dùng thường xuyên nhất).
 const MODULE_OPTIONS: FieldOption[] = [
   { value: LOGIC_MODULE_SCRIPT, label: LOGIC_MODULE_SCRIPT },
+  { value: LOGIC_MODULE_PHONE_NORM, label: LOGIC_MODULE_PHONE_NORM },
+  { value: LOGIC_MODULE_DOB_RECONFIRM, label: LOGIC_MODULE_DOB_RECONFIRM },
   { value: LOGIC_MODULE_CDC, label: LOGIC_MODULE_CDC },
-  { value: LOGIC_MODULE_CMR, label: LOGIC_MODULE_CMR },
+  { value: LOGIC_MODULE_CDEPT, label: LOGIC_MODULE_CDEPT },
   { value: LOGIC_MODULE_MRB, label: LOGIC_MODULE_MRB },
+  { value: LOGIC_MODULE_CMR, label: LOGIC_MODULE_CMR },
+  { value: LOGIC_MODULE_NULLCHECK, label: LOGIC_MODULE_NULLCHECK },
   { value: LOGIC_MODULE_IC, label: LOGIC_MODULE_IC },
   { value: LOGIC_MODULE_DOCC, label: LOGIC_MODULE_DOCC },
-  { value: LOGIC_MODULE_CDEPT, label: LOGIC_MODULE_CDEPT },
-  { value: LOGIC_MODULE_NULLCHECK, label: LOGIC_MODULE_NULLCHECK },
 ];
 
 // Module đang chọn của node logic (mặc định Script khi chưa chọn).
@@ -160,6 +167,11 @@ const moduleIsMrb = (d: Record<string, unknown>) => logicModuleOf(d) === LOGIC_M
 const moduleIsDocc = (d: Record<string, unknown>) => logicModuleOf(d) === LOGIC_MODULE_DOCC;
 const moduleIsCdept = (d: Record<string, unknown>) => logicModuleOf(d) === LOGIC_MODULE_CDEPT;
 const moduleIsNullCheck = (d: Record<string, unknown>) => logicModuleOf(d) === LOGIC_MODULE_NULLCHECK;
+const moduleIsPhoneNorm = (d: Record<string, unknown>) => logicModuleOf(d) === LOGIC_MODULE_PHONE_NORM;
+const moduleIsDobReconfirm = (d: Record<string, unknown>) => logicModuleOf(d) === LOGIC_MODULE_DOB_RECONFIRM;
+// Phone Normalization: chỉ hiện module tham chiếu khi mode = Re-confirm (復唱).
+const phoneNormIsReconfirm = (d: Record<string, unknown>) =>
+  moduleIsPhoneNorm(d) && d.mode === 'Re-confirm';
 
 // ── Clinic Day Classifier ──
 // Nguồn ngày lễ cố định (nội các Nhật公開) — hiển thị read-only, không cho sửa.
@@ -180,6 +192,26 @@ const CLOSED_DAY_MODE_OPTIONS: FieldOption[] = [
 const OUTPUT_TYPE_OPTIONS: FieldOption[] = [
   { value: 'フリーテキスト', labelKey: 'otFreeText' },
   { value: '日時', labelKey: 'otDatetime' },
+];
+
+// ── Phone Normalization ──
+// Mode (モード): kiểm tra số gọi đến (着信番号確認) hoặc復唱 (Re-confirm).
+const PHONE_MODE_OPTIONS: FieldOption[] = [
+  { value: 'Incoming Check', labelKey: 'pnModeIncoming' },
+  { value: 'Re-confirm', labelKey: 'pnModeReconfirm' },
+];
+// Kiểu đọc số (読み上げモード): toàn bộ số (全桁) hoặc 4 số cuối (下4桁).
+const PHONE_READING_MODE_OPTIONS: FieldOption[] = [
+  { value: '全桁', labelKey: 'prmAll' },
+  { value: '下4桁', labelKey: 'prmLast4' },
+];
+
+// ── DOB Re-confirmation ──
+// Kiểu đọc ngày sinh (生年読み上げモード): tự động (自動) / lịch tây (西暦) / lịch Nhật (和暦).
+const DATE_READING_MODE_OPTIONS: FieldOption[] = [
+  { value: '自動', labelKey: 'drmAuto' },
+  { value: '西暦', labelKey: 'drmWestern' },
+  { value: '和暦', labelKey: 'drmJapanese' },
 ];
 
 // Kiểu context của Module Result Binder (khác bộ TEXT/DATE của CDC).
@@ -361,6 +393,34 @@ export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
     // ── Null Check ──
     // key tham chiếu: nhận node Interaction + context (giống Module Result Binder).
     { key: 'key', labelKey: 'fMrbModule', kind: 'searchSelect', optionsFrom: 'nodeAndContexts', showIf: moduleIsNullCheck },
+
+    // ── Phone Normalization ──
+    { key: 'mode', labelKey: 'fMode', kind: 'select', options: PHONE_MODE_OPTIONS, default: 'Incoming Check', showIf: moduleIsPhoneNorm },
+    { key: 'prompt', labelKey: 'fAnnounce', kind: 'autoText', showIf: moduleIsPhoneNorm },
+    // module tham chiếu: chỉ hiện khi mode = Re-confirm (復唱).
+    { key: 'module', labelKey: 'fMrbModule', kind: 'searchSelect', optionsFrom: 'nodeAndContexts', showIf: phoneNormIsReconfirm },
+    {
+      key: 'phoneReadingMode',
+      labelKey: 'fPhoneReadingMode',
+      kind: 'select',
+      options: PHONE_READING_MODE_OPTIONS,
+      default: '全桁',
+      showIf: moduleIsPhoneNorm,
+    },
+    { key: 'saveAdditionalPhoneNumber2DB', labelKey: 'fSaveContext', kind: 'yesno', options: YESNO_HAI_OPTIONS, default: 'no', showIf: moduleIsPhoneNorm },
+
+    // ── DOB Re-confirmation ──
+    { key: 'prompt', labelKey: 'fAnnounce', kind: 'autoText', showIf: moduleIsDobReconfirm },
+    { key: 'module', labelKey: 'fMrbModule', kind: 'searchSelect', optionsFrom: 'nodeAndContexts', showIf: moduleIsDobReconfirm },
+    {
+      key: 'dateReadingMode',
+      labelKey: 'fDateReadingMode',
+      kind: 'select',
+      options: DATE_READING_MODE_OPTIONS,
+      default: '自動',
+      showIf: moduleIsDobReconfirm,
+    },
+    { key: 'saveDOB2db', labelKey: 'fSaveContext', kind: 'yesno', options: YESNO_HAI_OPTIONS, default: 'no', showIf: moduleIsDobReconfirm },
   ],
   openai: [
     // Prompt đứng đầu, sau đó mới tới Retry Count / Retry Announce.
@@ -474,6 +534,13 @@ export const NULL_CHECK_FIXED_BRANCHES: readonly DataBranch[] = [
   { id: 'b0', value: 'false', label: 'Not Null' },
 ] as const;
 
+// Phone Normalization / DOB Re-confirmation: 2 nhánh cố định — INVALID (else, trên cùng)
+// + SUCCESS. Value/label khoá cứng, không thêm/xoá/sửa.
+export const INVALID_SUCCESS_FIXED_BRANCHES: readonly DataBranch[] = [
+  { id: CATCH_ALL_ID, value: 'INVALID', label: 'INVALID' },
+  { id: 'b0', value: 'SUCCESS', label: 'SUCCESS' },
+] as const;
+
 // Module có bộ nhánh CỐ ĐỊNH: value + label khoá cứng, không thêm/xoá nhánh. Đổi sang
 // các module này thì data.branches bị THAY HẲN bằng bộ chuẩn (xem flowStore.setDraftField)
 // — không giữ nhánh của module trước (tránh DOCC mang nhầm nhánh của IC).
@@ -481,6 +548,8 @@ export const MODULE_FIXED_BRANCHES: Record<string, readonly DataBranch[]> = {
   [LOGIC_MODULE_IC]: IC_FIXED_BRANCHES,
   [LOGIC_MODULE_DOCC]: DOCC_FIXED_BRANCHES,
   [LOGIC_MODULE_NULLCHECK]: NULL_CHECK_FIXED_BRANCHES,
+  [LOGIC_MODULE_PHONE_NORM]: INVALID_SUCCESS_FIXED_BRANCHES,
+  [LOGIC_MODULE_DOB_RECONFIRM]: INVALID_SUCCESS_FIXED_BRANCHES,
 };
 
 // 1 set (List khoa khám -> Tên output) của Clinical Department Classifier.
