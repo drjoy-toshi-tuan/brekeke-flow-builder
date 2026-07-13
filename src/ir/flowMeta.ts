@@ -12,6 +12,7 @@ export interface FlowMeta {
   createdAt?: string; // 作成日時 (yyyy-MM-dd HH:mm)
   updatedAt?: string; // 更新日時 (yyyy-MM-dd HH:mm)
   author?: string; // 作成者
+  subflowCount?: number; // số Sub Flow (flow.subflows) — hiển thị cạnh tên kịch bản
 }
 
 function str(value: unknown): string | undefined {
@@ -27,6 +28,7 @@ export function parseFlowMeta(text: string): FlowMeta {
       createdAt: str(flow.createdAt),
       updatedAt: str(flow.updatedAt),
       author: str(flow.author),
+      subflowCount: Array.isArray(flow.subflows) ? flow.subflows.length : 0,
     };
   } catch {
     return {};

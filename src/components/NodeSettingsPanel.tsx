@@ -20,6 +20,7 @@ import {
   type PropertyField,
 } from '../ui/nodeSchema';
 import { Icon } from '../ui/icons';
+import { FlowGlyph } from '../ui/FlowGlyph';
 import { useLang, useT, type TKey } from '../ui/i18n';
 import { lintFor, type ScriptError } from '../ui/scriptLint';
 import { refreshScriptExplanation } from '../ai/explain';
@@ -79,6 +80,7 @@ function PanelContent({ node, onClose }: { node: FlowNode; onClose: () => void }
   const t = useT();
   const cfg = NODE_CONFIG[node.type];
 
+  const ir = useFlowStore((s) => s.ir);
   const draft = useFlowStore((s) => s.draft);
   const commitDraft = useFlowStore((s) => s.commitDraft);
   const cancelEdit = useFlowStore((s) => s.cancelEdit);
@@ -91,6 +93,15 @@ function PanelContent({ node, onClose }: { node: FlowNode; onClose: () => void }
   const dirty =
     !!draft &&
     (draft.label !== node.label || JSON.stringify(draft.data) !== JSON.stringify(node.data));
+
+  // Tên node phải khác rỗng và DUY NHẤT trong flow đang mở (ir.nodes) — khác flow
+  // thì trùng được. Chặn LƯU khi vi phạm, hiện lỗi ở tab General.
+  const nameTrimmed = editing.label.trim();
+  const nameError: TKey | null = !nameTrimmed
+    ? 'nodeNameRequired'
+    : ir?.nodes.some((n) => n.id !== node.id && n.label.trim() === nameTrimmed)
+      ? 'nodeNameDuplicate'
+      : null;
 
   const hasProperty = PROPERTY_FIELDS[node.type].length > 0;
   const hasBranch = BRANCH_SCHEMA[node.type].mode !== 'none';
@@ -127,6 +138,10 @@ function PanelContent({ node, onClose }: { node: FlowNode; onClose: () => void }
 
   const [showSyntaxWarn, setShowSyntaxWarn] = useState(false);
   const handleSave = () => {
+    if (nameError) {
+      setTab('general'); // đưa về tab General để người dùng thấy lỗi tên node
+      return;
+    }
     if (scriptError) {
       setTab('property'); // đưa về tab có ô script để người dùng thấy lỗi
       setShowSyntaxWarn(true);
@@ -185,7 +200,7 @@ function PanelContent({ node, onClose }: { node: FlowNode; onClose: () => void }
       </header>
 
       <div className="flex-1 space-y-4 overflow-y-auto p-4">
-        {tab === 'general' && <GeneralTab label={editing.label} />}
+        {tab === 'general' && <GeneralTab label={editing.label} nameError={nameError} />}
         {tab === 'property' && <PropertyTab node={node} data={editing.data} />}
         {tab === 'branch' && <BranchTab node={node} data={editing.data} />}
       </div>
@@ -202,10 +217,10 @@ function PanelContent({ node, onClose }: { node: FlowNode; onClose: () => void }
         <button
           type="button"
           onClick={handleSave}
-          disabled={!dirty}
+          disabled={!dirty || !!nameError}
           className={[
             'rounded-lg px-5 py-2 text-sm font-semibold text-white transition',
-            dirty
+            dirty && !nameError
               ? 'bg-[var(--bk-success)] hover:bg-[var(--bk-success-hover)]'
               : 'cursor-not-allowed bg-[var(--bk-text-faint)] opacity-60',
           ].join(' ')}
@@ -304,7 +319,7 @@ function TabButton({
 }
 
 // ── General ─────────────────────────────────────────────────────────────────
-function GeneralTab({ label }: { label: string }) {
+function GeneralTab({ label, nameError }: { label: string; nameError: TKey | null }) {
   const t = useT();
   const setDraftLabel = useFlowStore((s) => s.setDraftLabel);
   const setDraftField = useFlowStore((s) => s.setDraftField);
@@ -315,7 +330,12 @@ function GeneralTab({ label }: { label: string }) {
     <>
       <label className="block">
         <span className="text-xs font-medium text-[var(--bk-text-muted)]">{t('nodeName')}</span>
-        <input className={inputClass} value={label} onChange={(e) => setDraftLabel(e.target.value)} />
+        <input
+          className={`${inputClass} ${nameError ? '!border-rose-400 focus:!border-rose-400' : ''}`}
+          value={label}
+          onChange={(e) => setDraftLabel(e.target.value)}
+        />
+        {nameError && <span className="mt-1 block text-xs text-rose-500">{t(nameError)}</span>}
       </label>
       <label className="block">
         <span className="text-xs font-medium text-[var(--bk-text-muted)]">{t('description')}</span>
@@ -576,11 +596,19 @@ function SearchSelect({
       ? options.filter((o) => o.toLowerCase().includes(query))
       : options;
 
+  // Node Jump trỏ tới sub flow -> hiện logo Sub Flow (màu cau) cạnh mỗi lựa chọn
+  // + trước giá trị đang chọn (đồng bộ với modal AI Generate).
+  const isSubflow = field.optionsFrom === 'subflows';
+  const showGlyph = isSubflow && value.trim().length > 0;
+
   return (
     <div className="relative" ref={wrapRef}>
+      {showGlyph && (
+        <FlowGlyph isMain={false} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2" />
+      )}
       <input
         type="text"
-        className={`${inputClass} pr-8`}
+        className={`${inputClass} pr-8 ${showGlyph ? 'pl-8' : ''}`}
         value={value}
         placeholder={t('searchSelectPlaceholder')}
         onFocus={() => setOpen(true)}
@@ -612,14 +640,16 @@ function SearchSelect({
                   setOpen(false);
                 }}
                 className={[
-                  'block w-full truncate rounded-md px-2.5 py-1.5 text-left text-sm transition',
+                  'flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-sm transition',
                   o === value
                     ? 'bg-[var(--bk-accent-soft)] font-medium text-[var(--bk-accent)]'
                     : 'text-[var(--bk-text)] hover:bg-[var(--bk-surface-2)]',
                 ].join(' ')}
                 title={o}
               >
-                {o}
+                {/* Logo Sub Flow bám sát text (chỉ ở pulldown chọn sub flow của Jump). */}
+                <span className="min-w-0 truncate">{o}</span>
+                {isSubflow && <FlowGlyph isMain={false} className="ml-1.5" />}
               </button>
             ))
           )}

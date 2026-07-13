@@ -885,10 +885,16 @@ flow:
       author: 'Tuan',
       createdAt: '2026-07-01 09:30',
       updatedAt: '2026-07-02 14:00',
+      subflowCount: 0,
     });
     const bare = parseFlowMeta('flow:\n  name: "x"\n  nodes: []\n');
     expect(bare.createdAt).toBeUndefined();
     expect(bare.author).toBeUndefined();
     expect(bare.name).toBe('x');
+    // Đếm số Sub Flow từ header (dùng cho badge cạnh tên kịch bản).
+    const withSubs = parseFlowMeta(
+      'flow:\n  name: "y"\n  nodes: []\n  subflows:\n    - name: a\n      nodes: []\n    - name: b\n      nodes: []\n',
+    );
+    expect(withSubs.subflowCount).toBe(2);
   });
 });

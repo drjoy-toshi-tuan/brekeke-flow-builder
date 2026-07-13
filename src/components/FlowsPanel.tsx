@@ -3,6 +3,7 @@ import { useFlowStore } from '../store/flowStore';
 import { useFileStore } from '../store/fileStore';
 import { useT, type TKey } from '../ui/i18n';
 import { Icon } from '../ui/icons';
+import { FlowGlyph } from '../ui/FlowGlyph';
 import { IvrPropertyModal } from './IvrPropertyModal';
 import { useSaveFlow } from './useSaveFlow';
 
@@ -142,7 +143,7 @@ export function FlowsPanel() {
             {t('mainFlowSection')}
           </div>
           <FlowItem
-            icon="tabler:square-rounded-letter-m-filled"
+            isMain
             name={ir?.meta.name ?? 'Main Flow'}
             active={activeFlowId === 'main'}
             onClick={() => void switchFlow('main')}
@@ -194,7 +195,7 @@ export function FlowsPanel() {
             ) : (
               <FlowItem
                 key={s.id}
-                icon="tabler:square-rounded-letter-s-filled"
+                isMain={false}
                 name={s.name}
                 active={activeFlowId === s.id}
                 onClick={() => void switchFlow(s.id)}
@@ -343,14 +344,14 @@ export function FlowsPanel() {
 // 1 dòng flow trong panel: icon + tên; flow đang mở tô nền accent.
 // Sub flow (có onRename/onDelete): hover hiện nút đổi tên / xoá bên phải.
 function FlowItem({
-  icon,
+  isMain,
   name,
   active,
   onClick,
   onRename,
   onDelete,
 }: {
-  icon: string;
+  isMain: boolean;
   name: string;
   active: boolean;
   onClick: () => void;
@@ -374,7 +375,7 @@ function FlowItem({
           active ? 'font-semibold text-[var(--bk-accent)]' : 'text-[var(--bk-text)]',
         ].join(' ')}
       >
-        <Icon icon={icon} width={16} height={16} className={active ? '' : 'text-[var(--bk-text-faint)]'} />
+        <FlowGlyph isMain={isMain} />
         <span className="min-w-0 flex-1 truncate text-sm" title={name}>
           {name}
         </span>
