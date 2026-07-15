@@ -724,6 +724,8 @@ export function FileManagerScreen() {
                     {renderSortTh('createdAt', 'colCreatedAt')}
                     {renderSortTh('updatedAt', 'colUpdatedAt')}
                     {renderSortTh('author', 'colAuthor')}
+                    {/* Ô trống cố định cuối dòng cho nút thao tác (hiện khi hover) */}
+                    <th className={`${th} w-[120px]`} aria-hidden />
                   </tr>
                 </thead>
                 <tbody>
@@ -751,19 +753,17 @@ export function FileManagerScreen() {
                       <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>
                         {file.meta.updatedAt ?? '—'}
                       </td>
-                      <td className={`${cell} relative text-[var(--bk-text-muted)]`}>
-                        {file.meta.author ?? '—'}
-                        {/* Cụm nút thao tác nổi ở mép phải — chỉ hiện khi hover dòng
-                            (hoặc focus bàn phím); chặn nổi bọt để không mở dòng. */}
-                        <div
-                          onClick={(e) => e.stopPropagation()}
-                          className="pointer-events-none absolute right-2 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1 rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface)] px-1 py-0.5 opacity-0 shadow-sm transition group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
-                        >
+                      <td className={`${cell} text-[var(--bk-text-muted)]`}>{file.meta.author ?? '—'}</td>
+                      {/* Nút thao tác trong ô trống cuối dòng — chỉ hiện khi hover
+                          (hoặc focus bàn phím); icon-only, hover đổi màu theo hành
+                          động; chặn nổi bọt để không mở dòng. */}
+                      <td className={cell} onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-end gap-0.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
                           <button
                             type="button"
                             onClick={() => openRenameModal(file)}
                             disabled={busy}
-                            className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--bk-text-faint)] transition hover:bg-[var(--bk-accent-soft)] hover:text-[var(--bk-accent)] disabled:opacity-60"
+                            className="flex h-8 w-8 items-center justify-center text-[var(--bk-text-faint)] transition hover:text-[var(--bk-accent)] disabled:pointer-events-none disabled:opacity-40"
                             title={t('fmRename')}
                           >
                             <Icon icon="lucide:pencil" width={16} height={16} />
@@ -772,19 +772,19 @@ export function FileManagerScreen() {
                             type="button"
                             onClick={() => void handleDuplicate(file)}
                             disabled={busy}
-                            className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--bk-text-faint)] transition hover:bg-[var(--bk-accent-soft)] hover:text-[var(--bk-accent)] disabled:opacity-60"
+                            className="flex h-8 w-8 items-center justify-center text-[var(--bk-text-faint)] transition hover:text-[#22c55e] disabled:pointer-events-none disabled:opacity-40"
                             title={t('fmDuplicate')}
                           >
-                            <Icon icon="lucide:copy" width={16} height={16} />
+                            <Icon icon="line-md:duplicate" width={17} height={17} />
                           </button>
                           <button
                             type="button"
                             onClick={() => setDeleteTarget(file)}
                             disabled={busy}
-                            className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--bk-text-faint)] transition hover:bg-[color-mix(in_srgb,#dc2626_12%,transparent)] hover:text-rose-500 disabled:opacity-60"
+                            className="flex h-8 w-8 items-center justify-center text-[var(--bk-text-faint)] transition hover:text-rose-500 disabled:pointer-events-none disabled:opacity-40"
                             title={t('fmDeleteTitle')}
                           >
-                            <Icon icon="lucide:trash-2" width={16} height={16} />
+                            <Icon icon="line-md:trash" width={17} height={17} />
                           </button>
                         </div>
                       </td>

@@ -80,7 +80,6 @@ interface DeleteTarget {
 interface DriveActions {
   onRefresh?: () => void;
   onOpenVersion?: (f: FacilityNode, s: ScenarioNode, v: VersionNode) => void;
-  onRestore?: (f: FacilityNode, s: ScenarioNode, v: VersionNode) => void;
   onDuplicate?: (f: FacilityNode, s: ScenarioNode, v: VersionNode) => void;
   onDelete?: (target: DeleteTarget) => void;
   onCreateFlow?: (facility: string, scenario: string) => void;
@@ -105,6 +104,10 @@ const PAGE_SIZES = [20, 50] as const;
 
 // Giá trị select "tạo mới" trong modal import (không đụng id thật của Drive).
 const NEW_OPTION = '__new__';
+
+// Style input/select trong modal (dùng chung nhiều field).
+const FIELD_CLS =
+  'w-full rounded-lg border border-[var(--bk-border)] bg-[var(--bk-bg)] px-3 py-2 text-sm text-[var(--bk-text)] outline-none focus:border-[var(--bk-accent)]';
 
 // ── Sort dùng chung cho cả 3 tầng ──
 type SortDir = 'asc' | 'desc';
@@ -457,13 +460,9 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
     }
   };
 
-  // Tạo version MỚI (V{max+1}) từ nội dung 1 bản có sẵn — dùng chung cho Khôi phục
-  // (bản cũ) và Duplicate (bản bất kỳ, kể cả mới nhất). Không sửa lịch sử.
-  const copyAsNewVersion = async (
-    s: ScenarioNode,
-    ver: VersionNode,
-    toastKey: 'dmRestored' | 'dmDuplicated',
-  ) => {
+  // Duplicate = tạo version MỚI (V{max+1}) với nội dung bản được chọn — không sửa
+  // lịch sử (cũng là cách "khôi phục" một bản cũ).
+  const duplicateVersion = async (s: ScenarioNode, ver: VersionNode) => {
     if (busy) return;
     setBusy(true);
     setActionError(null);
@@ -471,7 +470,7 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
       const text = await getFileText(token, ver.fileId);
       const nextV = latestOf(s) + 1;
       await createYamlFile(token, s.id, versionFileName(s.name, nextV), text);
-      showToast(t(toastKey, { n: nextV }));
+      showToast(t('dmDuplicated', { n: nextV }));
       await load();
     } catch (e) {
       if (!handledAsExpired(e)) setActionError(t(gdErrorKey(e)));
@@ -565,8 +564,7 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
       actions={{
         onRefresh: () => void load(),
         onOpenVersion: (f, s, v) => void openVersion(f, s, v),
-        onRestore: (_f, s, v) => void copyAsNewVersion(s, v, 'dmRestored'),
-        onDuplicate: (_f, s, v) => void copyAsNewVersion(s, v, 'dmDuplicated'),
+        onDuplicate: (_f, s, v) => void duplicateVersion(s, v),
         onDelete: (target) => void remove(target),
         onCreateFlow: (facility, scenario) => void createFlow(facility, scenario),
         onImport: (facility, scenario, content) => void importFlow(facility, scenario, content),
@@ -780,13 +778,13 @@ function DriveInner({
 
   const iconBtn =
     'flex h-8 w-8 items-center justify-center rounded-lg text-[var(--bk-text-faint)] transition hover:bg-[var(--bk-accent-soft)] hover:text-[var(--bk-accent)] disabled:pointer-events-none disabled:opacity-40';
-  // Cụm nút thao tác nổi ở mép phải dòng — chỉ hiện khi hover dòng (hoặc focus
-  // bằng bàn phím), không chiếm 1 cột riêng. Đặt trong ô cuối (position:relative).
-  const hoverActions =
-    'pointer-events-none absolute right-2 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1 rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface)] px-1 py-0.5 opacity-0 shadow-sm transition group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100';
-  // Style input/select trong modal (dùng lại nhiều chỗ).
-  const fieldCls =
-    'w-full rounded-lg border border-[var(--bk-border)] bg-[var(--bk-bg)] px-3 py-2 text-sm text-[var(--bk-text)] outline-none focus:border-[var(--bk-accent)]';
+  // Nút thao tác nằm trong ô trống cố định cuối dòng (không tiêu đề cột, đủ chỗ
+  // 2 nút) — chỉ hiện khi hover dòng (hoặc focus bàn phím). Nút chỉ có icon,
+  // không viền/nền; hover từng nút đổi màu theo hành động (xoá đỏ, duplicate xanh).
+  const rowActions =
+    'flex items-center justify-end gap-0.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100';
+  const rowBtn =
+    'flex h-8 w-8 items-center justify-center text-[var(--bk-text-faint)] transition disabled:pointer-events-none disabled:opacity-40';
 
   // ── Dữ liệu từng tầng sau lọc + sort ──
   const q = normalizeSearch(query);
@@ -1107,6 +1105,8 @@ function DriveInner({
                       {renderSortTh('count', 'colScenarioCount')}
                       {renderSortTh('createdAt', 'colCreatedAt')}
                       {renderSortTh('updatedAt', 'colUpdatedAt')}
+                      {/* Ô trống cố định cuối dòng cho nút thao tác (hiện khi hover) */}
+                      <th className={`${th} w-[88px]`} aria-hidden />
                     </tr>
                   </thead>
                   <tbody>
@@ -1130,17 +1130,19 @@ function DriveInner({
                         <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>
                           {f.createdAt ?? '—'}
                         </td>
-                        <td className={`${cell} relative whitespace-nowrap text-[var(--bk-text-muted)]`}>
+                        <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>
                           {facilityUpdatedAt(f) ?? '—'}
-                          <div className={hoverActions} onClick={(e) => e.stopPropagation()}>
+                        </td>
+                        <td className={cell} onClick={(e) => e.stopPropagation()}>
+                          <div className={rowActions}>
                             <button
                               type="button"
                               onClick={() => setDeleteTarget({ kind: 'facility', id: f.id, label: f.name })}
                               disabled={busy || (!mock && !actions.onDelete)}
-                              className={`${iconBtn} hover:!bg-[color-mix(in_srgb,#dc2626_12%,transparent)] hover:!text-rose-500`}
+                              className={`${rowBtn} hover:text-rose-500`}
                               title={t('fmDeleteTitle')}
                             >
-                              <Icon icon="lucide:trash-2" width={16} height={16} />
+                              <Icon icon="line-md:trash" width={17} height={17} />
                             </button>
                           </div>
                         </td>
@@ -1162,6 +1164,7 @@ function DriveInner({
                       {renderSortTh('createdAt', 'colCreatedAt')}
                       {renderSortTh('updatedAt', 'colUpdatedAt')}
                       {renderSortTh('author', 'colAuthor')}
+                      <th className={`${th} w-[88px]`} aria-hidden />
                     </tr>
                   </thead>
                   <tbody>
@@ -1203,17 +1206,17 @@ function DriveInner({
                           </td>
                           <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>{s.createdAt ?? '—'}</td>
                           <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>{lv?.updatedAt ?? '—'}</td>
-                          <td className={`${cell} relative text-[var(--bk-text-muted)]`}>
-                            {lv?.author ?? '—'}
-                            <div className={hoverActions} onClick={(e) => e.stopPropagation()}>
+                          <td className={`${cell} text-[var(--bk-text-muted)]`}>{lv?.author ?? '—'}</td>
+                          <td className={cell} onClick={(e) => e.stopPropagation()}>
+                            <div className={rowActions}>
                               <button
                                 type="button"
                                 onClick={() => setDeleteTarget({ kind: 'scenario', id: s.id, label: s.name })}
                                 disabled={busy || (!mock && !actions.onDelete)}
-                                className={`${iconBtn} hover:!bg-[color-mix(in_srgb,#dc2626_12%,transparent)] hover:!text-rose-500`}
+                                className={`${rowBtn} hover:text-rose-500`}
                                 title={t('fmDeleteTitle')}
                               >
-                                <Icon icon="lucide:trash-2" width={16} height={16} />
+                                <Icon icon="line-md:trash" width={17} height={17} />
                               </button>
                             </div>
                           </td>
@@ -1234,6 +1237,7 @@ function DriveInner({
                       {renderSortTh('createdAt', 'colCreatedAt')}
                       {renderSortTh('updatedAt', 'colUpdatedAt')}
                       {renderSortTh('author', 'colAuthor')}
+                      <th className={`${th} w-[88px]`} aria-hidden />
                     </tr>
                   </thead>
                   <tbody>
@@ -1278,31 +1282,19 @@ function DriveInner({
                           </td>
                           <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>{ver.createdAt}</td>
                           <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>{ver.updatedAt}</td>
-                          <td className={`${cell} relative text-[var(--bk-text-muted)]`}>
-                            {ver.author}
-                            <div className={hoverActions} onClick={(e) => e.stopPropagation()}>
+                          <td className={`${cell} text-[var(--bk-text-muted)]`}>{ver.author}</td>
+                          <td className={cell} onClick={(e) => e.stopPropagation()}>
+                            <div className={rowActions}>
                               {/* Duplicate = tạo V{max+1} với nội dung bản này. */}
                               <button
                                 type="button"
                                 onClick={() => actions.onDuplicate?.(facility, scenario, ver)}
                                 disabled={busy || (!mock && !actions.onDuplicate)}
-                                className={iconBtn}
+                                className={`${rowBtn} hover:text-[#22c55e]`}
                                 title={t('dmDuplicate')}
                               >
-                                <Icon icon="lucide:copy" width={16} height={16} />
+                                <Icon icon="line-md:duplicate" width={17} height={17} />
                               </button>
-                              {/* Khôi phục = tạo V{N+1} với nội dung bản này (không sửa lịch sử). */}
-                              {!isLatest && (
-                                <button
-                                  type="button"
-                                  onClick={() => actions.onRestore?.(facility, scenario, ver)}
-                                  disabled={busy || (!mock && !actions.onRestore)}
-                                  className={iconBtn}
-                                  title={t('dmRestore')}
-                                >
-                                  <Icon icon="lucide:rotate-ccw" width={16} height={16} />
-                                </button>
-                              )}
                               <button
                                 type="button"
                                 onClick={() =>
@@ -1313,10 +1305,10 @@ function DriveInner({
                                   })
                                 }
                                 disabled={busy || (!mock && !actions.onDelete)}
-                                className={`${iconBtn} hover:!bg-[color-mix(in_srgb,#dc2626_12%,transparent)] hover:!text-rose-500`}
+                                className={`${rowBtn} hover:text-rose-500`}
                                 title={t('fmDeleteTitle')}
                               >
-                                <Icon icon="lucide:trash-2" width={16} height={16} />
+                                <Icon icon="line-md:trash" width={17} height={17} />
                               </button>
                             </div>
                           </td>
@@ -1357,7 +1349,7 @@ function DriveInner({
               value={newFacility}
               onChange={(e) => setNewFacility(e.target.value)}
               placeholder={t('fmFacilityPlaceholder')}
-              className={`mb-3 ${fieldCls}`}
+              className={`mb-3 ${FIELD_CLS}`}
             />
 
             <label className="mb-1 block text-xs font-semibold text-[var(--bk-text-muted)]">
@@ -1370,7 +1362,7 @@ function DriveInner({
                 if (e.key === 'Enter') handleCreate();
               }}
               placeholder={t('fmScenarioPlaceholder')}
-              className={`mb-4 ${fieldCls}`}
+              className={`mb-4 ${FIELD_CLS}`}
             />
 
             {createErrorKey && <div className="mb-3 text-xs text-rose-500">{t(createErrorKey)}</div>}
@@ -1416,61 +1408,42 @@ function DriveInner({
                 <span className="truncate">{facility.name}</span>
               </div>
             ) : (
-              <>
-                <select
-                  value={impFacSel}
-                  onChange={(e) => {
-                    setImpFacSel(e.target.value);
-                    // Đổi bệnh viện -> danh sách kịch bản đổi theo, về chế độ "tạo mới".
-                    setImpScenSel(NEW_OPTION);
-                  }}
-                  className={`${impFacSel === NEW_OPTION ? 'mb-2' : 'mb-3'} cursor-pointer ${fieldCls}`}
-                >
-                  {facilities.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name}
-                    </option>
-                  ))}
-                  <option value={NEW_OPTION}>{t('dmImportCreateNew')}</option>
-                </select>
-                {impFacSel === NEW_OPTION && (
-                  <input
-                    autoFocus
-                    value={impFacName}
-                    onChange={(e) => setImpFacName(e.target.value)}
-                    placeholder={t('fmFacilityPlaceholder')}
-                    className={`mb-3 ${fieldCls}`}
-                  />
-                )}
-              </>
+              // 1 control duy nhất: pulldown có mục "Tạo mới…" trên cùng; chọn thì
+              // biến thành textbox nhập tên (xem PickOrCreateField).
+              <PickOrCreateField
+                options={facilities.map((f) => ({ id: f.id, name: f.name }))}
+                optionIcon="line-md:folder-multiple"
+                selected={impFacSel}
+                onSelect={(id) => {
+                  setImpFacSel(id);
+                  // Đổi bệnh viện -> danh sách kịch bản đổi theo, về chế độ "tạo mới".
+                  setImpScenSel(NEW_OPTION);
+                }}
+                name={impFacName}
+                onNameChange={setImpFacName}
+                placeholder={t('fmFacilityPlaceholder')}
+                createLabel={t('dmImportCreateNew')}
+                backLabel={t('dmPickFromList')}
+                className="mb-3"
+              />
             )}
 
             <label className="mb-1 block text-xs font-semibold text-[var(--bk-text-muted)]">
               {t('dmImportScenarioLabel')}
             </label>
-            <select
-              value={impScenSel}
-              onChange={(e) => setImpScenSel(e.target.value)}
-              className={`${impScenSel === NEW_OPTION ? 'mb-2' : 'mb-4'} cursor-pointer ${fieldCls}`}
-            >
-              {(impFacility?.scenarios ?? []).map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-              <option value={NEW_OPTION}>{t('dmImportCreateNew')}</option>
-            </select>
-            {impScenSel === NEW_OPTION && (
-              <input
-                value={impScenName}
-                onChange={(e) => setImpScenName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleImportConfirm();
-                }}
-                placeholder={t('fmScenarioPlaceholder')}
-                className={`mb-4 ${fieldCls}`}
-              />
-            )}
+            <PickOrCreateField
+              options={(impFacility?.scenarios ?? []).map((s) => ({ id: s.id, name: s.name }))}
+              optionIcon="line-md:folder"
+              selected={impScenSel}
+              onSelect={setImpScenSel}
+              name={impScenName}
+              onNameChange={setImpScenName}
+              placeholder={t('fmScenarioPlaceholder')}
+              createLabel={t('dmImportCreateNew')}
+              backLabel={t('dmPickFromList')}
+              onEnter={handleImportConfirm}
+              className="mb-4"
+            />
 
             {importErrorKey && <div className="mb-3 text-xs text-rose-500">{t(importErrorKey)}</div>}
 
@@ -1539,6 +1512,129 @@ function EmptyState({ icon, text }: { icon: string; text: string }) {
     <div className="flex flex-col items-center gap-2 p-10 text-center text-[var(--bk-text-muted)]">
       <Icon icon={icon} width={28} height={28} className="text-[var(--bk-text-faint)]" />
       <span className="text-sm">{text}</span>
+    </div>
+  );
+}
+
+// Trường "chọn có sẵn hoặc tạo mới" trong modal import — 1 control duy nhất:
+// pulldown với mục "Tạo mới…" (icon +) ở TRÊN CÙNG; chọn mục đó thì control biến
+// thành textbox nhập tên (kèm nút ✕ quay lại chọn từ danh sách nếu có lựa chọn).
+function PickOrCreateField({
+  options,
+  optionIcon,
+  selected,
+  onSelect,
+  name,
+  onNameChange,
+  placeholder,
+  createLabel,
+  backLabel,
+  onEnter,
+  className = '',
+}: {
+  options: { id: string; name: string }[];
+  optionIcon: string; // icon của item có sẵn (folder-multiple / folder)
+  selected: string; // id đang chọn hoặc NEW_OPTION
+  onSelect: (id: string) => void;
+  name: string; // tên đang gõ ở chế độ tạo mới
+  onNameChange: (v: string) => void;
+  placeholder: string;
+  createLabel: string;
+  backLabel: string;
+  onEnter?: () => void;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+
+  // ── Chế độ TẠO MỚI: textbox nhập tên (icon + bên trái, ✕ để quay lại pulldown) ──
+  if (selected === NEW_OPTION) {
+    return (
+      <div className={`relative ${className}`}>
+        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--bk-accent)]">
+          <Icon icon="line-md:plus" width={15} height={15} />
+        </span>
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => onNameChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onEnter?.();
+          }}
+          placeholder={placeholder}
+          className={`${FIELD_CLS} pl-9 ${options.length ? 'pr-9' : ''}`}
+        />
+        {options.length > 0 && (
+          <button
+            type="button"
+            onClick={() => onSelect(options[0].id)}
+            title={backLabel}
+            aria-label={backLabel}
+            className="absolute right-1.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-[var(--bk-text-faint)] transition hover:bg-[var(--bk-surface-2)] hover:text-[var(--bk-text)]"
+          >
+            <Icon icon="lucide:x" width={14} height={14} />
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  // ── Chế độ CHỌN: pulldown custom (mục "Tạo mới…" luôn ở trên cùng) ──
+  const current = options.find((o) => o.id === selected) ?? null;
+  return (
+    <div className={`relative ${className}`}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className={`${FIELD_CLS} flex cursor-pointer items-center justify-between gap-2 text-left`}
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <Icon icon={optionIcon} width={15} height={15} className="shrink-0 text-[var(--bk-accent)]" />
+          <span className="truncate">{current?.name ?? ''}</span>
+        </span>
+        <Icon
+          icon="lucide:chevron-down"
+          width={14}
+          height={14}
+          className={`shrink-0 text-[var(--bk-text-muted)] transition ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+      {open && (
+        <>
+          {/* Lớp phủ trong suốt để click ra ngoài là đóng list */}
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute inset-x-0 top-full z-20 mt-1 max-h-56 overflow-auto rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface)] py-1 shadow-lg">
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onSelect(NEW_OPTION);
+              }}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold text-[var(--bk-accent)] transition hover:bg-[var(--bk-accent-soft)]"
+            >
+              <Icon icon="line-md:plus" width={15} height={15} />
+              {createLabel}
+            </button>
+            <div className="mx-2 my-1 h-px bg-[var(--bk-border)]" aria-hidden />
+            {options.map((o) => (
+              <button
+                key={o.id}
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  onSelect(o.id);
+                }}
+                className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-[var(--bk-surface-2)] ${
+                  o.id === selected ? 'font-semibold text-[var(--bk-accent)]' : 'text-[var(--bk-text)]'
+                }`}
+              >
+                <Icon icon={optionIcon} width={15} height={15} className="shrink-0 text-[var(--bk-accent)]" />
+                <span className="truncate">{o.name}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
