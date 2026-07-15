@@ -18,7 +18,8 @@ import { BrandLockup } from '../ui/BrandLockup';
 
 interface MockVersion {
   v: number;
-  createdAt: string; // yyyy-MM-dd HH:mm
+  createdAt: string; // yyyy-MM-dd HH:mm — Drive: createdTime
+  updatedAt: string; // yyyy-MM-dd HH:mm — Drive: modifiedTime (lưu đè version đang mở)
   author: string;
 }
 
@@ -35,6 +36,26 @@ interface MockFacility {
   scenarios: MockScenario[];
 }
 
+// Sinh chuỗi ngày mock 'yyyy-MM-dd HH:mm' lệch `day` ngày kể từ 2026-05-01.
+const pad2 = (n: number) => String(n).padStart(2, '0');
+function mockDate(day: number, hm: string): string {
+  const d = new Date(2026, 4, 1 + day);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${hm}`;
+}
+
+// 24 version cho 1 kịch bản — đủ nhiều để xem phân trang ở tầng バージョン.
+const MANY_VERSIONS: MockVersion[] = Array.from({ length: 24 }, (_, i) => {
+  const v = i + 1;
+  const authors = ['佐藤 健', 'Tuan Nguyen', '田中 花子'];
+  return {
+    v,
+    createdAt: mockDate(v * 3, '09:30'),
+    // Vài bản được sửa tiếp sau khi tạo (updatedAt > createdAt).
+    updatedAt: mockDate(v * 3 + (v % 3), v % 2 ? '16:45' : '09:30'),
+    author: authors[v % 3],
+  };
+});
+
 // Dữ liệu mẫu — mô phỏng đúng cấu trúc folder sẽ tạo trên Drive.
 const MOCK_FACILITIES: MockFacility[] = [
   {
@@ -46,24 +67,26 @@ const MOCK_FACILITIES: MockFacility[] = [
         name: '診療予約',
         appliedV: 2,
         versions: [
-          { v: 3, createdAt: '2026-07-14 18:22', author: 'Tuan Nguyen' },
-          { v: 2, createdAt: '2026-07-10 09:41', author: 'Tuan Nguyen' },
-          { v: 1, createdAt: '2026-07-02 14:05', author: '田中 花子' },
+          { v: 3, createdAt: '2026-07-14 18:22', updatedAt: '2026-07-15 10:05', author: 'Tuan Nguyen' },
+          { v: 2, createdAt: '2026-07-10 09:41', updatedAt: '2026-07-12 14:20', author: 'Tuan Nguyen' },
+          { v: 1, createdAt: '2026-07-02 14:05', updatedAt: '2026-07-02 14:05', author: '田中 花子' },
         ],
       },
       {
         id: 's2',
         name: '予約変更・キャンセル',
         appliedV: 1,
-        versions: [{ v: 1, createdAt: '2026-07-08 11:30', author: '田中 花子' }],
+        versions: [
+          { v: 1, createdAt: '2026-07-08 11:30', updatedAt: '2026-07-08 11:30', author: '田中 花子' },
+        ],
       },
       {
         id: 's3',
         name: '休診日案内',
         appliedV: null,
         versions: [
-          { v: 2, createdAt: '2026-07-15 08:12', author: 'Tuan Nguyen' },
-          { v: 1, createdAt: '2026-07-12 16:48', author: '佐藤 健' },
+          { v: 2, createdAt: '2026-07-15 08:12', updatedAt: '2026-07-15 08:12', author: 'Tuan Nguyen' },
+          { v: 1, createdAt: '2026-07-12 16:48', updatedAt: '2026-07-13 09:02', author: '佐藤 健' },
         ],
       },
     ],
@@ -72,22 +95,15 @@ const MOCK_FACILITIES: MockFacility[] = [
     id: 'f2',
     name: '聖路加国際病院',
     scenarios: [
-      {
-        id: 's4',
-        name: '診療予約',
-        appliedV: 4,
-        versions: [
-          { v: 4, createdAt: '2026-07-13 10:02', author: '佐藤 健' },
-          { v: 3, createdAt: '2026-07-09 15:27', author: '佐藤 健' },
-          { v: 2, createdAt: '2026-07-05 13:44', author: 'Tuan Nguyen' },
-          { v: 1, createdAt: '2026-06-30 09:00', author: 'Tuan Nguyen' },
-        ],
-      },
+      // Kịch bản nhiều version (24) để review phân trang tầng バージョン.
+      { id: 's4', name: '診療予約', appliedV: 22, versions: MANY_VERSIONS },
       {
         id: 's5',
         name: '検査結果案内',
         appliedV: null,
-        versions: [{ v: 1, createdAt: '2026-07-11 17:19', author: '田中 花子' }],
+        versions: [
+          { v: 1, createdAt: '2026-07-11 17:19', updatedAt: '2026-07-11 17:19', author: '田中 花子' },
+        ],
       },
     ],
   },
@@ -100,8 +116,8 @@ const MOCK_FACILITIES: MockFacility[] = [
         name: '診療時間案内',
         appliedV: 1,
         versions: [
-          { v: 2, createdAt: '2026-07-14 19:55', author: '田中 花子' },
-          { v: 1, createdAt: '2026-07-06 10:33', author: '田中 花子' },
+          { v: 2, createdAt: '2026-07-14 19:55', updatedAt: '2026-07-14 19:55', author: '田中 花子' },
+          { v: 1, createdAt: '2026-07-06 10:33', updatedAt: '2026-07-07 15:41', author: '田中 花子' },
         ],
       },
     ],
@@ -114,7 +130,7 @@ const latestOf = (s: MockScenario) => (s.versions.length ? Math.max(...s.version
 const latestVersionOf = (s: MockScenario) =>
   s.versions.find((x) => x.v === latestOf(s));
 const facilityUpdatedAt = (f: MockFacility) => {
-  const all = f.scenarios.flatMap((s) => s.versions.map((v) => v.createdAt));
+  const all = f.scenarios.flatMap((s) => s.versions.map((v) => v.updatedAt));
   return all.length ? all.reduce((a, b) => (a > b ? a : b)) : undefined;
 };
 // Tên file version theo quy ước [シナリオ名]_V{N}.yaml.
@@ -122,6 +138,9 @@ const versionFileName = (scenario: string, v: number) => `${scenario}_V${v}.yaml
 
 // Chuẩn hoá chuỗi tìm kiếm (đồng bộ FileManagerScreen).
 const normalizeSearch = (s: string) => s.normalize('NFKC').toLowerCase().trim();
+
+// Các mức số dòng mỗi trang (đồng bộ FileManagerScreen).
+const PAGE_SIZES = [20, 50] as const;
 
 // ── Sort dùng chung cho cả 3 tầng ──
 type SortDir = 'asc' | 'desc';
@@ -147,13 +166,20 @@ export function DriveManagerScreen() {
   const scenario = facility?.scenarios.find((s) => s.id === path.scenarioId) ?? null;
   const level: 1 | 2 | 3 = scenario ? 3 : facility ? 2 : 1;
 
-  // Tìm kiếm + sort áp cho tầng hiện tại; đổi tầng thì reset.
+  // Tìm kiếm + sort + phân trang áp cho tầng hiện tại; đổi tầng thì reset.
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortState>(null);
+  const [pageSize, setPageSize] = useState<number>(PAGE_SIZES[0]);
+  const [page, setPage] = useState(1);
   useEffect(() => {
     setQuery('');
     setSort(null);
+    setPage(1);
   }, [path]);
+  // Về trang 1 khi đổi từ khoá / cột sort / số dòng mỗi trang.
+  useEffect(() => {
+    setPage(1);
+  }, [query, sort, pageSize]);
 
   const toggleSort = (key: string) =>
     setSort((s) =>
@@ -223,7 +249,7 @@ export function DriveManagerScreen() {
         case 'applied':
           return s.appliedV ?? undefined;
         case 'updatedAt':
-          return latestVersionOf(s)?.createdAt;
+          return latestVersionOf(s)?.updatedAt;
         case 'author':
           return latestVersionOf(s)?.author;
         default:
@@ -239,9 +265,23 @@ export function DriveManagerScreen() {
     if (q) rows = rows.filter((v) => normalizeSearch(v.author).includes(q));
     if (!sort) return rows;
     const val = (x: MockVersion): string | number =>
-      sort.key === 'createdAt' ? x.createdAt : sort.key === 'author' ? x.author : x.v;
+      sort.key === 'createdAt'
+        ? x.createdAt
+        : sort.key === 'updatedAt'
+          ? x.updatedAt
+          : sort.key === 'author'
+            ? x.author
+            : x.v;
     return rows.sort((a, b) => compareCells(val(a), val(b), sort.dir));
   }, [scenario, q, sort]);
+
+  // Phân trang trên tầng đang xem (áp sau lọc + sort).
+  const activeCount =
+    level === 1 ? facilityRows.length : level === 2 ? scenarioRows.length : versionRows.length;
+  const totalPages = Math.max(1, Math.ceil(activeCount / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pageSlice = <T,>(rows: T[]): T[] =>
+    rows.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   const subtitleKey: TKey =
     level === 1 ? 'dmSubtitleFacilities' : level === 2 ? 'dmSubtitleScenarios' : 'dmSubtitleVersions';
@@ -348,11 +388,60 @@ export function DriveManagerScreen() {
                 className="w-full rounded-lg border border-[var(--bk-border)] bg-[var(--bk-bg)] py-2 pl-9 pr-3 text-sm text-[var(--bk-text)] outline-none transition focus:border-[var(--bk-accent)] focus:ring-2 focus:ring-[var(--bk-accent-soft)]"
               />
             </div>
-            <span className="ml-auto whitespace-nowrap text-xs text-[var(--bk-text-faint)]">
-              {t('fmResultCount', {
-                n: level === 1 ? facilityRows.length : level === 2 ? scenarioRows.length : versionRows.length,
-              })}
-            </span>
+            {/* ── Phần trang: số kết quả · số dòng mỗi trang · điều hướng (đồng bộ màn cũ) ── */}
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+              <span className="hidden whitespace-nowrap text-xs text-[var(--bk-text-faint)] lg:inline">
+                {t('fmResultCount', { n: activeCount })}
+              </span>
+              <div className="flex shrink-0 items-center gap-1.5 text-sm text-[var(--bk-text-muted)]">
+                <span className="hidden sm:inline">{t('fmPerPage')}</span>
+                <div className="relative inline-flex shrink-0 items-center">
+                  <select
+                    value={pageSize}
+                    onChange={(e) => setPageSize(Number(e.target.value))}
+                    aria-label={t('fmPerPage')}
+                    className="cursor-pointer appearance-none rounded-lg border border-[var(--bk-border)] bg-[var(--bk-bg)] py-1.5 pl-2 pr-6 text-sm font-medium text-[var(--bk-text)] outline-none transition hover:border-[var(--bk-accent)] focus:border-[var(--bk-accent)]"
+                  >
+                    {PAGE_SIZES.map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                  <Icon
+                    icon="lucide:chevron-down"
+                    width={14}
+                    height={14}
+                    className="pointer-events-none absolute right-1.5 text-[var(--bk-text-muted)]"
+                  />
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={safePage <= 1}
+                  title={t('fmPrevPage')}
+                  aria-label={t('fmPrevPage')}
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--bk-text-muted)] transition hover:bg-[var(--bk-accent-soft)] hover:text-[var(--bk-accent)] disabled:pointer-events-none disabled:opacity-40"
+                >
+                  <Icon icon="lucide:chevron-left" width={18} height={18} />
+                </button>
+                <span className="min-w-[84px] whitespace-nowrap text-center text-xs font-medium text-[var(--bk-text-muted)]">
+                  {t('fmPageOf', { page: safePage, total: totalPages })}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={safePage >= totalPages}
+                  title={t('fmNextPage')}
+                  aria-label={t('fmNextPage')}
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--bk-text-muted)] transition hover:bg-[var(--bk-accent-soft)] hover:text-[var(--bk-accent)] disabled:pointer-events-none disabled:opacity-40"
+                >
+                  <Icon icon="lucide:chevron-right" width={18} height={18} />
+                </button>
+              </div>
+            </div>
           </div>
 
           {/* ── Bảng theo tầng ── */}
@@ -371,7 +460,7 @@ export function DriveManagerScreen() {
                     </tr>
                   </thead>
                   <tbody>
-                    {facilityRows.map((f) => (
+                    {pageSlice(facilityRows).map((f) => (
                       <tr key={f.id} className="border-b border-[var(--bk-border)] transition last:border-0 hover:bg-[var(--bk-surface-2)]">
                         <td className={cell}>
                           <button
@@ -425,7 +514,7 @@ export function DriveManagerScreen() {
                     </tr>
                   </thead>
                   <tbody>
-                    {scenarioRows.map((s) => {
+                    {pageSlice(scenarioRows).map((s) => {
                       const latest = latestOf(s);
                       const lv = latestVersionOf(s);
                       return (
@@ -460,7 +549,7 @@ export function DriveManagerScreen() {
                               </span>
                             )}
                           </td>
-                          <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>{lv?.createdAt ?? '—'}</td>
+                          <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>{lv?.updatedAt ?? '—'}</td>
                           <td className={`${cell} text-[var(--bk-text-muted)]`}>{lv?.author ?? '—'}</td>
                           <td className={cell}>
                             <div className="flex items-center justify-end gap-1">
@@ -500,12 +589,13 @@ export function DriveManagerScreen() {
                     <tr className="border-b border-[var(--bk-border)]">
                       {renderSortTh('v', 'colVersion', 'w-[320px] min-w-[260px]')}
                       {renderSortTh('createdAt', 'colCreatedAt')}
+                      {renderSortTh('updatedAt', 'colUpdatedAt')}
                       {renderSortTh('author', 'colAuthor')}
                       <th className={`${th} text-right`}>{t('colActions')}</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {versionRows.map((ver) => {
+                    {pageSlice(versionRows).map((ver) => {
                       const isLatest = ver.v === latestOf(scenario);
                       const isApplied = scenario.appliedV === ver.v;
                       return (
@@ -537,6 +627,7 @@ export function DriveManagerScreen() {
                             </div>
                           </td>
                           <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>{ver.createdAt}</td>
+                          <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>{ver.updatedAt}</td>
                           <td className={`${cell} text-[var(--bk-text-muted)]`}>{ver.author}</td>
                           <td className={cell}>
                             <div className="flex items-center justify-end gap-1">
