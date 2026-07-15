@@ -366,7 +366,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     pmMenu: 'Quản lý quyền',
     pmTitle: 'Quản lý quyền',
     pmDesc:
-      'Chỉ Owner và Admin mới xoá được bệnh viện / kịch bản / phiên bản. Danh sách dưới đây là các tài khoản đã truy cập app.',
+      'Chỉ Owner và Admin mới xoá được bệnh viện / kịch bản / phiên bản. Danh sách dưới đây là các tài khoản đã truy cập app; quyền Admin lưu trên repo (config/permissions.json).',
+    pmNeedGithub:
+      'Cần kết nối GitHub (token có quyền Contents: Read/Write) để ghi quyền lên repo — kết nối ở màn quản lý GitHub rồi thử lại.',
     pmRoleOwner: 'Owner',
     pmRoleAdmin: 'Admin',
     pmRoleUser: 'User',
@@ -741,7 +743,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     pmMenu: '権限管理',
     pmTitle: '権限管理',
     pmDesc:
-      '病院・シナリオ・バージョンを削除できるのはオーナーと管理者のみです。以下はアプリにアクセスしたアカウントの一覧です。',
+      '病院・シナリオ・バージョンを削除できるのはオーナーと管理者のみです。以下はアプリにアクセスしたアカウントの一覧です。管理者リストはリポジトリ（config/permissions.json）に保存されます。',
+    pmNeedGithub:
+      '権限をリポジトリに書き込むには GitHub 接続（Contents: Read/Write 権限のトークン）が必要です。GitHub管理画面で接続してからやり直してください。',
     pmRoleOwner: 'オーナー',
     pmRoleAdmin: '管理者',
     pmRoleUser: 'ユーザー',

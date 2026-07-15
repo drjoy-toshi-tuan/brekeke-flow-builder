@@ -25,14 +25,15 @@ import {
   type DriveItem,
 } from '../drive/api';
 import {
-  loadPermissions,
+  loadAccessLog,
   recordAccess,
   resolveRole,
-  savePermissions,
-  withAdmin,
+  type PermMember,
   type PermissionsData,
-  type PermissionsFile,
 } from '../drive/permissions';
+import { fetchAdmins, saveAdmins } from '../github/permissions';
+import { useGithubToken } from '../github/token';
+import { ghErrorKey } from '../github/errors';
 import { PermissionsModal } from './PermissionsModal';
 import { HoverLabelButton } from '../components/HoverTip';
 import { gdErrorKey } from '../drive/errors';
@@ -372,10 +373,16 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
   const [listErrorKey, setListErrorKey] = useState<TKey | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  // Phân quyền (permissions.json trong folder gốc Drive) — null khi chưa đọc xong/lỗi.
-  const [perm, setPerm] = useState<PermissionsFile | null>(null);
+  // Phân quyền HYBRID: danh sách admin đọc từ REPO (config/permissions.json —
+  // chỉ ai có quyền push mới sửa được); nhật ký truy cập ghi trên Drive.
+  const [admins, setAdmins] = useState<string[]>([]);
+  const [members, setMembers] = useState<PermMember[]>([]);
+  // Lỗi khi đổi quyền (hiện trong modal 権限管理, không dùng banner chung vì bị modal che).
+  const [permError, setPermError] = useState<string | null>(null);
+  // GitHub token đã lưu (localStorage) — cần để GHI danh sách admin lên repo.
+  const ghToken = useGithubToken((s) => s.token);
   // Owner nhận diện qua email cố định nên KHÔNG phụ thuộc file quyền đọc được hay chưa.
-  const role = resolveRole(user?.email, perm?.data ?? null);
+  const role = resolveRole(user?.email, { admins });
 
   // Token bị Drive từ chối giữa chừng (hết hạn/thu quyền) -> về panel kết nối.
   const handledAsExpired = (e: unknown): boolean => {
@@ -432,20 +439,24 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
     void load();
   }, [load]);
 
-  // Ghi nhận "tài khoản này vừa truy cập app" vào permissions.json (nguồn danh
-  // sách cho owner phân quyền) + đọc quyền hiện tại. Lỗi ở đây KHÔNG chặn màn
-  // hình: role rơi về mặc định (owner vẫn nhận diện được qua email).
+  // Ghi nhận "tài khoản này vừa truy cập app" vào access-log.json trên Drive
+  // (nguồn danh sách cho owner phân quyền) + đọc danh sách admin từ repo. Lỗi ở
+  // đây KHÔNG chặn màn hình: role rơi về mặc định (owner vẫn nhận diện qua email).
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const next = user?.email
+        const log = user?.email
           ? await recordAccess(token, { email: user.email, name: user.name })
-          : await loadPermissions(token);
-        if (!cancelled) setPerm(next);
+          : await loadAccessLog(token);
+        if (!cancelled) setMembers(log.members);
       } catch {
         // bỏ qua — phân quyền là tiện ích, không phải điều kiện dùng app
       }
+    })();
+    void (async () => {
+      const list = await fetchAdmins(); // không ném lỗi — trả [] khi có sự cố
+      if (!cancelled) setAdmins(list);
     })();
     return () => {
       cancelled = true;
@@ -470,18 +481,26 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
     }
   };
 
-  // Owner cấp/thu quyền Admin cho 1 email trong modal 権限管理.
+  // Owner cấp/thu quyền Admin cho 1 email trong modal 権限管理 — commit lên repo
+  // (config/permissions.json) bằng GitHub token đã lưu.
   const changeRole = async (email: string, makeAdmin: boolean) => {
-    if (!perm || busy) return;
+    if (busy) return;
+    if (!ghToken) {
+      // Chưa kết nối GitHub -> không ghi được lên repo; nhắc ngay trong modal.
+      setPermError(t('pmNeedGithub'));
+      return;
+    }
     setBusy(true);
-    setActionError(null);
+    setPermError(null);
     try {
-      const data = withAdmin(perm.data, email, makeAdmin);
-      await savePermissions(token, perm.fileId, data);
-      setPerm({ ...perm, data });
+      const e = email.trim().toLowerCase();
+      const next = admins.filter((a) => a.trim().toLowerCase() !== e);
+      if (makeAdmin) next.push(e);
+      await saveAdmins(ghToken, next);
+      setAdmins(next);
       showToast(t('pmSaved'));
-    } catch (e) {
-      if (!handledAsExpired(e)) setActionError(t(gdErrorKey(e)));
+    } catch (err) {
+      setPermError(t(ghErrorKey(err)));
     } finally {
       setBusy(false);
     }
@@ -692,8 +711,12 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
       }}
       canDelete={role !== 'user'}
       permissions={
-        role === 'owner' && perm
-          ? { data: perm.data, onChangeRole: (email, makeAdmin) => void changeRole(email, makeAdmin) }
+        role === 'owner'
+          ? {
+              data: { admins, members },
+              onChangeRole: (email, makeAdmin) => void changeRole(email, makeAdmin),
+              error: permError,
+            }
           : null
       }
     />
@@ -729,6 +752,7 @@ function DriveInner({
   permissions?: {
     data: PermissionsData;
     onChangeRole?: (email: string, makeAdmin: boolean) => void;
+    error?: string | null; // lỗi khi đổi quyền (hiện trong modal)
   } | null;
 }) {
   const t = useT();
@@ -1860,6 +1884,7 @@ function DriveInner({
         <PermissionsModal
           data={permissions.data}
           busy={busy}
+          error={permissions.error}
           onChangeRole={permissions.onChangeRole}
           onClose={() => setShowPermissions(false)}
         />

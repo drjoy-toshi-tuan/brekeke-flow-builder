@@ -12,11 +12,14 @@ import { formatDateTime } from '../ir/ivrProperty';
 export function PermissionsModal({
   data,
   busy,
+  error,
   onChangeRole,
   onClose,
 }: {
   data: PermissionsData;
   busy: boolean;
+  // Lỗi khi đổi quyền (vd chưa kết nối GitHub) — hiện ngay trong modal.
+  error?: string | null;
   // makeAdmin=true -> cấp Admin; false -> về User. Không truyền -> chỉ xem (mock).
   onChangeRole?: (email: string, makeAdmin: boolean) => void;
   onClose: () => void;
@@ -125,6 +128,13 @@ export function PermissionsModal({
             </tbody>
           </table>
         </div>
+
+        {error && (
+          <div className="mb-3 flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+            <Icon icon="lucide:triangle-alert" width={14} height={14} className="mt-0.5 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
 
         <div className="flex justify-end">
           <button
