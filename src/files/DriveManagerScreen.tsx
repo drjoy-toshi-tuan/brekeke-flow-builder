@@ -1427,14 +1427,27 @@ function DriveInner({
                           </td>
                           <td className={`${cell} font-semibold`}>{latest ? `V${latest}` : '—'}</td>
                           <td className={cell}>
-                            {/* Stamp theo môi trường: MASTER (本番, xanh lá) / DEMO (デモ, cam) kèm
-                                số version đang chạy; môi trường chưa deploy thì KHÔNG hiện stamp. */}
+                            {/* Stamp môi trường + V{N} đang chạy, bố cục giống badge Main|Sub flow
+                                (ngăn bằng gạch đứng); môi trường chưa deploy thì KHÔNG hiện. */}
                             {s.appliedMaster == null && s.appliedDemo == null ? (
                               <span className="text-[var(--bk-text-faint)]">—</span>
                             ) : (
-                              <span className="flex flex-wrap items-center gap-1.5">
-                                {s.appliedMaster != null && <EnvStamp env="master" v={s.appliedMaster} />}
-                                {s.appliedDemo != null && <EnvStamp env="demo" v={s.appliedDemo} />}
+                              <span className="flex shrink-0 items-center gap-1.5 text-xs font-semibold text-[var(--bk-text-muted)]">
+                                {s.appliedMaster != null && (
+                                  <span className="flex items-center gap-1">
+                                    <EnvStamp env="master" />
+                                    <span>V{s.appliedMaster}</span>
+                                  </span>
+                                )}
+                                {s.appliedMaster != null && s.appliedDemo != null && (
+                                  <span aria-hidden className="h-3.5 w-px bg-[var(--bk-border)]" />
+                                )}
+                                {s.appliedDemo != null && (
+                                  <span className="flex items-center gap-1">
+                                    <EnvStamp env="demo" />
+                                    <span>V{s.appliedDemo}</span>
+                                  </span>
+                                )}
                               </span>
                             )}
                           </td>
@@ -1518,7 +1531,7 @@ function DriveInner({
                               )}
                               {isLatest && (
                                 <span
-                                  className="inline-flex shrink-0 items-center text-[var(--bk-accent)]"
+                                  className="inline-flex shrink-0 items-center text-[#b026ff]"
                                   title={t('dmLatestBadge')}
                                 >
                                   <Icon icon="mdi:new-box" width={20} height={20} />
@@ -1904,24 +1917,21 @@ function DriveInner({
   );
 }
 
-// Stamp môi trường deploy: MASTER (本番, xanh lá sáng) / DEMO (デモ, cam). Truyền `v`
-// để kèm số version đang chạy (tầng kịch bản); tầng version chỉ cần tên môi trường.
-function EnvStamp({ env, v }: { env: 'master' | 'demo'; v?: number }) {
+// Stamp môi trường deploy: MAS/本番 (xanh emerald ngả cyan) / DEM/デモ (cam) — nền
+// đặc, chữ trắng bold, font display riêng cho nổi bật (fallback dần về sans).
+function EnvStamp({ env }: { env: 'master' | 'demo' }) {
   const t = useT();
   const master = env === 'master';
-  const color = master ? '#16a34a' : '#f97316';
   return (
     <span
       title={t('dmAppliedBadge')}
-      className="inline-flex shrink-0 items-center gap-1 rounded-md border-2 px-1.5 py-px text-[10px] font-extrabold uppercase tracking-wider"
+      className="inline-flex shrink-0 items-center rounded px-1.5 py-px text-[10px] font-black italic uppercase leading-4 tracking-widest text-white"
       style={{
-        borderColor: color,
-        color,
-        background: `color-mix(in srgb, ${color} 10%, transparent)`,
+        background: master ? '#10b981' : '#f97316',
+        fontFamily: "'Arial Black', 'Avenir Next Condensed', 'Hiragino Sans', 'Yu Gothic', sans-serif",
       }}
     >
       {t(master ? 'dmEnvMaster' : 'dmEnvDemo')}
-      {v != null && <span className="font-bold">V{v}</span>}
     </span>
   );
 }
