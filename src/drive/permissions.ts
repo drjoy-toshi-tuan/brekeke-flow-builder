@@ -12,7 +12,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { findChildFile, getFileText, createJsonFile, updateFileContent } from './api';
-import { DRIVE_ROOT_FOLDER_ID } from './config';
 
 // Tài khoản owner của app (cố định theo yêu cầu vận hành).
 export const OWNER_EMAIL = 'tuan.nguyen4@drjoy.jp';
