@@ -9,9 +9,14 @@ import { create } from 'zustand';
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface OpenFile {
-  path: string; // flows/xxx.yaml (rỗng nếu là flow mới chưa lưu)
+  path: string; // flows/xxx.yaml (GitHub) hoặc "施設名/シナリオ名" (Drive — chỉ để hiển thị)
   name: string; // xxx.yaml
-  sha: string | null; // sha blob hiện tại trên repo; null nếu chưa từng lưu
+  sha: string | null; // sha blob hiện tại trên repo; null nếu chưa từng lưu / file Drive
+  // ── Nguồn lưu trữ: 'github' (mặc định, file cũ) hoặc 'drive' ──
+  storage?: 'github' | 'drive';
+  driveFileId?: string; // id file version đang mở trên Drive
+  driveFolderId?: string; // id folder シナリオ chứa các version (tạo version mới vào đây)
+  version?: number; // số version đang mở (V{N})
 }
 
 interface FileState {

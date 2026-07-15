@@ -4,6 +4,7 @@ import { LoginScreen } from './auth/LoginScreen';
 import { useAuth } from './auth/useAuth';
 import { useFileStore } from './store/fileStore';
 import { FileManagerScreen } from './files/FileManagerScreen';
+import { DriveManagerScreen } from './files/DriveManagerScreen';
 import { FlowCanvas } from './canvas/FlowCanvas';
 import { Toolbar } from './components/Toolbar';
 import { NodeSettingsPanel } from './components/NodeSettingsPanel';
@@ -19,6 +20,10 @@ export default function App() {
   );
 }
 
+// Preview màn quản lý phân cấp theo Drive (mock data) — mở bằng `?drive` trên URL.
+// Chỉ để review UI trong lúc phát triển; sẽ thay màn GitHub khi chuyển hẳn sang Drive.
+const DRIVE_PREVIEW = new URLSearchParams(window.location.search).has('drive');
+
 // Gating theo 2 lớp:
 //   1) Chưa đăng nhập (hoặc sai domain) -> màn login.
 //   2) Đã đăng nhập nhưng chưa chọn file -> màn quản lý file YAML (GitHub).
@@ -27,7 +32,7 @@ function Gate() {
   const { user } = useAuth();
   const currentFile = useFileStore((s) => s.current);
   if (!user) return <LoginScreen />;
-  if (!currentFile) return <FileManagerScreen />;
+  if (!currentFile) return DRIVE_PREVIEW ? <DriveManagerScreen /> : <FileManagerScreen />;
   return <FlowApp />;
 }
 
