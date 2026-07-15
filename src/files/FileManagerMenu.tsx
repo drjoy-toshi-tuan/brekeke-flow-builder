@@ -15,7 +15,12 @@ import { MenuToggleIcon } from '../components/MenuToggleIcon';
 // KHÔNG có mục "Cài đặt flow" vì màn này chưa mở flow nào.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function FileManagerMenu() {
+export function FileManagerMenu({
+  onManagePermissions,
+}: {
+  // Chỉ truyền khi người dùng là OWNER (màn Drive) -> hiện mục "Quản lý quyền".
+  onManagePermissions?: () => void;
+} = {}) {
   const [open, setOpen] = useState(false);
   const [render, setRender] = useState(false);
   // Xác nhận trước khi đăng xuất / ngắt kết nối GitHub (tránh bấm nhầm 1 click).
@@ -94,6 +99,25 @@ export function FileManagerMenu() {
               title={theme === 'dark' ? t('themeDark') : t('themeLight')}
             />
           </div>
+
+          {/* ── Quản lý quyền (chỉ owner) ── */}
+          {onManagePermissions && (
+            <>
+              <div className="bk-menu-sep" />
+              <button
+                type="button"
+                role="menuitem"
+                className="bk-menu-item"
+                onClick={() => {
+                  setOpen(false);
+                  onManagePermissions();
+                }}
+              >
+                <Icon icon="lucide:key-round" width={16} height={16} className="text-[var(--bk-accent)]" />
+                <span>{t('pmMenu')}</span>
+              </button>
+            </>
+          )}
 
           {/* ── GitHub ── */}
           {login && (

@@ -17,10 +17,12 @@ export interface DriveItem {
   parents?: string[];
   // Key-value riêng của app trên item (vd appliedVersion do bot deploy ghi).
   appProperties?: Record<string, string>;
+  // Mô tả tự do của item — app dùng làm GHI CHÚ của folder シナリオ (xem được cả trên web Drive).
+  description?: string;
 }
 
 // Các field xin từ API (khớp DriveItem — xin đúng thứ cần cho nhẹ).
-const ITEM_FIELDS = 'id,name,mimeType,createdTime,modifiedTime,lastModifyingUser(displayName),parents,appProperties';
+const ITEM_FIELDS = 'id,name,mimeType,createdTime,modifiedTime,lastModifyingUser(displayName),parents,appProperties,description';
 
 export class DriveApiError extends Error {
   constructor(
@@ -157,21 +159,41 @@ export async function ensureFolder(token: string, parentId: string, name: string
   return (await findChildFolder(token, parentId, name)) ?? createFolder(token, parentId, name);
 }
 
-// Tạo file YAML mới (multipart: metadata + nội dung trong 1 request).
-export async function createYamlFile(
+// Tìm FILE con theo tên trong 1 folder cha (đúng tên, không phải folder, chưa xoá).
+// null nếu chưa có — dùng cho file phân quyền permissions.json ở folder gốc.
+export async function findChildFile(
+  token: string,
+  parentId: string,
+  name: string,
+): Promise<DriveItem | null> {
+  const params = new URLSearchParams({
+    q: `'${qEscape(parentId)}' in parents and name='${qEscape(name)}' and mimeType!='${FOLDER_MIME}' and trashed=false`,
+    fields: `files(${ITEM_FIELDS})`,
+    pageSize: '1',
+  });
+  const res = await ensureOk(
+    await dFetch(token, `${DRIVE_API_BASE}/files?${ALL_DRIVES_LIST}&${params.toString()}`),
+  );
+  const body = (await res.json()) as { files: DriveItem[] };
+  return body.files[0] ?? null;
+}
+
+// Tạo file mới (multipart: metadata + nội dung trong 1 request) với MIME chỉ định.
+async function createFileMultipart(
   token: string,
   parentId: string,
   name: string,
   content: string,
+  mime: string,
 ): Promise<DriveItem> {
   const boundary = 'bk-flow-builder-314159';
   const body = [
     `--${boundary}`,
     'Content-Type: application/json; charset=UTF-8',
     '',
-    JSON.stringify({ name, parents: [parentId], mimeType: 'application/x-yaml' }),
+    JSON.stringify({ name, parents: [parentId], mimeType: mime }),
     `--${boundary}`,
-    'Content-Type: application/x-yaml; charset=UTF-8',
+    `Content-Type: ${mime}; charset=UTF-8`,
     '',
     content,
     `--${boundary}--`,
@@ -191,20 +213,45 @@ export async function createYamlFile(
   return (await res.json()) as DriveItem;
 }
 
-// Ghi đè NỘI DUNG file version đang mở (lưu thường) — modifiedTime (更新日時) tự
-// nhảy, createdTime (作成日時) giữ nguyên, fileId không đổi (an toàn hơn xoá-tạo-lại:
-// không có khoảnh khắc nào file biến mất, lỗi giữa chừng thì bản cũ vẫn nguyên).
-export async function updateYamlContent(token: string, fileId: string, content: string): Promise<void> {
+export const createYamlFile = (token: string, parentId: string, name: string, content: string) =>
+  createFileMultipart(token, parentId, name, content, 'application/x-yaml');
+
+export const createJsonFile = (token: string, parentId: string, name: string, content: string) =>
+  createFileMultipart(token, parentId, name, content, 'application/json');
+
+// Ghi đè NỘI DUNG file (lưu thường) — modifiedTime (更新日時) tự nhảy, createdTime
+// (作成日時) giữ nguyên, fileId không đổi (an toàn hơn xoá-tạo-lại: không có
+// khoảnh khắc nào file biến mất, lỗi giữa chừng thì bản cũ vẫn nguyên).
+export async function updateFileContent(
+  token: string,
+  fileId: string,
+  content: string,
+  mime = 'application/x-yaml',
+): Promise<void> {
   await ensureOk(
     await dFetch(
       token,
       `${DRIVE_UPLOAD_BASE}/files/${encodeURIComponent(fileId)}?uploadType=media&${ALL_DRIVES}`,
       {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/x-yaml; charset=UTF-8' },
+        headers: { 'Content-Type': `${mime}; charset=UTF-8` },
         body: content,
       },
     ),
+  );
+}
+
+export const updateYamlContent = (token: string, fileId: string, content: string) =>
+  updateFileContent(token, fileId, content, 'application/x-yaml');
+
+// Cập nhật MÔ TẢ (description) của item — app dùng làm ghi chú của folder シナリオ.
+export async function updateItemDescription(token: string, id: string, description: string): Promise<void> {
+  await ensureOk(
+    await dFetch(token, `${DRIVE_API_BASE}/files/${encodeURIComponent(id)}?${ALL_DRIVES}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description }),
+    }),
   );
 }
 

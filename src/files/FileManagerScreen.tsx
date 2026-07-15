@@ -24,6 +24,7 @@ import { useT, type TKey } from '../ui/i18n';
 import { Icon } from '../ui/icons';
 import { FlowGlyph } from '../ui/FlowGlyph';
 import { BrandLockup } from '../ui/BrandLockup';
+import { HoverLabelButton } from '../components/HoverTip';
 
 // File kèm metadata đọc từ header YAML (để hiển thị theo cột).
 type FileRow = FlowFile & { meta: FlowMeta };
@@ -765,33 +766,30 @@ export function FileManagerScreen() {
                           động; chặn nổi bọt để không mở dòng. */}
                       <td className={cell} onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-0.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
-                          <button
-                            type="button"
+                          <HoverLabelButton
+                            label={t('edit')}
                             onClick={() => openRenameModal(file)}
                             disabled={busy}
                             className="flex h-8 w-8 items-center justify-center text-[var(--bk-text-faint)] transition hover:text-[#f97316] disabled:pointer-events-none disabled:opacity-40"
-                            title={t('fmRename')}
                           >
                             <Icon key={hoverRow === file.path ? 'play' : 'idle'} icon="line-md:edit-twotone" width={17} height={17} />
-                          </button>
-                          <button
-                            type="button"
+                          </HoverLabelButton>
+                          <HoverLabelButton
+                            label={t('fmDuplicate')}
                             onClick={() => void handleDuplicate(file)}
                             disabled={busy}
                             className="flex h-8 w-8 items-center justify-center text-[var(--bk-text-faint)] transition hover:text-[#22c55e] disabled:pointer-events-none disabled:opacity-40"
-                            title={t('fmDuplicate')}
                           >
                             <Icon key={hoverRow === file.path ? 'play' : 'idle'} icon="line-md:duplicate" width={17} height={17} />
-                          </button>
-                          <button
-                            type="button"
+                          </HoverLabelButton>
+                          <HoverLabelButton
+                            label={t('delete')}
                             onClick={() => setDeleteTarget(file)}
                             disabled={busy}
                             className="flex h-8 w-8 items-center justify-center text-[var(--bk-text-faint)] transition hover:text-rose-500 disabled:pointer-events-none disabled:opacity-40"
-                            title={t('fmDeleteTitle')}
                           >
                             <Icon key={hoverRow === file.path ? 'play' : 'idle'} icon="line-md:trash" width={17} height={17} />
-                          </button>
+                          </HoverLabelButton>
                         </div>
                       </td>
                     </tr>
@@ -813,8 +811,8 @@ export function FileManagerScreen() {
 
       {/* Modal: tạo flow mới (施設名 + シナリオ名) */}
       {showNew && (
-        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true" onClick={() => setShowNew(false)}>
-          <div className="bk-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true">
+          <div className="bk-modal">
             <div className="mb-3 flex items-center gap-2 text-sm font-bold text-[var(--bk-text)]">
               <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]">
                 <Icon icon="lucide:file-plus" width={15} height={15} />
@@ -872,8 +870,8 @@ export function FileManagerScreen() {
 
       {/* Modal: đổi tên bệnh viện / tên flow (vá metadata, giữ nguyên nodes) */}
       {renameTarget && (
-        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true" onClick={() => setRenameTarget(null)}>
-          <div className="bk-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true">
+          <div className="bk-modal">
             <div className="mb-3 flex items-center gap-2 text-sm font-bold text-[var(--bk-text)]">
               <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]">
                 <Icon icon="lucide:pencil" width={15} height={15} />
@@ -928,8 +926,8 @@ export function FileManagerScreen() {
 
       {/* Modal: xác nhận ghi đè khi upload trùng tên */}
       {overwrite && (
-        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true" onClick={() => setOverwrite(null)}>
-          <div className="bk-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true">
+          <div className="bk-modal">
             <div className="mb-1 flex items-center gap-2 text-sm font-bold text-[var(--bk-text)]">
               <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[color-mix(in_srgb,#d97706_16%,transparent)] text-[#d97706]">
                 <Icon icon="lucide:triangle-alert" width={15} height={15} />
@@ -961,8 +959,8 @@ export function FileManagerScreen() {
 
       {/* Modal: xác nhận xoá */}
       {deleteTarget && (
-        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true" onClick={() => setDeleteTarget(null)}>
-          <div className="bk-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true">
+          <div className="bk-modal">
             <div className="mb-1 flex items-center gap-2 text-sm font-bold text-[var(--bk-text)]">
               <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[color-mix(in_srgb,#dc2626_14%,transparent)] text-[#dc2626]">
                 <Icon icon="lucide:trash-2" width={15} height={15} />
