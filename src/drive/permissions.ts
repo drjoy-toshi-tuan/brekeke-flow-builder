@@ -18,6 +18,7 @@ import { DRIVE_ROOT_FOLDER_ID } from './config';
 export const OWNER_EMAIL = 'tuan.nguyen4@drjoy.jp';
 
 // Tên file nhật ký truy cập trong folder gốc kho Drive.
+const DRIVE_LOG_FOLDER = '18BNSBl_wMneoUdwYevmtnAoHbDdAlqn6';
 const ACCESS_LOG_FILE = 'access-log.json';
 
 export type PermRole = 'owner' | 'admin' | 'user';
@@ -65,13 +66,13 @@ export function resolveRole(email: string | undefined, data: Pick<PermissionsDat
 
 // Đọc nhật ký truy cập; chưa có thì tạo file rỗng để các lần ghi sau chỉ cần PATCH.
 export async function loadAccessLog(token: string): Promise<AccessLog> {
-  const existing = await findChildFile(token, DRIVE_ROOT_FOLDER_ID, ACCESS_LOG_FILE);
+  const existing = await findChildFile(token, DRIVE_LOG_FOLDER, ACCESS_LOG_FILE);
   if (existing) {
     return { fileId: existing.id, members: parseMembers(await getFileText(token, existing.id)) };
   }
   const created = await createJsonFile(
     token,
-    DRIVE_ROOT_FOLDER_ID,
+    DRIVE_LOG_FOLDER,
     ACCESS_LOG_FILE,
     JSON.stringify({ members: [] }, null, 2),
   );
