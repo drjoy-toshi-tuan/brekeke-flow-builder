@@ -16,12 +16,26 @@ import {
   getFileText,
   createYamlFile,
   ensureFolder,
+  renameItem,
   trashItem,
+  updateItemDescription,
   isFolder,
   isYamlName,
   DriveApiError,
   type DriveItem,
 } from '../drive/api';
+import {
+  loadAccessLog,
+  recordAccess,
+  resolveRole,
+  type PermMember,
+  type PermissionsData,
+} from '../drive/permissions';
+import { fetchAdmins, saveAdmins } from '../github/permissions';
+import { useGithubToken } from '../github/token';
+import { ghErrorKey } from '../github/errors';
+import { PermissionsModal } from './PermissionsModal';
+import { HoverLabelButton } from '../components/HoverTip';
 import { gdErrorKey } from '../drive/errors';
 import { DRIVE_ROOT_FOLDER_ID, parseVersionFromName, versionFileName } from '../drive/config';
 import { parseFlowMeta, updateFlowMeta } from '../ir/flowMeta';
@@ -60,6 +74,8 @@ export interface ScenarioNode {
   createdAt?: string; // createdTime của folder シナリオ (作成日時)
   appliedV: number | null; // version đang chạy trên hệ thống AI電話 (null = chưa deploy)
   versions: VersionNode[]; // sắp DESC theo v (mới nhất trước)
+  // Ghi chú tự do của kịch bản (description của folder シナリオ trên Drive).
+  note?: string;
 }
 
 export interface FacilityNode {
@@ -81,9 +97,13 @@ interface DriveActions {
   onRefresh?: () => void;
   onOpenVersion?: (f: FacilityNode, s: ScenarioNode, v: VersionNode) => void;
   onDuplicate?: (f: FacilityNode, s: ScenarioNode, v: VersionNode) => void;
+  // Đổi tên folder 病院/シナリオ (chỉ tên folder, không đụng nội dung bên trong).
+  onRename?: (id: string, name: string) => void;
   onDelete?: (target: DeleteTarget) => void;
   onCreateFlow?: (facility: string, scenario: string) => void;
   onImport?: (facility: string, scenario: string, content: string) => void;
+  // Lưu ghi chú của kịch bản (ghi vào description folder シナリオ; rỗng = xoá ghi chú).
+  onSaveNote?: (scenarioId: string, note: string) => void;
   // Đọc subflowCount cho các version của 1 kịch bản (gọi khi vào tầng flow).
   onLoadVersionDetails?: (facilityId: string, scenarioId: string) => void;
 }
@@ -162,6 +182,7 @@ const MOCK_FACILITIES: FacilityNode[] = [
         name: '診療予約',
         createdAt: '2026-07-02 14:00',
         appliedV: 2,
+        note: 'V2 đang chạy thật trên tổng đài. Trước khi deploy bản mới cần xác nhận lại giờ tiếp nhận với bệnh viện.',
         versions: [
           { fileId: 'm1', v: 3, createdAt: '2026-07-14 18:22', updatedAt: '2026-07-15 10:05', author: 'Tuan Nguyen', subflowCount: 3 },
           { fileId: 'm2', v: 2, createdAt: '2026-07-10 09:41', updatedAt: '2026-07-12 14:20', author: 'Tuan Nguyen', subflowCount: 2 },
@@ -226,13 +247,35 @@ const MOCK_FACILITIES: FacilityNode[] = [
   { id: 'f4', name: '大阪母子医療センター', createdAt: '2026-07-10 13:05', scenarios: [] },
 ];
 
+// Dữ liệu phân quyền mẫu cho chế độ mock (review UI modal 権限管理).
+const MOCK_PERMISSIONS: PermissionsData = {
+  admins: ['ha.pham@drjoy.jp'],
+  members: [
+    { email: 'tuan.nguyen4@drjoy.jp', name: 'Tuan Nguyen', lastAccessAt: '2026-07-15T09:12:00+09:00' },
+    { email: 'ha.pham@drjoy.jp', name: 'Ha Pham', lastAccessAt: '2026-07-14T18:40:00+09:00' },
+    { email: 'hanako.tanaka@drjoy.jp', name: '田中 花子', lastAccessAt: '2026-07-13T10:05:00+09:00' },
+  ],
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Entry: có Client ID -> bản thật (OAuth + Drive API); không -> mock để review UI.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function DriveManagerScreen() {
   if (!GOOGLE_CLIENT_ID) {
-    return <DriveInner facilities={MOCK_FACILITIES} mock loading={false} busy={false} listErrorKey={null} actionError={null} actions={{}} />;
+    return (
+      <DriveInner
+        facilities={MOCK_FACILITIES}
+        mock
+        loading={false}
+        busy={false}
+        listErrorKey={null}
+        actionError={null}
+        actions={{}}
+        canDelete
+        permissions={{ data: MOCK_PERMISSIONS }}
+      />
+    );
   }
   return <DriveReal />;
 }
@@ -303,6 +346,7 @@ function buildTree(fac: DriveItem[], scen: DriveItem[], files: DriveItem[]): Fac
       createdAt: fmtTime(s.createdTime),
       appliedV: Number.isFinite(applied) && applied > 0 ? applied : null,
       versions: (versByParent.get(s.id) ?? []).sort((a, b) => b.v - a.v),
+      note: s.description?.trim() ? s.description : undefined,
     };
     scenByParent.set(parent, [...(scenByParent.get(parent) ?? []), node]);
   }
@@ -329,6 +373,16 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
   const [listErrorKey, setListErrorKey] = useState<TKey | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Phân quyền HYBRID: danh sách admin đọc từ REPO (config/permissions.json —
+  // chỉ ai có quyền push mới sửa được); nhật ký truy cập ghi trên Drive.
+  const [admins, setAdmins] = useState<string[]>([]);
+  const [members, setMembers] = useState<PermMember[]>([]);
+  // Lỗi khi đổi quyền (hiện trong modal 権限管理, không dùng banner chung vì bị modal che).
+  const [permError, setPermError] = useState<string | null>(null);
+  // GitHub token đã lưu (localStorage) — cần để GHI danh sách admin lên repo.
+  const ghToken = useGithubToken((s) => s.token);
+  // Owner nhận diện qua email cố định nên KHÔNG phụ thuộc file quyền đọc được hay chưa.
+  const role = resolveRole(user?.email, { admins });
 
   // Token bị Drive từ chối giữa chừng (hết hạn/thu quyền) -> về panel kết nối.
   const handledAsExpired = (e: unknown): boolean => {
@@ -384,6 +438,73 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Ghi nhận "tài khoản này vừa truy cập app" vào access-log.json trên Drive
+  // (nguồn danh sách cho owner phân quyền) + đọc danh sách admin từ repo. Lỗi ở
+  // đây KHÔNG chặn màn hình: role rơi về mặc định (owner vẫn nhận diện qua email).
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const log = user?.email
+          ? await recordAccess(token, { email: user.email, name: user.name })
+          : await loadAccessLog(token);
+        if (!cancelled) setMembers(log.members);
+      } catch {
+        // bỏ qua — phân quyền là tiện ích, không phải điều kiện dùng app
+      }
+    })();
+    void (async () => {
+      const list = await fetchAdmins(); // không ném lỗi — trả [] khi có sự cố
+      if (!cancelled) setAdmins(list);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Chỉ chạy lại khi đổi token (user đi kèm phiên đăng nhập, ổn định trong phiên).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  // Lưu ghi chú kịch bản = PATCH description của folder シナリオ (rỗng = xoá ghi chú).
+  const saveNote = async (scenarioId: string, note: string) => {
+    if (busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await updateItemDescription(token, scenarioId, note);
+      showToast(t('dmNoteSaved'));
+      await load();
+    } catch (e) {
+      if (!handledAsExpired(e)) setActionError(t(gdErrorKey(e)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Owner cấp/thu quyền Admin cho 1 email trong modal 権限管理 — commit lên repo
+  // (config/permissions.json) bằng GitHub token đã lưu.
+  const changeRole = async (email: string, makeAdmin: boolean) => {
+    if (busy) return;
+    if (!ghToken) {
+      // Chưa kết nối GitHub -> không ghi được lên repo; nhắc ngay trong modal.
+      setPermError(t('pmNeedGithub'));
+      return;
+    }
+    setBusy(true);
+    setPermError(null);
+    try {
+      const e = email.trim().toLowerCase();
+      const next = admins.filter((a) => a.trim().toLowerCase() !== e);
+      if (makeAdmin) next.push(e);
+      await saveAdmins(ghToken, next);
+      setAdmins(next);
+      showToast(t('pmSaved'));
+    } catch (err) {
+      setPermError(t(ghErrorKey(err)));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   // Đọc subflowCount cho các version của 1 kịch bản khi người dùng vào tầng flow
   // (mỗi version có thể khác nhau nên phải đọc từng file — lazy + cache để không
@@ -479,6 +600,22 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
     }
   };
 
+  // Đổi tên folder 病院/シナリオ. File version bên trong giữ nguyên (không đổi tên
+  // hàng loạt); version mới tạo sau đó sẽ theo tên mới.
+  const rename = async (id: string, name: string) => {
+    if (busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await renameItem(token, id, name);
+      await load();
+    } catch (e) {
+      if (!handledAsExpired(e)) setActionError(t(gdErrorKey(e)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // Xoá (đã xác nhận ở modal) = đưa vào Thùng rác Drive (khôi phục được ~30 ngày).
   const remove = async (target: DeleteTarget) => {
     if (busy) return;
@@ -565,11 +702,23 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
         onRefresh: () => void load(),
         onOpenVersion: (f, s, v) => void openVersion(f, s, v),
         onDuplicate: (_f, s, v) => void duplicateVersion(s, v),
+        onRename: (id, name) => void rename(id, name),
         onDelete: (target) => void remove(target),
         onCreateFlow: (facility, scenario) => void createFlow(facility, scenario),
         onImport: (facility, scenario, content) => void importFlow(facility, scenario, content),
+        onSaveNote: (scenarioId, note) => void saveNote(scenarioId, note),
         onLoadVersionDetails: (facilityId, scenarioId) => void loadVersionDetails(facilityId, scenarioId),
       }}
+      canDelete={role !== 'user'}
+      permissions={
+        role === 'owner'
+          ? {
+              data: { admins, members },
+              onChangeRole: (email, makeAdmin) => void changeRole(email, makeAdmin),
+              error: permError,
+            }
+          : null
+      }
     />
   );
 }
@@ -587,6 +736,8 @@ function DriveInner({
   listErrorKey,
   actionError,
   actions,
+  canDelete,
+  permissions,
 }: {
   facilities: FacilityNode[];
   mock: boolean;
@@ -595,6 +746,14 @@ function DriveInner({
   listErrorKey: TKey | null;
   actionError: string | null;
   actions: DriveActions;
+  // Chỉ owner/admin mới thấy nút Xoá (phân quyền qua permissions.json trên Drive).
+  canDelete: boolean;
+  // != null khi người dùng là OWNER -> menu có mục "Quản lý quyền" + modal phân quyền.
+  permissions?: {
+    data: PermissionsData;
+    onChangeRole?: (email: string, makeAdmin: boolean) => void;
+    error?: string | null; // lỗi khi đổi quyền (hiện trong modal)
+  } | null;
 }) {
   const t = useT();
 
@@ -642,12 +801,44 @@ function DriveInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [facility, scenario]);
 
-  // Modal tạo flow mới / xác nhận xoá.
+  // Modal tạo flow mới (chọn/tạo folder như modal import) / xác nhận xoá / đổi tên folder.
   const [showNew, setShowNew] = useState(false);
-  const [newFacility, setNewFacility] = useState('');
-  const [newScenario, setNewScenario] = useState('');
+  const [newFacSel, setNewFacSel] = useState<string>(NEW_OPTION);
+  const [newFacName, setNewFacName] = useState('');
+  const [newScenSel, setNewScenSel] = useState<string>(NEW_OPTION);
+  const [newScenName, setNewScenName] = useState('');
   const [createErrorKey, setCreateErrorKey] = useState<TKey | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [renameTarget, setRenameTarget] = useState<{ kind: 'facility' | 'scenario'; id: string; name: string } | null>(null);
+  const [renameName, setRenameName] = useState('');
+  // Modal ghi chú kịch bản (màn flow) + modal 権限管理 (chỉ owner).
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [noteDraft, setNoteDraft] = useState('');
+  const [showPermissions, setShowPermissions] = useState(false);
+
+  // Dòng đang hover — dùng làm `key` cho icon line-md trong cụm nút để REMOUNT
+  // khi nút hiện ra (animation SMIL của line-md chỉ chạy 1 lần lúc <svg> mount).
+  const [hoverRow, setHoverRow] = useState<string | null>(null);
+  const rowHoverProps = (id: string) => ({
+    onMouseEnter: () => setHoverRow(id),
+    onMouseLeave: () => setHoverRow((cur) => (cur === id ? null : cur)),
+  });
+  const iconKey = (id: string) => (hoverRow === id ? 'play' : 'idle');
+
+  const openRenameModal = (kind: 'facility' | 'scenario', id: string, name: string) => {
+    setRenameTarget({ kind, id, name });
+    setRenameName(name);
+  };
+
+  const handleRename = () => {
+    if (!renameTarget) return;
+    const name = renameName.trim();
+    if (!name) return;
+    const target = renameTarget;
+    setRenameTarget(null);
+    // Tên không đổi -> khỏi gọi API.
+    if (name !== target.name) actions.onRename?.(target.id, name);
+  };
 
   // ── Import: đọc file YAML -> modal chọn/tạo folder bệnh viện + kịch bản ──
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -718,17 +909,26 @@ function DriveInner({
     if (content) actions.onImport?.(fac, scen, content);
   };
 
+  // Bệnh viện đang chọn trong modal tạo mới (khi không đứng sẵn trong 1 bệnh viện).
+  const newFacility = newFacSel === NEW_OPTION ? null : facilities.find((f) => f.id === newFacSel) ?? null;
+
   const openNewModal = () => {
     setCreateErrorKey(null);
-    // Đang đứng trong 1 bệnh viện -> prefill tên bệnh viện đó.
-    setNewFacility(facility?.name ?? '');
-    setNewScenario(scenario?.name ?? '');
+    // Đang đứng trong bệnh viện/kịch bản -> prefill đúng vị trí; ngoài ra về chế độ "tạo mới".
+    setNewFacSel(facility?.id ?? NEW_OPTION);
+    setNewFacName('');
+    setNewScenSel(scenario?.id ?? NEW_OPTION);
+    setNewScenName('');
     setShowNew(true);
   };
 
   const handleCreate = () => {
-    const fac = newFacility.trim();
-    const scen = newScenario.trim();
+    const facNode = facility ?? newFacility;
+    const fac = facNode ? facNode.name : newFacName.trim();
+    const scen =
+      newScenSel === NEW_OPTION
+        ? newScenName.trim()
+        : facNode?.scenarios.find((s) => s.id === newScenSel)?.name ?? '';
     if (!fac) {
       setCreateErrorKey('fmFacilityRequired');
       return;
@@ -739,6 +939,21 @@ function DriveInner({
     }
     setShowNew(false);
     actions.onCreateFlow?.(fac, scen);
+  };
+
+  // Mở modal ghi chú của kịch bản đang xem (màn flow) — prefill nội dung hiện có.
+  const openNoteModal = () => {
+    if (!scenario) return;
+    setNoteDraft(scenario.note ?? '');
+    setNoteOpen(true);
+  };
+
+  const handleSaveNote = () => {
+    if (!scenario) return;
+    const note = noteDraft.trim();
+    setNoteOpen(false);
+    // Nội dung không đổi -> khỏi gọi API.
+    if (note !== (scenario.note ?? '')) actions.onSaveNote?.(scenario.id, note);
   };
 
   const toggleSort = (key: string) =>
@@ -866,7 +1081,8 @@ function DriveInner({
       {/* ── Top bar (đồng bộ FileManagerScreen) ── */}
       <header className="flex items-center justify-between border-b border-[var(--bk-border)] bg-[var(--bk-surface)] px-4 py-2.5">
         <BrandLockup logoClass="h-8 w-8" textClass="text-xl" />
-        <FileManagerMenu />
+        {/* Owner mới có mục "Quản lý quyền" trong menu */}
+        <FileManagerMenu onManagePermissions={permissions ? () => setShowPermissions(true) : undefined} />
       </header>
 
       <main className="relative mx-auto w-full max-w-7xl flex-1 overflow-auto p-6">
@@ -953,6 +1169,29 @@ function DriveInner({
               <Icon icon="line-md:upload-loop" width={17} height={17} />
               {t('dmImport')}
             </button>
+            {/* Ghi chú kịch bản — CHỈ ở màn flow (tầng バージョン). Hover = xem nhanh
+                nội dung ghi chú (tooltip); click = mở modal sửa. Đã có ghi chú thì
+                icon đổi sang clipboard-list màu cam. */}
+            {level === 3 && scenario && (
+              <HoverLabelButton
+                label={scenario.note ?? ''}
+                disabled={busy || (!mock && !actions.onSaveNote)}
+                onClick={openNoteModal}
+                className={`flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-sm font-semibold shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-60 ${
+                  scenario.note
+                    ? 'border-amber-300 bg-amber-50 text-amber-700 hover:border-amber-400'
+                    : 'border-[var(--bk-border)] bg-[var(--bk-surface)] text-[var(--bk-text-muted)] hover:border-[var(--bk-accent)] hover:text-[var(--bk-accent)]'
+                }`}
+              >
+                <Icon
+                  key={scenario.note ? 'has-note' : 'no-note'}
+                  icon={scenario.note ? 'line-md:clipboard-list' : 'line-md:clipboard-plus'}
+                  width={17}
+                  height={17}
+                />
+                {t('dmNote')}
+              </HoverLabelButton>
+            )}
             <button
               type="button"
               onClick={() => actions.onRefresh?.()}
@@ -1115,6 +1354,7 @@ function DriveInner({
                       // Nút thao tác nổi ở mép phải, chỉ hiện khi hover.
                       <tr
                         key={f.id}
+                        {...rowHoverProps(f.id)}
                         onClick={() => {
                           if (!busy) setPath({ facilityId: f.id });
                         }}
@@ -1135,15 +1375,26 @@ function DriveInner({
                         </td>
                         <td className={cell} onClick={(e) => e.stopPropagation()}>
                           <div className={rowActions}>
-                            <button
-                              type="button"
-                              onClick={() => setDeleteTarget({ kind: 'facility', id: f.id, label: f.name })}
-                              disabled={busy || (!mock && !actions.onDelete)}
-                              className={`${rowBtn} hover:text-rose-500`}
-                              title={t('fmDeleteTitle')}
+                            {/* Sửa = đổi tên folder bệnh viện */}
+                            <HoverLabelButton
+                              label={t('edit')}
+                              onClick={() => openRenameModal('facility', f.id, f.name)}
+                              disabled={busy || (!mock && !actions.onRename)}
+                              className={`${rowBtn} hover:text-[#f97316]`}
                             >
-                              <Icon icon="line-md:trash" width={17} height={17} />
-                            </button>
+                              <Icon key={iconKey(f.id)} icon="line-md:edit-twotone" width={17} height={17} />
+                            </HoverLabelButton>
+                            {/* Xoá — chỉ owner/admin (phân quyền) */}
+                            {canDelete && (
+                              <HoverLabelButton
+                                label={t('delete')}
+                                onClick={() => setDeleteTarget({ kind: 'facility', id: f.id, label: f.name })}
+                                disabled={busy || (!mock && !actions.onDelete)}
+                                className={`${rowBtn} hover:text-rose-500`}
+                              >
+                                <Icon key={iconKey(f.id)} icon="line-md:trash" width={17} height={17} />
+                              </HoverLabelButton>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1175,6 +1426,7 @@ function DriveInner({
                         // Kịch bản hoạt động như folder: click dòng = vào màn quản lý phiên bản.
                         <tr
                           key={s.id}
+                          {...rowHoverProps(s.id)}
                           onClick={() => {
                             if (!busy) setPath({ facilityId: facility.id, scenarioId: s.id });
                           }}
@@ -1209,15 +1461,26 @@ function DriveInner({
                           <td className={`${cell} text-[var(--bk-text-muted)]`}>{lv?.author ?? '—'}</td>
                           <td className={cell} onClick={(e) => e.stopPropagation()}>
                             <div className={rowActions}>
-                              <button
-                                type="button"
-                                onClick={() => setDeleteTarget({ kind: 'scenario', id: s.id, label: s.name })}
-                                disabled={busy || (!mock && !actions.onDelete)}
-                                className={`${rowBtn} hover:text-rose-500`}
-                                title={t('fmDeleteTitle')}
+                              {/* Sửa = đổi tên folder kịch bản */}
+                              <HoverLabelButton
+                                label={t('edit')}
+                                onClick={() => openRenameModal('scenario', s.id, s.name)}
+                                disabled={busy || (!mock && !actions.onRename)}
+                                className={`${rowBtn} hover:text-[#f97316]`}
                               >
-                                <Icon icon="line-md:trash" width={17} height={17} />
-                              </button>
+                                <Icon key={iconKey(s.id)} icon="line-md:edit-twotone" width={17} height={17} />
+                              </HoverLabelButton>
+                              {/* Xoá — chỉ owner/admin (phân quyền) */}
+                              {canDelete && (
+                                <HoverLabelButton
+                                  label={t('delete')}
+                                  onClick={() => setDeleteTarget({ kind: 'scenario', id: s.id, label: s.name })}
+                                  disabled={busy || (!mock && !actions.onDelete)}
+                                  className={`${rowBtn} hover:text-rose-500`}
+                                >
+                                  <Icon key={iconKey(s.id)} icon="line-md:trash" width={17} height={17} />
+                                </HoverLabelButton>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -1248,6 +1511,7 @@ function DriveInner({
                         // Click bất kỳ chỗ nào trên dòng (trừ cột thao tác) = mở bản này lên canvas.
                         <tr
                           key={ver.fileId}
+                          {...rowHoverProps(ver.fileId)}
                           onClick={() => {
                             if (!busy) actions.onOpenVersion?.(facility, scenario, ver);
                           }}
@@ -1286,30 +1550,31 @@ function DriveInner({
                           <td className={cell} onClick={(e) => e.stopPropagation()}>
                             <div className={rowActions}>
                               {/* Duplicate = tạo V{max+1} với nội dung bản này. */}
-                              <button
-                                type="button"
+                              <HoverLabelButton
+                                label={t('fmDuplicate')}
                                 onClick={() => actions.onDuplicate?.(facility, scenario, ver)}
                                 disabled={busy || (!mock && !actions.onDuplicate)}
                                 className={`${rowBtn} hover:text-[#22c55e]`}
-                                title={t('dmDuplicate')}
                               >
-                                <Icon icon="line-md:duplicate" width={17} height={17} />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setDeleteTarget({
-                                    kind: 'version',
-                                    id: ver.fileId,
-                                    label: versionFileName(scenario.name, ver.v),
-                                  })
-                                }
-                                disabled={busy || (!mock && !actions.onDelete)}
-                                className={`${rowBtn} hover:text-rose-500`}
-                                title={t('fmDeleteTitle')}
-                              >
-                                <Icon icon="line-md:trash" width={17} height={17} />
-                              </button>
+                                <Icon key={iconKey(ver.fileId)} icon="line-md:duplicate" width={17} height={17} />
+                              </HoverLabelButton>
+                              {/* Xoá — chỉ owner/admin (phân quyền) */}
+                              {canDelete && (
+                                <HoverLabelButton
+                                  label={t('delete')}
+                                  onClick={() =>
+                                    setDeleteTarget({
+                                      kind: 'version',
+                                      id: ver.fileId,
+                                      label: versionFileName(scenario.name, ver.v),
+                                    })
+                                  }
+                                  disabled={busy || (!mock && !actions.onDelete)}
+                                  className={`${rowBtn} hover:text-rose-500`}
+                                >
+                                  <Icon key={iconKey(ver.fileId)} icon="line-md:trash" width={17} height={17} />
+                                </HoverLabelButton>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -1330,10 +1595,11 @@ function DriveInner({
         </div>
       )}
 
-      {/* Modal: tạo flow mới (施設名 + シナリオ名 -> tự dựng cây folder + V1) */}
+      {/* Modal: tạo flow mới — chọn/tạo folder bệnh viện + kịch bản, GIỐNG modal
+          import. Click ngoài modal KHÔNG đóng — chỉ nút Hủy. */}
       {showNew && (
-        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true" onClick={() => setShowNew(false)}>
-          <div className="bk-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true">
+          <div className="bk-modal">
             <div className="mb-3 flex items-center gap-2 text-sm font-bold text-[var(--bk-text)]">
               <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]">
                 <Icon icon="lucide:file-plus" width={15} height={15} />
@@ -1342,27 +1608,48 @@ function DriveInner({
             </div>
 
             <label className="mb-1 block text-xs font-semibold text-[var(--bk-text-muted)]">
-              {t('colFacility')}
+              {t('dmImportFacilityLabel')}
             </label>
-            <input
-              autoFocus
-              value={newFacility}
-              onChange={(e) => setNewFacility(e.target.value)}
-              placeholder={t('fmFacilityPlaceholder')}
-              className={`mb-3 ${FIELD_CLS}`}
-            />
+            {facility ? (
+              // Đang đứng trong 1 bệnh viện -> tạo vào bệnh viện đó, không cho đổi.
+              <div className="mb-3 flex items-center gap-2 rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-3 py-2 text-sm text-[var(--bk-text-muted)]">
+                <Icon icon="line-md:folder-multiple" width={15} height={15} className="shrink-0 text-[var(--bk-accent)]" />
+                <span className="truncate">{facility.name}</span>
+              </div>
+            ) : (
+              <PickOrCreateField
+                options={facilities.map((f) => ({ id: f.id, name: f.name }))}
+                optionIcon="line-md:folder-multiple"
+                selected={newFacSel}
+                onSelect={(id) => {
+                  setNewFacSel(id);
+                  // Đổi bệnh viện -> danh sách kịch bản đổi theo, về chế độ "tạo mới".
+                  setNewScenSel(NEW_OPTION);
+                }}
+                name={newFacName}
+                onNameChange={setNewFacName}
+                placeholder={t('fmFacilityPlaceholder')}
+                createLabel={t('dmImportCreateNew')}
+                backLabel={t('dmPickFromList')}
+                className="mb-3"
+              />
+            )}
 
             <label className="mb-1 block text-xs font-semibold text-[var(--bk-text-muted)]">
-              {t('colScenario')}
+              {t('dmImportScenarioLabel')}
             </label>
-            <input
-              value={newScenario}
-              onChange={(e) => setNewScenario(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleCreate();
-              }}
+            <PickOrCreateField
+              options={((facility ?? newFacility)?.scenarios ?? []).map((s) => ({ id: s.id, name: s.name }))}
+              optionIcon="line-md:folder"
+              selected={newScenSel}
+              onSelect={setNewScenSel}
+              name={newScenName}
+              onNameChange={setNewScenName}
               placeholder={t('fmScenarioPlaceholder')}
-              className={`mb-4 ${FIELD_CLS}`}
+              createLabel={t('dmImportCreateNew')}
+              backLabel={t('dmPickFromList')}
+              onEnter={handleCreate}
+              className="mb-4"
             />
 
             {createErrorKey && <div className="mb-3 text-xs text-rose-500">{t(createErrorKey)}</div>}
@@ -1387,10 +1674,11 @@ function DriveInner({
         </div>
       )}
 
-      {/* Modal: import — chọn folder bệnh viện + kịch bản có sẵn hoặc tạo mới bằng cách gõ tên */}
+      {/* Modal: import — chọn folder bệnh viện + kịch bản có sẵn hoặc tạo mới bằng
+          cách gõ tên. Click ngoài modal KHÔNG đóng — chỉ nút Hủy. */}
       {importContent != null && (
-        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true" onClick={() => setImportContent(null)}>
-          <div className="bk-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true">
+          <div className="bk-modal">
             <div className="mb-3 flex items-center gap-2 text-sm font-bold text-[var(--bk-text)]">
               <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]">
                 <Icon icon="line-md:upload-loop" width={15} height={15} />
@@ -1467,10 +1755,56 @@ function DriveInner({
         </div>
       )}
 
-      {/* Modal: xác nhận xoá (đưa vào Thùng rác Drive) */}
+      {/* Modal: đổi tên folder bệnh viện / kịch bản (chỉ tên folder). Click ngoài không đóng. */}
+      {renameTarget && (
+        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true">
+          <div className="bk-modal">
+            <div className="mb-3 flex items-center gap-2 text-sm font-bold text-[var(--bk-text)]">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]">
+                <Icon icon="line-md:edit-twotone" width={15} height={15} />
+              </span>
+              {t('fmRename')}
+            </div>
+
+            <label className="mb-1 block text-xs font-semibold text-[var(--bk-text-muted)]">
+              {t(renameTarget.kind === 'facility' ? 'colFacility' : 'colScenario')}
+            </label>
+            <input
+              autoFocus
+              value={renameName}
+              onChange={(e) => setRenameName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleRename();
+              }}
+              placeholder={t(renameTarget.kind === 'facility' ? 'fmFacilityPlaceholder' : 'fmScenarioPlaceholder')}
+              className={`mb-4 ${FIELD_CLS}`}
+            />
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setRenameTarget(null)}
+                className="rounded-lg border border-[var(--bk-border)] px-4 py-2 text-sm font-semibold text-[var(--bk-text-muted)] transition hover:bg-[var(--bk-surface-2)] hover:text-[var(--bk-text)]"
+              >
+                {t('btnCancel')}
+              </button>
+              <button
+                type="button"
+                onClick={handleRename}
+                disabled={!renameName.trim()}
+                className="rounded-lg bg-[var(--bk-accent)] px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
+              >
+                {t('btnSave')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: xác nhận xoá (đưa vào Thùng rác Drive). Click ngoài không đóng. */}
       {deleteTarget && (
-        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true" onClick={() => setDeleteTarget(null)}>
-          <div className="bk-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true">
+          <div className="bk-modal">
             <div className="mb-1 flex items-center gap-2 text-sm font-bold text-[var(--bk-text)]">
               <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[color-mix(in_srgb,#dc2626_14%,transparent)] text-[#dc2626]">
                 <Icon icon="lucide:trash-2" width={15} height={15} />
@@ -1502,6 +1836,58 @@ function DriveInner({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Modal: ghi chú kịch bản (màn flow). Click ngoài không đóng — chỉ Hủy/Lưu. */}
+      {noteOpen && scenario && (
+        <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true">
+          <div className="bk-modal">
+            <div className="mb-1 flex items-center gap-2 text-sm font-bold text-[var(--bk-text)]">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-100 text-amber-600">
+                <Icon icon="line-md:clipboard-list" width={15} height={15} />
+              </span>
+              {t('dmNoteTitle')}
+            </div>
+            <p className="mb-3 truncate text-xs text-[var(--bk-text-muted)]">{scenario.name}</p>
+
+            <textarea
+              autoFocus
+              value={noteDraft}
+              onChange={(e) => setNoteDraft(e.target.value)}
+              rows={5}
+              placeholder={t('dmNotePlaceholder')}
+              className={`mb-4 resize-y ${FIELD_CLS}`}
+            />
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setNoteOpen(false)}
+                className="rounded-lg border border-[var(--bk-border)] px-4 py-2 text-sm font-semibold text-[var(--bk-text-muted)] transition hover:bg-[var(--bk-surface-2)] hover:text-[var(--bk-text)]"
+              >
+                {t('btnCancel')}
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveNote}
+                className="rounded-lg bg-[var(--bk-accent)] px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
+              >
+                {t('btnSave')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: 権限管理 — chỉ owner (mở từ menu). */}
+      {showPermissions && permissions && (
+        <PermissionsModal
+          data={permissions.data}
+          busy={busy}
+          error={permissions.error}
+          onChangeRole={permissions.onChangeRole}
+          onClose={() => setShowPermissions(false)}
+        />
       )}
     </div>
   );

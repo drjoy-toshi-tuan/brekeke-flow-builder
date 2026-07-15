@@ -95,6 +95,46 @@ export function useHoverLabel(ref: RefObject<HTMLElement | null>, content: strin
   return { onMouseEnter, onMouseLeave: hide, tip };
 }
 
+// Nút icon có tooltip nổi LUÔN hiện khi hover (không dùng title gốc — tooltip
+// trình duyệt hiện chậm và không style được). Dùng cho cụm nút thao tác trên
+// dòng danh sách (Sửa / Duplicate / Xoá) và nút Ghi chú ở màn flow.
+export function HoverLabelButton({
+  label,
+  className,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string; // text tooltip (đã dịch) — cũng là aria-label
+  className?: string;
+  disabled?: boolean;
+  onClick?: () => void;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const { onMouseEnter, onMouseLeave, tip } = useHoverLabel(ref, label);
+
+  return (
+    <button
+      ref={ref}
+      type="button"
+      aria-label={label}
+      disabled={disabled}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onClick={() => {
+        // Đóng tooltip trước khi mở modal/hành động (mouseleave có thể không bắn).
+        onMouseLeave();
+        onClick?.();
+      }}
+      className={className}
+    >
+      {children}
+      {tip}
+    </button>
+  );
+}
+
 interface HoverTipProps {
   content: string; // full text hiển thị trong tooltip
   children: ReactNode; // nội dung hiển thị trong ô (có thể bị cắt "…")

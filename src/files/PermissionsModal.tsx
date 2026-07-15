@@ -1,0 +1,151 @@
+import { useT } from '../ui/i18n';
+import { Icon } from '../ui/icons';
+import { OWNER_EMAIL, resolveRole, type PermissionsData } from '../drive/permissions';
+import { formatDateTime } from '../ir/ivrProperty';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Modal 権限管理 — CHỈ owner thấy (mở từ menu màn quản lý flow). Liệt kê các tài
+// khoản đã truy cập app (tự ghi nhận mỗi lần vào màn Drive) và cho owner gạt
+// quyền Admin/User từng người. Không đóng khi click ra ngoài — chỉ nút Đóng.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function PermissionsModal({
+  data,
+  busy,
+  error,
+  onChangeRole,
+  onClose,
+}: {
+  data: PermissionsData;
+  busy: boolean;
+  // Lỗi khi đổi quyền (vd chưa kết nối GitHub) — hiện ngay trong modal.
+  error?: string | null;
+  // makeAdmin=true -> cấp Admin; false -> về User. Không truyền -> chỉ xem (mock).
+  onChangeRole?: (email: string, makeAdmin: boolean) => void;
+  onClose: () => void;
+}) {
+  const t = useT();
+
+  // Owner luôn đứng đầu danh sách (kể cả chưa từng truy cập); còn lại sắp theo
+  // lần truy cập gần nhất.
+  const ownerMember = data.members.find((m) => m.email.toLowerCase() === OWNER_EMAIL) ?? {
+    email: OWNER_EMAIL,
+    name: '',
+    lastAccessAt: '',
+  };
+  const others = data.members
+    .filter((m) => m.email.toLowerCase() !== OWNER_EMAIL)
+    .sort((a, b) => (a.lastAccessAt > b.lastAccessAt ? -1 : 1));
+
+  const fmt = (iso: string) => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? '—' : formatDateTime(d);
+  };
+
+  const roleBadge = (label: string, cls: string) => (
+    <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${cls}`}>
+      {label}
+    </span>
+  );
+
+  return (
+    <div className="bk-modal-overlay bk-modal-overlay--fixed" role="dialog" aria-modal="true">
+      {/* bk-modal mặc định 380px — nới cho bảng 3 cột (style đè trực tiếp, không dùng important của Tailwind) */}
+      <div className="bk-modal" style={{ maxWidth: 520 }}>
+        <div className="mb-1 flex items-center gap-2 text-sm font-bold text-[var(--bk-text)]">
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]">
+            <Icon icon="lucide:key-round" width={15} height={15} />
+          </span>
+          {t('pmTitle')}
+        </div>
+        <p className="mb-3 text-xs leading-relaxed text-[var(--bk-text-muted)]">{t('pmDesc')}</p>
+
+        <div className="mb-4 max-h-[50vh] overflow-auto rounded-xl border border-[var(--bk-border)]">
+          <table className="w-full border-collapse text-sm">
+            <thead>
+              <tr className="border-b border-[var(--bk-border)] text-left text-[11px] font-bold uppercase tracking-wide text-[var(--bk-text-faint)]">
+                <th className="px-3 py-2">{t('pmColUser')}</th>
+                <th className="px-3 py-2 whitespace-nowrap">{t('pmColLastAccess')}</th>
+                <th className="px-3 py-2 text-right">{t('pmColRole')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[ownerMember, ...others].map((m) => {
+                const role = resolveRole(m.email, data);
+                return (
+                  <tr key={m.email} className="border-b border-[var(--bk-border)] last:border-0">
+                    <td className="px-3 py-2">
+                      <div className="min-w-0">
+                        {m.name && (
+                          <div className="truncate font-medium text-[var(--bk-text)]">{m.name}</div>
+                        )}
+                        <div className="truncate text-xs text-[var(--bk-text-muted)]">{m.email}</div>
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-xs text-[var(--bk-text-muted)]">
+                      {fmt(m.lastAccessAt)}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {role === 'owner' ? (
+                        roleBadge(t('pmRoleOwner'), 'bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]')
+                      ) : (
+                        // Gạt 2 nấc Admin/User — chỉ owner mở được modal này nên
+                        // không cần kiểm tra thêm quyền ở đây.
+                        <span className="inline-flex overflow-hidden rounded-full border border-[var(--bk-border)]">
+                          {(['admin', 'user'] as const).map((r) => (
+                            <button
+                              key={r}
+                              type="button"
+                              disabled={busy || !onChangeRole}
+                              onClick={() => {
+                                if (role !== r) onChangeRole?.(m.email, r === 'admin');
+                              }}
+                              className={`px-2.5 py-1 text-[11px] font-semibold transition disabled:pointer-events-none disabled:opacity-50 ${
+                                role === r
+                                  ? r === 'admin'
+                                    ? 'bg-[var(--bk-accent)] text-white'
+                                    : 'bg-[var(--bk-surface-2)] text-[var(--bk-text)]'
+                                  : 'text-[var(--bk-text-faint)] hover:text-[var(--bk-text)]'
+                              }`}
+                            >
+                              {t(r === 'admin' ? 'pmRoleAdmin' : 'pmRoleUser')}
+                            </button>
+                          ))}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {others.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="px-3 py-4 text-center text-xs text-[var(--bk-text-faint)]">
+                    {t('pmEmpty')}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {error && (
+          <div className="mb-3 flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+            <Icon icon="lucide:triangle-alert" width={14} height={14} className="mt-0.5 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-[var(--bk-border)] px-4 py-2 text-sm font-semibold text-[var(--bk-text-muted)] transition hover:bg-[var(--bk-surface-2)] hover:text-[var(--bk-text)]"
+          >
+            {t('close')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

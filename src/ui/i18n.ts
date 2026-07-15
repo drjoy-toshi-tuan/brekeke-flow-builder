@@ -347,7 +347,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     dmLatestBadge: 'Newest',
     dmDuplicate: 'Duplicate',
     dmDuplicated: 'Đã Duplicate thành phiên bản V{n}.',
-    dmImport: 'Import',
+    dmImport: 'Import flow',
     dmImportTitle: 'Import file YAML',
     dmImportFacilityLabel: 'Folder bệnh viện',
     dmImportScenarioLabel: 'Kịch bản',
@@ -357,6 +357,26 @@ const DICT: Record<Lang, Record<string, string>> = {
     dmEmptyFacilities: 'Chưa có bệnh viện nào. Bấm "Tạo flow mới" để bắt đầu.',
     dmEmptyScenarios: 'Bệnh viện này chưa có kịch bản nào.',
     dmEmptyVersions: 'Kịch bản này chưa có phiên bản nào.',
+    // ── Ghi chú kịch bản (màn flow) ──
+    dmNote: 'Ghi chú',
+    dmNoteTitle: 'Ghi chú kịch bản',
+    dmNotePlaceholder: 'Nhập ghi chú cho kịch bản này…',
+    dmNoteSaved: 'Đã lưu ghi chú.',
+    // ── Quản lý quyền (owner phân quyền Admin/User) ──
+    pmMenu: 'Quản lý quyền',
+    pmTitle: 'Quản lý quyền',
+    pmDesc:
+      'Chỉ Owner và Admin mới xoá được bệnh viện / kịch bản / phiên bản. Danh sách dưới đây là các tài khoản đã truy cập app; quyền Admin lưu trên repo (config/permissions.json).',
+    pmNeedGithub:
+      'Cần kết nối GitHub (token có quyền Contents: Read/Write) để ghi quyền lên repo — kết nối ở màn quản lý GitHub rồi thử lại.',
+    pmRoleOwner: 'Owner',
+    pmRoleAdmin: 'Admin',
+    pmRoleUser: 'User',
+    pmColUser: 'Tài khoản',
+    pmColRole: 'Quyền',
+    pmColLastAccess: 'Truy cập gần nhất',
+    pmEmpty: 'Chưa ghi nhận tài khoản nào truy cập.',
+    pmSaved: 'Đã cập nhật quyền.',
     // Kết nối Google Drive + lỗi Drive API
     dmConnectTitle: 'Kết nối Google Drive',
     dmConnectDesc: 'Đọc/ghi flow YAML trong kho Drive dùng chung của team.',
@@ -704,7 +724,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     dmLatestBadge: '最新',
     dmDuplicate: 'Duplicate',
     dmDuplicated: 'バージョン V{n} として複製しました。',
-    dmImport: 'インポート',
+    dmImport: 'フローインポート',
     dmImportTitle: 'YAMLファイルをインポート',
     dmImportFacilityLabel: '病院フォルダ',
     dmImportScenarioLabel: 'シナリオ',
@@ -714,6 +734,26 @@ const DICT: Record<Lang, Record<string, string>> = {
     dmEmptyFacilities: '病院がまだありません。「新規フロー作成」から始めてください。',
     dmEmptyScenarios: 'この病院にはまだシナリオがありません。',
     dmEmptyVersions: 'このシナリオにはまだバージョンがありません。',
+    // ── Ghi chú kịch bản (màn flow) ──
+    dmNote: 'メモ',
+    dmNoteTitle: 'シナリオメモ',
+    dmNotePlaceholder: 'このシナリオのメモを入力…',
+    dmNoteSaved: 'メモを保存しました。',
+    // ── Quản lý quyền (owner phân quyền Admin/User) ──
+    pmMenu: '権限管理',
+    pmTitle: '権限管理',
+    pmDesc:
+      '病院・シナリオ・バージョンを削除できるのはオーナーと管理者のみです。以下はアプリにアクセスしたアカウントの一覧です。管理者リストはリポジトリ（config/permissions.json）に保存されます。',
+    pmNeedGithub:
+      '権限をリポジトリに書き込むには GitHub 接続（Contents: Read/Write 権限のトークン）が必要です。GitHub管理画面で接続してからやり直してください。',
+    pmRoleOwner: 'オーナー',
+    pmRoleAdmin: '管理者',
+    pmRoleUser: 'ユーザー',
+    pmColUser: 'アカウント',
+    pmColRole: '権限',
+    pmColLastAccess: '最終アクセス',
+    pmEmpty: 'アクセスしたアカウントはまだありません。',
+    pmSaved: '権限を更新しました。',
     // Kết nối Google Drive + lỗi Drive API
     dmConnectTitle: 'Google Drive に接続',
     dmConnectDesc: 'チーム共有のDriveフォルダにあるフローYAMLを読み書きします。',
