@@ -72,7 +72,8 @@ const flowFileName = (facility: string, scenario: string) =>
 const metaCache = new Map<string, FlowMeta>();
 
 // Nội dung flow trống khi "Tạo flow mới" — kèm metadata (施設名/シナリオ名/作成者/日時).
-function buildBlankFlow(o: { facility: string; name: string; author: string; createdAt: string }): string {
+// Export để màn quản lý Drive (DriveManagerScreen) dùng chung.
+export function buildBlankFlow(o: { facility: string; name: string; author: string; createdAt: string }): string {
   const q = (s: string) => JSON.stringify(s ?? ''); // double-quoted scalar an toàn cho YAML
   return [
     'flow:',

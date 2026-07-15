@@ -351,6 +351,20 @@ const DICT: Record<Lang, Record<string, string>> = {
     dmEmptyFacilities: 'Chưa có bệnh viện nào. Bấm "Tạo flow mới" để bắt đầu.',
     dmEmptyScenarios: 'Bệnh viện này chưa có kịch bản nào.',
     dmEmptyVersions: 'Kịch bản này chưa có phiên bản nào.',
+    // Kết nối Google Drive + lỗi Drive API
+    dmConnectTitle: 'Kết nối Google Drive',
+    dmConnectDesc: 'Đọc/ghi flow YAML trong kho Drive dùng chung của team.',
+    dmConnectBtn: 'Kết nối với Google Drive',
+    dmConnecting: 'Đang kết nối…',
+    dmConnectHint:
+      'Chỉ cần chấp thuận 1 lần cho mỗi tài khoản — các lần sau tự kết nối. Quyền truy cập chỉ lưu trong phiên trình duyệt này.',
+    dmRestored: 'Đã khôi phục thành phiên bản V{n}.',
+    gdErrAuth: 'Phiên Google Drive hết hạn hoặc thiếu quyền. Hãy kết nối lại (kiểm tra folder kho flow đã share cho bạn).',
+    gdErrNotFound: 'Không tìm thấy folder/file trên Drive (đã bị xoá hoặc chưa được share).',
+    gdErrNetwork: 'Không kết nối được Google Drive. Kiểm tra mạng rồi thử lại.',
+    gdErrRateLimit: 'Đã chạm giới hạn tần suất Google Drive. Thử lại sau ít phút.',
+    gdErrPopup: 'Popup Google bị chặn hoặc bị đóng giữa chừng. Hãy cho phép popup rồi thử lại.',
+    gdErrOther: 'Có lỗi khi gọi Google Drive. Thử lại.',
     loginDemoNotice:
       'Chưa cấu hình VITE_GOOGLE_CLIENT_ID. Bạn đang xem bản demo UI — đăng nhập Google bị tắt.',
     loginDemoButton: 'Vào chế độ demo (bỏ qua đăng nhập)',
@@ -689,6 +703,20 @@ const DICT: Record<Lang, Record<string, string>> = {
     dmEmptyFacilities: '病院がまだありません。「新規フロー作成」から始めてください。',
     dmEmptyScenarios: 'この病院にはまだシナリオがありません。',
     dmEmptyVersions: 'このシナリオにはまだバージョンがありません。',
+    // Kết nối Google Drive + lỗi Drive API
+    dmConnectTitle: 'Google Drive に接続',
+    dmConnectDesc: 'チーム共有のDriveフォルダにあるフローYAMLを読み書きします。',
+    dmConnectBtn: 'Google Drive に接続する',
+    dmConnecting: '接続中…',
+    dmConnectHint:
+      '承認は各アカウント初回のみ。以降は自動で接続されます。アクセス権はこのブラウザのセッション内のみ保持されます。',
+    dmRestored: 'バージョン V{n} として復元しました。',
+    gdErrAuth: 'Google Drive のセッションが切れたか、権限がありません。再接続してください（フォルダの共有設定もご確認ください）。',
+    gdErrNotFound: 'Drive上のフォルダ/ファイルが見つかりません（削除済み、または未共有の可能性）。',
+    gdErrNetwork: 'Google Drive に接続できません。ネットワークを確認して再試行してください。',
+    gdErrRateLimit: 'Google Drive のレート制限に達しました。しばらくして再試行してください。',
+    gdErrPopup: 'Googleのポップアップがブロックまたは閉じられました。ポップアップを許可して再試行してください。',
+    gdErrOther: 'Google Drive の呼び出しでエラーが発生しました。再試行してください。',
     loginDemoNotice:
       'VITE_GOOGLE_CLIENT_ID が未設定です。UIデモを表示中 — Googleログインは無効です。',
     loginDemoButton: 'デモモードで開く（ログインをスキップ）',
