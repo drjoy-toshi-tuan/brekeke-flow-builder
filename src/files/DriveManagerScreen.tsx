@@ -49,6 +49,9 @@ export interface VersionNode {
   createdAt: string; // yyyy-MM-dd HH:mm — Drive createdTime
   updatedAt: string; // yyyy-MM-dd HH:mm — Drive modifiedTime (lưu đè -> tự nhảy)
   author: string; // lastModifyingUser
+  // Số Sub Flow của bản này (đọc từ nội dung YAML — lazy khi vào tầng flow,
+  // vì mỗi version có thể khác nhau). undefined = chưa đọc xong.
+  subflowCount?: number;
 }
 
 export interface ScenarioNode {
@@ -57,7 +60,6 @@ export interface ScenarioNode {
   createdAt?: string; // createdTime của folder シナリオ (作成日時)
   appliedV: number | null; // version đang chạy trên hệ thống AI電話 (null = chưa deploy)
   versions: VersionNode[]; // sắp DESC theo v (mới nhất trước)
-  subflowCount?: number; // số Sub Flow của bản mới nhất (đọc từ nội dung YAML)
 }
 
 export interface FacilityNode {
@@ -83,6 +85,8 @@ interface DriveActions {
   onDelete?: (target: DeleteTarget) => void;
   onCreateFlow?: (facility: string, scenario: string) => void;
   onImport?: (facility: string, scenario: string, content: string) => void;
+  // Đọc subflowCount cho các version của 1 kịch bản (gọi khi vào tầng flow).
+  onLoadVersionDetails?: (facilityId: string, scenarioId: string) => void;
 }
 
 // ── Helpers dẫn xuất ──
@@ -140,6 +144,7 @@ const MANY_VERSIONS: VersionNode[] = Array.from({ length: 24 }, (_, i) => {
     createdAt: mockDate(v * 3, '09:30'),
     updatedAt: mockDate(v * 3 + (v % 3), v % 2 ? '16:45' : '09:30'),
     author: authors[v % 3],
+    subflowCount: v % 4,
   };
 });
 
@@ -154,11 +159,10 @@ const MOCK_FACILITIES: FacilityNode[] = [
         name: '診療予約',
         createdAt: '2026-07-02 14:00',
         appliedV: 2,
-        subflowCount: 3,
         versions: [
-          { fileId: 'm1', v: 3, createdAt: '2026-07-14 18:22', updatedAt: '2026-07-15 10:05', author: 'Tuan Nguyen' },
-          { fileId: 'm2', v: 2, createdAt: '2026-07-10 09:41', updatedAt: '2026-07-12 14:20', author: 'Tuan Nguyen' },
-          { fileId: 'm3', v: 1, createdAt: '2026-07-02 14:05', updatedAt: '2026-07-02 14:05', author: '田中 花子' },
+          { fileId: 'm1', v: 3, createdAt: '2026-07-14 18:22', updatedAt: '2026-07-15 10:05', author: 'Tuan Nguyen', subflowCount: 3 },
+          { fileId: 'm2', v: 2, createdAt: '2026-07-10 09:41', updatedAt: '2026-07-12 14:20', author: 'Tuan Nguyen', subflowCount: 2 },
+          { fileId: 'm3', v: 1, createdAt: '2026-07-02 14:05', updatedAt: '2026-07-02 14:05', author: '田中 花子', subflowCount: 0 },
         ],
       },
       {
@@ -166,9 +170,8 @@ const MOCK_FACILITIES: FacilityNode[] = [
         name: '予約変更・キャンセル',
         createdAt: '2026-07-08 11:20',
         appliedV: 1,
-        subflowCount: 1,
         versions: [
-          { fileId: 'm4', v: 1, createdAt: '2026-07-08 11:30', updatedAt: '2026-07-08 11:30', author: '田中 花子' },
+          { fileId: 'm4', v: 1, createdAt: '2026-07-08 11:30', updatedAt: '2026-07-08 11:30', author: '田中 花子', subflowCount: 1 },
         ],
       },
       {
@@ -176,10 +179,9 @@ const MOCK_FACILITIES: FacilityNode[] = [
         name: '休診日案内',
         createdAt: '2026-07-12 16:40',
         appliedV: null,
-        subflowCount: 0,
         versions: [
-          { fileId: 'm5', v: 2, createdAt: '2026-07-15 08:12', updatedAt: '2026-07-15 08:12', author: 'Tuan Nguyen' },
-          { fileId: 'm6', v: 1, createdAt: '2026-07-12 16:48', updatedAt: '2026-07-13 09:02', author: '佐藤 健' },
+          { fileId: 'm5', v: 2, createdAt: '2026-07-15 08:12', updatedAt: '2026-07-15 08:12', author: 'Tuan Nguyen', subflowCount: 0 },
+          { fileId: 'm6', v: 1, createdAt: '2026-07-12 16:48', updatedAt: '2026-07-13 09:02', author: '佐藤 健', subflowCount: 0 },
         ],
       },
     ],
@@ -189,15 +191,14 @@ const MOCK_FACILITIES: FacilityNode[] = [
     name: '聖路加国際病院',
     createdAt: '2026-05-02 10:15',
     scenarios: [
-      { id: 's4', name: '診療予約', createdAt: '2026-05-04 09:00', appliedV: 22, subflowCount: 5, versions: MANY_VERSIONS },
+      { id: 's4', name: '診療予約', createdAt: '2026-05-04 09:00', appliedV: 22, versions: MANY_VERSIONS },
       {
         id: 's5',
         name: '検査結果案内',
         createdAt: '2026-07-11 17:00',
         appliedV: null,
-        subflowCount: 2,
         versions: [
-          { fileId: 'm7', v: 1, createdAt: '2026-07-11 17:19', updatedAt: '2026-07-11 17:19', author: '田中 花子' },
+          { fileId: 'm7', v: 1, createdAt: '2026-07-11 17:19', updatedAt: '2026-07-11 17:19', author: '田中 花子', subflowCount: 2 },
         ],
       },
     ],
@@ -212,10 +213,9 @@ const MOCK_FACILITIES: FacilityNode[] = [
         name: '診療時間案内',
         createdAt: '2026-07-06 10:30',
         appliedV: 1,
-        subflowCount: 0,
         versions: [
-          { fileId: 'm8', v: 2, createdAt: '2026-07-14 19:55', updatedAt: '2026-07-14 19:55', author: '田中 花子' },
-          { fileId: 'm9', v: 1, createdAt: '2026-07-06 10:33', updatedAt: '2026-07-07 15:41', author: '田中 花子' },
+          { fileId: 'm8', v: 2, createdAt: '2026-07-14 19:55', updatedAt: '2026-07-14 19:55', author: '田中 花子', subflowCount: 1 },
+          { fileId: 'm9', v: 1, createdAt: '2026-07-06 10:33', updatedAt: '2026-07-07 15:41', author: '田中 花子', subflowCount: 0 },
         ],
       },
     ],
@@ -350,32 +350,20 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
         : [];
       const tree = buildTree(facFolders, scenFolders, files);
 
-      // Đếm Sub Flow của bản mới nhất mỗi kịch bản (song song, có cache) — hiện
-      // badge Main/Sub cạnh tên kịch bản. Lỗi đọc 1 file không chặn cả danh sách.
+      // Điền lại subflowCount từ cache (file chưa đổi nội dung) — phần còn thiếu
+      // sẽ được đọc lazy khi vào tầng flow (xem loadVersionDetails). Đồng thời dọn
+      // cache: chỉ giữ key còn trong danh sách hiện tại (tránh phình vô hạn).
       const alive = new Set<string>();
-      await Promise.all(
-        tree.flatMap((f) =>
-          f.scenarios.map(async (s) => {
-            const latest = latestVersionOf(s);
-            if (!latest) return;
-            const key = `${latest.fileId}:${latest.updatedAt}`;
+      for (const f of tree) {
+        for (const s of f.scenarios) {
+          for (const v of s.versions) {
+            const key = `${v.fileId}:${v.updatedAt}`;
             alive.add(key);
             const cached = subflowCountCache.get(key);
-            if (cached !== undefined) {
-              s.subflowCount = cached;
-              return;
-            }
-            try {
-              const count = parseFlowMeta(await getFileText(token, latest.fileId)).subflowCount ?? 0;
-              subflowCountCache.set(key, count);
-              s.subflowCount = count;
-            } catch {
-              // bỏ qua — badge hiện 0
-            }
-          }),
-        ),
-      );
-      // Dọn cache: chỉ giữ key còn trong danh sách hiện tại (tránh phình vô hạn).
+            if (cached !== undefined) v.subflowCount = cached;
+          }
+        }
+      }
       for (const key of subflowCountCache.keys()) {
         if (!alive.has(key)) subflowCountCache.delete(key);
       }
@@ -393,6 +381,57 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Đọc subflowCount cho các version của 1 kịch bản khi người dùng vào tầng flow
+  // (mỗi version có thể khác nhau nên phải đọc từng file — lazy + cache để không
+  // tải cả kho khi load danh sách). Chạy nền, không khoá UI.
+  const loadVersionDetails = async (facilityId: string, scenarioId: string) => {
+    const scen = facilities
+      .find((f) => f.id === facilityId)
+      ?.scenarios.find((s) => s.id === scenarioId);
+    if (!scen) return;
+    const targets = scen.versions.filter((v) => v.subflowCount === undefined);
+    if (!targets.length) return;
+    const counts = new Map<string, number>();
+    await Promise.all(
+      targets.map(async (v) => {
+        const key = `${v.fileId}:${v.updatedAt}`;
+        const cached = subflowCountCache.get(key);
+        if (cached !== undefined) {
+          counts.set(v.fileId, cached);
+          return;
+        }
+        try {
+          const count = parseFlowMeta(await getFileText(token, v.fileId)).subflowCount ?? 0;
+          subflowCountCache.set(key, count);
+          counts.set(v.fileId, count);
+        } catch (e) {
+          if (handledAsExpired(e)) return;
+          // lỗi đọc 1 file -> bỏ qua, không hiện badge cho bản đó
+        }
+      }),
+    );
+    if (!counts.size) return;
+    setFacilities((prev) =>
+      prev.map((f) =>
+        f.id !== facilityId
+          ? f
+          : {
+              ...f,
+              scenarios: f.scenarios.map((s) =>
+                s.id !== scenarioId
+                  ? s
+                  : {
+                      ...s,
+                      versions: s.versions.map((v) =>
+                        counts.has(v.fileId) ? { ...v, subflowCount: counts.get(v.fileId) } : v,
+                      ),
+                    },
+              ),
+            },
+      ),
+    );
+  };
 
   // Mở 1 version lên canvas. Giữ busy=true khi thành công (đang điều hướng đi).
   const openVersion = async (f: FacilityNode, s: ScenarioNode, ver: VersionNode) => {
@@ -531,6 +570,7 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
         onDelete: (target) => void remove(target),
         onCreateFlow: (facility, scenario) => void createFlow(facility, scenario),
         onImport: (facility, scenario, content) => void importFlow(facility, scenario, content),
+        onLoadVersionDetails: (facilityId, scenarioId) => void loadVersionDetails(facilityId, scenarioId),
       }}
     />
   );
@@ -595,6 +635,15 @@ function DriveInner({
     if (searchOpen) searchInputRef.current?.focus();
   }, [searchOpen]);
 
+  // Vào tầng flow -> đọc subflowCount cho các version của kịch bản đó (lazy).
+  // Phụ thuộc `scenario` (object) để refetch phần thiếu sau khi Làm mới;
+  // loadVersionDetails không setState khi không còn gì thiếu nên không lặp.
+  useEffect(() => {
+    if (facility && scenario) actions.onLoadVersionDetails?.(facility.id, scenario.id);
+    // actions được tạo lại mỗi render nhưng hành vi ổn định — không đưa vào deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [facility, scenario]);
+
   // Modal tạo flow mới / xác nhận xoá.
   const [showNew, setShowNew] = useState(false);
   const [newFacility, setNewFacility] = useState('');
@@ -631,16 +680,22 @@ function DriveInner({
       setUploadErrorKey('fmUploadInvalid');
       return;
     }
-    // Prefill: đang đứng trong bệnh viện/kịch bản -> chọn sẵn; ngoài ra thử khớp
-    // metadata trong file với folder có sẵn; không khớp -> chế độ "tạo mới".
+    // Tầng flow: đích đến đã xác định (bệnh viện + kịch bản hiện tại) -> import
+    // thẳng, tự đánh version V{max+1}, không cần modal.
+    if (facility && scenario) {
+      actions.onImport?.(facility.name, scenario.name, content);
+      return;
+    }
+    // Tầng bệnh viện / kịch bản: mở modal chọn đích đến. Prefill: đang đứng trong
+    // bệnh viện -> cố định bệnh viện đó; ngoài ra thử khớp metadata trong file với
+    // folder có sẵn; không khớp -> chế độ "tạo mới" với tên lấy từ metadata.
     const meta = parseFlowMeta(content);
     const metaFac = facilities.find((f) => f.name === meta.facility) ?? null;
     const fac = facility ?? metaFac;
     setImpFacSel(fac?.id ?? NEW_OPTION);
     setImpFacName(meta.facility ?? '');
     const metaScen = fac?.scenarios.find((s) => s.name === meta.name) ?? null;
-    const scen = scenario ?? metaScen;
-    setImpScenSel(scen?.id ?? NEW_OPTION);
+    setImpScenSel(metaScen?.id ?? NEW_OPTION);
     setImpScenName(meta.name ?? '');
     setImportErrorKey(null);
     setImportContent(content);
@@ -725,6 +780,10 @@ function DriveInner({
 
   const iconBtn =
     'flex h-8 w-8 items-center justify-center rounded-lg text-[var(--bk-text-faint)] transition hover:bg-[var(--bk-accent-soft)] hover:text-[var(--bk-accent)] disabled:pointer-events-none disabled:opacity-40';
+  // Cụm nút thao tác nổi ở mép phải dòng — chỉ hiện khi hover dòng (hoặc focus
+  // bằng bàn phím), không chiếm 1 cột riêng. Đặt trong ô cuối (position:relative).
+  const hoverActions =
+    'pointer-events-none absolute right-2 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1 rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface)] px-1 py-0.5 opacity-0 shadow-sm transition group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100';
   // Style input/select trong modal (dùng lại nhiều chỗ).
   const fieldCls =
     'w-full rounded-lg border border-[var(--bk-border)] bg-[var(--bk-bg)] px-3 py-2 text-sm text-[var(--bk-text)] outline-none focus:border-[var(--bk-accent)]';
@@ -1039,7 +1098,7 @@ function DriveInner({
               </div>
             ) : level === 1 ? (
               facilityRows.length === 0 ? (
-                <EmptyState icon="line-md:folder" text={q ? t('fmNoResults') : t('dmEmptyFacilities')} />
+                <EmptyState icon="line-md:folder-multiple" text={q ? t('fmNoResults') : t('dmEmptyFacilities')} />
               ) : (
                 <table className="w-full border-collapse">
                   <thead>
@@ -1048,22 +1107,22 @@ function DriveInner({
                       {renderSortTh('count', 'colScenarioCount')}
                       {renderSortTh('createdAt', 'colCreatedAt')}
                       {renderSortTh('updatedAt', 'colUpdatedAt')}
-                      <th className={`${th} text-right`}>{t('colActions')}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {pageSlice(facilityRows).map((f) => (
-                      // Click bất kỳ chỗ nào trên dòng (trừ cột thao tác) = vào danh sách kịch bản.
+                      // Click bất kỳ chỗ nào trên dòng = vào danh sách kịch bản.
+                      // Nút thao tác nổi ở mép phải, chỉ hiện khi hover.
                       <tr
                         key={f.id}
                         onClick={() => {
                           if (!busy) setPath({ facilityId: f.id });
                         }}
-                        className="cursor-pointer border-b border-[var(--bk-border)] transition last:border-0 hover:bg-[var(--bk-surface-2)]"
+                        className="group cursor-pointer border-b border-[var(--bk-border)] transition last:border-0 hover:bg-[var(--bk-surface-2)]"
                       >
                         <td className={cell}>
                           <span className="flex min-w-0 items-center gap-2 font-medium text-[var(--bk-text)]">
-                            <Icon icon="line-md:folder" width={16} height={16} className="shrink-0 text-[var(--bk-accent)]" />
+                            <Icon icon="line-md:folder-multiple" width={16} height={16} className="shrink-0 text-[var(--bk-accent)]" />
                             <span className="truncate">{f.name}</span>
                           </span>
                         </td>
@@ -1071,11 +1130,9 @@ function DriveInner({
                         <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>
                           {f.createdAt ?? '—'}
                         </td>
-                        <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>
+                        <td className={`${cell} relative whitespace-nowrap text-[var(--bk-text-muted)]`}>
                           {facilityUpdatedAt(f) ?? '—'}
-                        </td>
-                        <td className={`${cell} cursor-default`} onClick={(e) => e.stopPropagation()}>
-                          <div className="flex items-center justify-end gap-1">
+                          <div className={hoverActions} onClick={(e) => e.stopPropagation()}>
                             <button
                               type="button"
                               onClick={() => setDeleteTarget({ kind: 'facility', id: f.id, label: f.name })}
@@ -1094,7 +1151,7 @@ function DriveInner({
               )
             ) : level === 2 && facility ? (
               scenarioRows.length === 0 ? (
-                <EmptyState icon="line-md:file-document" text={q ? t('fmNoResults') : t('dmEmptyScenarios')} />
+                <EmptyState icon="line-md:folder" text={q ? t('fmNoResults') : t('dmEmptyScenarios')} />
               ) : (
                 <table className="w-full border-collapse">
                   <thead>
@@ -1105,7 +1162,6 @@ function DriveInner({
                       {renderSortTh('createdAt', 'colCreatedAt')}
                       {renderSortTh('updatedAt', 'colUpdatedAt')}
                       {renderSortTh('author', 'colAuthor')}
-                      <th className={`${th} text-right`}>{t('colActions')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1119,17 +1175,13 @@ function DriveInner({
                           onClick={() => {
                             if (!busy) setPath({ facilityId: facility.id, scenarioId: s.id });
                           }}
-                          className="cursor-pointer border-b border-[var(--bk-border)] transition last:border-0 hover:bg-[var(--bk-surface-2)]"
+                          className="group cursor-pointer border-b border-[var(--bk-border)] transition last:border-0 hover:bg-[var(--bk-surface-2)]"
                         >
                           <td className={cell}>
-                            <div className="flex items-center gap-2.5">
-                              <span className="flex min-w-0 items-center gap-2 font-medium text-[var(--bk-text)]">
-                                <Icon icon="line-md:file-document" width={16} height={16} className="shrink-0 text-[var(--bk-accent)]" />
-                                <span className="truncate">{s.name}</span>
-                              </span>
-                              {/* Cấu trúc flow của bản mới nhất: Main Flow | Sub Flow · số lượng. */}
-                              <FlowStructureBadge subflowCount={s.subflowCount ?? 0} />
-                            </div>
+                            <span className="flex min-w-0 items-center gap-2 font-medium text-[var(--bk-text)]">
+                              <Icon icon="line-md:folder" width={16} height={16} className="shrink-0 text-[var(--bk-accent)]" />
+                              <span className="truncate">{s.name}</span>
+                            </span>
                           </td>
                           <td className={`${cell} font-semibold`}>{latest ? `V${latest}` : '—'}</td>
                           <td className={cell}>
@@ -1151,9 +1203,9 @@ function DriveInner({
                           </td>
                           <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>{s.createdAt ?? '—'}</td>
                           <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>{lv?.updatedAt ?? '—'}</td>
-                          <td className={`${cell} text-[var(--bk-text-muted)]`}>{lv?.author ?? '—'}</td>
-                          <td className={`${cell} cursor-default`} onClick={(e) => e.stopPropagation()}>
-                            <div className="flex items-center justify-end gap-1">
+                          <td className={`${cell} relative text-[var(--bk-text-muted)]`}>
+                            {lv?.author ?? '—'}
+                            <div className={hoverActions} onClick={(e) => e.stopPropagation()}>
                               <button
                                 type="button"
                                 onClick={() => setDeleteTarget({ kind: 'scenario', id: s.id, label: s.name })}
@@ -1178,11 +1230,10 @@ function DriveInner({
                 <table className="w-full border-collapse">
                   <thead>
                     <tr className="border-b border-[var(--bk-border)]">
-                      {renderSortTh('v', 'colVersion', 'w-[320px] min-w-[260px]')}
+                      {renderSortTh('v', 'colVersion', 'w-[380px] min-w-[300px]')}
                       {renderSortTh('createdAt', 'colCreatedAt')}
                       {renderSortTh('updatedAt', 'colUpdatedAt')}
                       {renderSortTh('author', 'colAuthor')}
-                      <th className={`${th} text-right`}>{t('colActions')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1197,7 +1248,7 @@ function DriveInner({
                             if (!busy) actions.onOpenVersion?.(facility, scenario, ver);
                           }}
                           title={t('fmOpen')}
-                          className="cursor-pointer border-b border-[var(--bk-border)] transition last:border-0 hover:bg-[var(--bk-surface-2)]"
+                          className="group cursor-pointer border-b border-[var(--bk-border)] transition last:border-0 hover:bg-[var(--bk-surface-2)]"
                         >
                           <td className={cell}>
                             <div className="flex items-center gap-2.5">
@@ -1208,6 +1259,10 @@ function DriveInner({
                               <span className="truncate text-xs text-[var(--bk-text-faint)]">
                                 {versionFileName(scenario.name, ver.v)}
                               </span>
+                              {/* Cấu trúc flow CỦA BẢN NÀY: Main | Sub · số lượng (ẩn khi chưa đọc xong). */}
+                              {ver.subflowCount !== undefined && (
+                                <FlowStructureBadge subflowCount={ver.subflowCount} />
+                              )}
                               {isApplied && (
                                 <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[color-mix(in_srgb,#16a34a_14%,transparent)] px-2 py-0.5 text-xs font-semibold text-[#16a34a]">
                                   <Icon icon="lucide:circle-check" width={12} height={12} />
@@ -1223,9 +1278,9 @@ function DriveInner({
                           </td>
                           <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>{ver.createdAt}</td>
                           <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>{ver.updatedAt}</td>
-                          <td className={`${cell} text-[var(--bk-text-muted)]`}>{ver.author}</td>
-                          <td className={`${cell} cursor-default`} onClick={(e) => e.stopPropagation()}>
-                            <div className="flex items-center justify-end gap-1">
+                          <td className={`${cell} relative text-[var(--bk-text-muted)]`}>
+                            {ver.author}
+                            <div className={hoverActions} onClick={(e) => e.stopPropagation()}>
                               {/* Duplicate = tạo V{max+1} với nội dung bản này. */}
                               <button
                                 type="button"
@@ -1354,30 +1409,40 @@ function DriveInner({
             <label className="mb-1 block text-xs font-semibold text-[var(--bk-text-muted)]">
               {t('dmImportFacilityLabel')}
             </label>
-            <select
-              value={impFacSel}
-              onChange={(e) => {
-                setImpFacSel(e.target.value);
-                // Đổi bệnh viện -> danh sách kịch bản đổi theo, về chế độ "tạo mới".
-                setImpScenSel(NEW_OPTION);
-              }}
-              className={`${impFacSel === NEW_OPTION ? 'mb-2' : 'mb-3'} cursor-pointer ${fieldCls}`}
-            >
-              {facilities.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-              <option value={NEW_OPTION}>{t('dmImportCreateNew')}</option>
-            </select>
-            {impFacSel === NEW_OPTION && (
-              <input
-                autoFocus
-                value={impFacName}
-                onChange={(e) => setImpFacName(e.target.value)}
-                placeholder={t('fmFacilityPlaceholder')}
-                className={`mb-3 ${fieldCls}`}
-              />
+            {facility ? (
+              // Tầng kịch bản: import vào bệnh viện đang mở — hiện cố định, không cho đổi.
+              <div className="mb-3 flex items-center gap-2 rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-3 py-2 text-sm text-[var(--bk-text-muted)]">
+                <Icon icon="line-md:folder-multiple" width={15} height={15} className="shrink-0 text-[var(--bk-accent)]" />
+                <span className="truncate">{facility.name}</span>
+              </div>
+            ) : (
+              <>
+                <select
+                  value={impFacSel}
+                  onChange={(e) => {
+                    setImpFacSel(e.target.value);
+                    // Đổi bệnh viện -> danh sách kịch bản đổi theo, về chế độ "tạo mới".
+                    setImpScenSel(NEW_OPTION);
+                  }}
+                  className={`${impFacSel === NEW_OPTION ? 'mb-2' : 'mb-3'} cursor-pointer ${fieldCls}`}
+                >
+                  {facilities.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+                  <option value={NEW_OPTION}>{t('dmImportCreateNew')}</option>
+                </select>
+                {impFacSel === NEW_OPTION && (
+                  <input
+                    autoFocus
+                    value={impFacName}
+                    onChange={(e) => setImpFacName(e.target.value)}
+                    placeholder={t('fmFacilityPlaceholder')}
+                    className={`mb-3 ${fieldCls}`}
+                  />
+                )}
+              </>
             )}
 
             <label className="mb-1 block text-xs font-semibold text-[var(--bk-text-muted)]">

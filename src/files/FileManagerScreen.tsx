@@ -724,7 +724,6 @@ export function FileManagerScreen() {
                     {renderSortTh('createdAt', 'colCreatedAt')}
                     {renderSortTh('updatedAt', 'colUpdatedAt')}
                     {renderSortTh('author', 'colAuthor')}
-                    <th className={`${th} text-right`}>{t('colActions')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -733,7 +732,7 @@ export function FileManagerScreen() {
                       key={file.path}
                       onClick={() => void handleOpen(file)}
                       title={t('fmOpen')}
-                      className="cursor-pointer border-b border-[var(--bk-border)] transition last:border-0 hover:bg-[var(--bk-surface-2)]"
+                      className="group cursor-pointer border-b border-[var(--bk-border)] transition last:border-0 hover:bg-[var(--bk-surface-2)]"
                     >
                       <td className={`${cell} text-[var(--bk-text-muted)]`}>{file.meta.facility ?? '—'}</td>
                       <td className={cell}>
@@ -752,10 +751,14 @@ export function FileManagerScreen() {
                       <td className={`${cell} whitespace-nowrap text-[var(--bk-text-muted)]`}>
                         {file.meta.updatedAt ?? '—'}
                       </td>
-                      <td className={`${cell} text-[var(--bk-text-muted)]`}>{file.meta.author ?? '—'}</td>
-                      {/* Cột thao tác: chặn nổi bọt để click nút không mở dòng. */}
-                      <td className={`${cell} cursor-default`} onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-end gap-1">
+                      <td className={`${cell} relative text-[var(--bk-text-muted)]`}>
+                        {file.meta.author ?? '—'}
+                        {/* Cụm nút thao tác nổi ở mép phải — chỉ hiện khi hover dòng
+                            (hoặc focus bàn phím); chặn nổi bọt để không mở dòng. */}
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          className="pointer-events-none absolute right-2 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1 rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface)] px-1 py-0.5 opacity-0 shadow-sm transition group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
+                        >
                           <button
                             type="button"
                             onClick={() => openRenameModal(file)}
