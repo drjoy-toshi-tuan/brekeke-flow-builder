@@ -63,6 +63,22 @@ export function makeNode(nodeType: NodeType) {
       hideTimer.current = setTimeout(() => setHovered(false), 180);
     };
 
+    // CS: vị trí (%) các điểm output — dùng chung cho lỗ mask trên "skin" và cung hõm.
+    const outPositions =
+      csMode && showSource
+        ? handles && handles.length > 0
+          ? handles.map((h, i) => ({ key: h.id, left: ((i + 1) / (handles.length + 1)) * 100 }))
+          : [{ key: 'default', left: 50 }]
+        : [];
+    // Mask khoét lỗ THẬT trên skin (nền + viền node): mỗi output 1 lỗ tròn tại mép
+    // đáy — viền node tự ĐỨT đúng tại mép lỗ nên khớp hình học với cung hõm.
+    const skinMask =
+      outPositions.length > 0
+        ? outPositions
+            .map((p) => `radial-gradient(circle at ${p.left}% 100%, transparent 7px, #000 8px)`)
+            .join(', ')
+        : undefined;
+
     return (
       <div
         className={['bk-node', csMode ? 'bk-node--cs' : '', selected ? 'bk-node--selected' : ''].join(' ')}
@@ -70,6 +86,24 @@ export function makeNode(nodeType: NodeType) {
         onMouseEnter={showPreview}
         onMouseLeave={hidePreview}
       >
+        {/* CS: lớp "skin" mang nền + viền + bóng của node, bị mask khoét lỗ tại các
+            output. Root node để trong suốt (xem CSS) — nhờ vậy handle/notch là anh em
+            của skin, KHÔNG bị mask cắt mất. */}
+        {csMode && (
+          <span
+            className="bk-cs-skin"
+            style={
+              skinMask
+                ? ({
+                    maskImage: skinMask,
+                    maskComposite: 'intersect',
+                    WebkitMaskImage: skinMask,
+                    WebkitMaskComposite: 'source-in',
+                  } as CSSProperties)
+                : undefined
+            }
+          />
+        )}
         {/* Hover / chọn node -> xem nhanh các property đang set (bên phải node).
             Node không có property nào cũng không có mô tả (vd hangup) thì KHÔNG hiện
             preview — tránh card "không có tham số" vô nghĩa. */}
@@ -167,15 +201,10 @@ export function makeNode(nodeType: NodeType) {
           </div>
         )}
 
-        {/* CS: hõm tròn "khoét" vào cạnh đáy node tại vị trí mỗi output — cùng toạ độ %
-            với chấm nối nhưng chấm được CSS đẩy xuống thấp hơn 1 đoạn -> cảm giác điểm
-            output tách rời khỏi node (không dính lên thân như màn TS). */}
-        {csMode &&
-          showSource &&
-          (handles && handles.length > 0
-            ? handles.map((h, i) => ({ key: h.id, left: ((i + 1) / (handles.length + 1)) * 100 }))
-            : [{ key: 'default', left: 50 }]
-          ).map((n) => <span key={n.key} className="bk-cs-notch" style={{ left: `${n.left}%` }} />)}
+        {/* CS: cung viền của hõm — ôm đúng mép lỗ đã mask trên skin (cùng toạ độ %). */}
+        {outPositions.map((n) => (
+          <span key={n.key} className="bk-cs-notch" style={{ left: `${n.left}%` }} />
+        ))}
 
         {showSource &&
           (handles && handles.length > 0 ? (
