@@ -54,6 +54,7 @@ import { formatDateTime } from '../ir/ivrProperty';
 // Cột デプロイバージョン đọc từ appProperties trên folder シナリオ — phần chờ cho
 // phase deploy (bot Selenium sẽ ghi sau khi deploy thành công): mỗi môi trường 1 key
 //   appliedVersionMaster (本番) / appliedVersionDemo (デモ)
+//   appliedVersionMasterAt / appliedVersionDemoAt — thời điểm deploy (yyyy-MM-dd HH:mm)
 // key cũ appliedVersion (1 môi trường) vẫn đọc được — coi là bản deploy MASTER.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -77,6 +78,9 @@ export interface ScenarioNode {
   // Version đang chạy trên từng môi trường AI電話 (null = môi trường đó chưa deploy).
   appliedMaster: number | null; // 本番
   appliedDemo: number | null; // デモ
+  // Thời điểm deploy bản đang chạy trên từng môi trường — yyyy-MM-dd HH:mm (bot Selenium ghi).
+  appliedMasterAt?: string;
+  appliedDemoAt?: string;
   versions: VersionNode[]; // sắp DESC theo v (mới nhất trước)
 }
 
@@ -185,6 +189,8 @@ const MOCK_FACILITIES: FacilityNode[] = [
         createdAt: '2026-07-02 14:00',
         appliedMaster: 2,
         appliedDemo: 3,
+        appliedMasterAt: '2026-07-12 09:15',
+        appliedDemoAt: '2026-07-15 10:05',
         versions: [
           { fileId: 'm1', v: 3, createdAt: '2026-07-14 18:22', updatedAt: '2026-07-15 10:05', author: 'Tuan Nguyen', subflowCount: 3, note: 'Đang chỉnh lại nhánh xác nhận ngày sinh — CHƯA deploy bản này.' },
           { fileId: 'm2', v: 2, createdAt: '2026-07-10 09:41', updatedAt: '2026-07-12 14:20', author: 'Tuan Nguyen', subflowCount: 2, note: 'V2 đang chạy thật trên tổng đài. Trước khi deploy bản mới cần xác nhận lại giờ tiếp nhận với bệnh viện.' },
@@ -197,6 +203,7 @@ const MOCK_FACILITIES: FacilityNode[] = [
         createdAt: '2026-07-08 11:20',
         appliedMaster: 1,
         appliedDemo: null,
+        appliedMasterAt: '2026-07-08 11:35',
         versions: [
           { fileId: 'm4', v: 1, createdAt: '2026-07-08 11:30', updatedAt: '2026-07-08 11:30', author: '田中 花子', subflowCount: 1 },
         ],
@@ -219,7 +226,16 @@ const MOCK_FACILITIES: FacilityNode[] = [
     name: '聖路加国際病院',
     createdAt: '2026-05-02 10:15',
     scenarios: [
-      { id: 's4', name: '診療予約', createdAt: '2026-05-04 09:00', appliedMaster: 22, appliedDemo: 24, versions: MANY_VERSIONS },
+      {
+        id: 's4',
+        name: '診療予約',
+        createdAt: '2026-05-04 09:00',
+        appliedMaster: 22,
+        appliedDemo: 24,
+        appliedMasterAt: '2026-07-09 08:40',
+        appliedDemoAt: '2026-07-15 13:22',
+        versions: MANY_VERSIONS,
+      },
       {
         id: 's5',
         name: '検査結果案内',
@@ -243,6 +259,8 @@ const MOCK_FACILITIES: FacilityNode[] = [
         createdAt: '2026-07-06 10:30',
         appliedMaster: 1,
         appliedDemo: 2,
+        appliedMasterAt: '2026-07-07 16:00',
+        appliedDemoAt: '2026-07-14 20:10',
         versions: [
           { fileId: 'm8', v: 2, createdAt: '2026-07-14 19:55', updatedAt: '2026-07-14 19:55', author: '田中 花子', subflowCount: 1 },
           { fileId: 'm9', v: 1, createdAt: '2026-07-06 10:33', updatedAt: '2026-07-07 15:41', author: '田中 花子', subflowCount: 0 },
@@ -367,6 +385,8 @@ function buildTree(fac: DriveItem[], scen: DriveItem[], files: DriveItem[]): Fac
       // Key cũ appliedVersion (1 môi trường) -> coi là bản deploy MASTER (本番).
       appliedMaster: readApplied(props.appliedVersionMaster) ?? readApplied(props.appliedVersion),
       appliedDemo: readApplied(props.appliedVersionDemo),
+      appliedMasterAt: props.appliedVersionMasterAt?.trim() || props.appliedVersionAt?.trim() || undefined,
+      appliedDemoAt: props.appliedVersionDemoAt?.trim() || undefined,
       versions: (versByParent.get(s.id) ?? []).sort((a, b) => b.v - a.v),
     };
     scenByParent.set(parent, [...(scenByParent.get(parent) ?? []), node]);
@@ -1095,7 +1115,7 @@ function DriveInner({
         <FileManagerMenu onManagePermissions={permissions ? () => setShowPermissions(true) : undefined} />
       </header>
 
-      <main className="relative mx-auto w-full max-w-7xl flex-1 overflow-auto p-6">
+      <main className="relative mx-auto w-full max-w-[88rem] flex-1 overflow-auto p-6">
         <div
           aria-hidden
           className="pointer-events-none absolute left-1/2 top-24 h-[420px] w-[640px] -translate-x-1/2 rounded-full bg-[var(--bk-accent)] opacity-[0.07] blur-[110px]"
@@ -1491,9 +1511,9 @@ function DriveInner({
                 <table className="w-full border-collapse">
                   <thead>
                     <tr className="border-b border-[var(--bk-border)]">
-                      {renderSortTh('v', 'colVersion', 'w-[340px] min-w-[280px]')}
-                      {/* Môi trường đã deploy bản này (stamp MASTER/DEMO) — không sort */}
-                      <th className={th}>{t('colDeployedEnv')}</th>
+                      {renderSortTh('v', 'colVersion', 'w-[320px] min-w-[260px]')}
+                      {/* Môi trường đã deploy bản này + ngày giờ deploy (stamp MASTER/DEMO) — không sort */}
+                      <th className={`${th} w-[200px] min-w-[180px]`}>{t('colDeployedEnv')}</th>
                       {renderSortTh('createdAt', 'colCreatedAt')}
                       {renderSortTh('updatedAt', 'colUpdatedAt')}
                       {renderSortTh('author', 'colAuthor')}
@@ -1540,13 +1560,24 @@ function DriveInner({
                             </div>
                           </td>
                           <td className={cell}>
-                            {/* Bản này đang chạy trên môi trường nào (stamp MASTER/DEMO). */}
+                            {/* Bản này đang chạy trên môi trường nào + lúc nào (stamp MASTER/DEMO
+                                + yyyy-MM-dd HH:mm) — deploy cả demo lẫn master thì xếp 2 dòng. */}
                             {!onMaster && !onDemo ? (
                               <span className="text-[var(--bk-text-faint)]">—</span>
                             ) : (
-                              <span className="flex flex-wrap items-center gap-1.5">
-                                {onMaster && <EnvStamp env="master" />}
-                                {onDemo && <EnvStamp env="demo" />}
+                              <span className="flex flex-col gap-1">
+                                {onMaster && (
+                                  <span className="flex items-center gap-1.5 whitespace-nowrap text-xs text-[var(--bk-text-muted)]">
+                                    <EnvStamp env="master" />
+                                    {scenario.appliedMasterAt ?? '—'}
+                                  </span>
+                                )}
+                                {onDemo && (
+                                  <span className="flex items-center gap-1.5 whitespace-nowrap text-xs text-[var(--bk-text-muted)]">
+                                    <EnvStamp env="demo" />
+                                    {scenario.appliedDemoAt ?? '—'}
+                                  </span>
+                                )}
                               </span>
                             )}
                           </td>
