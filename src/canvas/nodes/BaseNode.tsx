@@ -135,14 +135,14 @@ export function makeNode(nodeType: NodeType) {
         {showTarget && <Handle type="target" position={Position.Top} className="bk-handle" />}
 
         {csMode ? (
-          // CS: xếp DỌC căn giữa — (icon loại NHỎ + tên node) ở trên, dải icon biểu
-          // thị cấu hình (mỗi loại một màu riêng) ở dưới.
+          // CS: icon loại bình thường (tile trái) · TÊN node căn GIỮA · dải icon
+          // biểu thị cấu hình (mỗi loại một màu riêng) dạt sang PHẢI.
           <div className="bk-node-body bk-node-body--cs">
-            <div className="bk-cs-title">
-              <Icon icon={cfg.icon} className="bk-cs-type-icon" width={14} height={14} />
-              <div className="bk-node-name" title={d.label}>
-                {d.label}
-              </div>
+            <div className="bk-node-icon">
+              <Icon icon={cfg.icon} />
+            </div>
+            <div className="bk-node-name bk-node-name--cs" title={d.label}>
+              {d.label}
             </div>
             <CsIndicators type={nodeType} data={d.nodeData} />
           </div>
