@@ -6,6 +6,7 @@ import { NODE_CONFIG } from '../../ui/nodeConfig';
 import { PROPERTY_FIELDS, type PropertyField } from '../../ui/nodeSchema';
 import { Icon } from '../../ui/icons';
 import { useFlowStore } from '../../store/flowStore';
+import { useWorkspaceStore } from '../../store/workspaceStore';
 import { useT, type TKey } from '../../ui/i18n';
 import { HoverTip, useHoverLabel } from '../../components/HoverTip';
 
@@ -44,6 +45,9 @@ export function makeNode(nodeType: NodeType) {
       return false;
     });
     const t = useT();
+    // Màn CS (#/cs): node lùn, không icon loại (màu accent là đủ), chỉ tên +
+    // icon biểu thị; output "khoét" rời khỏi node (CSS .bk-node--cs).
+    const csMode = useWorkspaceStore((s) => s.mode === 'cs');
     const [hovered, setHovered] = useState(false);
     // Giữ preview mở khi rê chuột từ node sang card preview (có khoảng hở 12px):
     // mouseleave hẹn ẩn sau 180ms; mouseenter card huỷ hẹn -> hover được vào card.
@@ -61,7 +65,7 @@ export function makeNode(nodeType: NodeType) {
 
     return (
       <div
-        className={['bk-node', selected ? 'bk-node--selected' : ''].join(' ')}
+        className={['bk-node', csMode ? 'bk-node--cs' : '', selected ? 'bk-node--selected' : ''].join(' ')}
         style={{ '--accent': cfg.color } as CSSProperties}
         onMouseEnter={showPreview}
         onMouseLeave={hidePreview}
@@ -130,22 +134,44 @@ export function makeNode(nodeType: NodeType) {
 
         {showTarget && <Handle type="target" position={Position.Top} className="bk-handle" />}
 
-        <div className="bk-node-body">
-          <div className="bk-node-icon">
-            <Icon icon={cfg.icon} />
-          </div>
-          <div className="bk-node-text">
-            <div className="bk-node-type">{cfg.typeLabel}</div>
-            <div className="bk-node-name" title={d.label}>
-              {d.label}
-            </div>
-            {description && (
-              <div className="bk-node-desc" title={description}>
-                {description}
+        {csMode ? (
+          // CS: chỉ TÊN node + icon biểu thị cấu hình — loại node nhận diện bằng màu.
+          <div className="bk-node-body">
+            <div className="bk-node-text">
+              <div className="bk-node-name" title={d.label}>
+                {d.label}
               </div>
-            )}
+            </div>
+            <CsIndicators type={nodeType} data={d.nodeData} />
           </div>
-        </div>
+        ) : (
+          <div className="bk-node-body">
+            <div className="bk-node-icon">
+              <Icon icon={cfg.icon} />
+            </div>
+            <div className="bk-node-text">
+              <div className="bk-node-type">{cfg.typeLabel}</div>
+              <div className="bk-node-name" title={d.label}>
+                {d.label}
+              </div>
+              {description && (
+                <div className="bk-node-desc" title={description}>
+                  {description}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* CS: hõm tròn "khoét" vào cạnh đáy node tại vị trí mỗi output — cùng toạ độ %
+            với chấm nối nhưng chấm được CSS đẩy xuống thấp hơn 1 đoạn -> cảm giác điểm
+            output tách rời khỏi node (không dính lên thân như màn TS). */}
+        {csMode &&
+          showSource &&
+          (handles && handles.length > 0
+            ? handles.map((h, i) => ({ key: h.id, left: ((i + 1) / (handles.length + 1)) * 100 }))
+            : [{ key: 'default', left: 50 }]
+          ).map((n) => <span key={n.key} className="bk-cs-notch" style={{ left: `${n.left}%` }} />)}
 
         {showSource &&
           (handles && handles.length > 0 ? (
@@ -190,6 +216,38 @@ function SourceHandle({ id, label, style }: { id: string; label?: string; style?
       />
       {tip}
     </>
+  );
+}
+
+// ── Icon biểu thị cấu hình trên node CS ──────────────────────────────────────
+// Thay cho chữ: nhìn dải icon là biết node đã set gì (tooltip xem giá trị).
+// Chỉ hiện icon của cấu hình CÓ THẬT — node trống thì không có icon nào.
+function CsIndicators({ type, data }: { type: NodeType; data: Record<string, unknown> }) {
+  const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  const icons: { key: string; icon: string; title: string; text?: string }[] = [];
+
+  const announceText = str(type === 'announce' ? data.text : data.announce);
+  if (announceText) icons.push({ key: 'announce', icon: 'lucide:volume-2', title: announceText });
+  if (type === 'interaction') {
+    if (data.reconfirm === 'yes')
+      icons.push({ key: 'reconfirm', icon: 'lucide:rotate-ccw', title: str(data.reconfirmAnnounce) || 'Re-confirm' });
+    // Retry: hiện số lần (default 2) — icon vòng lặp + con số nhỏ.
+    const retry = str(data.retryCount) || '2';
+    icons.push({ key: 'retry', icon: 'lucide:refresh-cw', title: str(data.retryAnnounce), text: retry });
+  }
+  if (type === 'transfer' && str(data.transferNumber))
+    icons.push({ key: 'phone', icon: 'lucide:phone-forwarded', title: str(data.transferNumber) });
+
+  if (icons.length === 0) return null;
+  return (
+    <div className="bk-cs-indicators">
+      {icons.map((it) => (
+        <span key={it.key} className="bk-cs-ind" title={it.title}>
+          <Icon icon={it.icon} width={13} height={13} />
+          {it.text && <span className="bk-cs-ind-num">{it.text}</span>}
+        </span>
+      ))}
+    </div>
   );
 }
 

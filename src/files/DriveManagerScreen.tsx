@@ -35,6 +35,7 @@ import {
   type PermissionsData,
 } from '../drive/permissions';
 import { PermissionsModal } from './PermissionsModal';
+import { useWorkspaceStore } from '../store/workspaceStore';
 import { HoverLabelButton } from '../components/HoverTip';
 import { gdErrorKey } from '../drive/errors';
 import { DRIVE_ROOT_FOLDER_ID, parseVersionFromName, versionFileName } from '../drive/config';
@@ -492,6 +493,12 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
         if (!cancelled) {
           setMembers(log.members);
           setAdmins(log.admins);
+          // Route theo bộ phận: member có department -> vào đúng màn (#/cs | #/ts).
+          // Chỉ áp khi URL chưa chỉ định rõ (hash thắng) — xem workspaceStore.
+          const me = user?.email
+            ? log.members.find((m) => m.email.toLowerCase() === user.email.toLowerCase())
+            : undefined;
+          if (me?.department) useWorkspaceStore.getState().applyDepartment(me.department);
         }
       } catch {
         // bỏ qua — phân quyền là tiện ích, không phải điều kiện dùng app

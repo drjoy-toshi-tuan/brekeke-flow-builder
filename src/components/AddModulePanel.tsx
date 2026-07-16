@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import { useFlowStore } from '../store/flowStore';
+import { useWorkspaceStore } from '../store/workspaceStore';
 import { NODE_CONFIG, ADDABLE_NODE_TYPES } from '../ui/nodeConfig';
+import type { NodeType } from '../ir/types';
 import { Icon } from '../ui/icons';
 import { useT } from '../ui/i18n';
 
@@ -15,6 +17,10 @@ import { useT } from '../ui/i18n';
 
 // Kiểu dữ liệu dataTransfer khi kéo module từ palette -> canvas.
 export const DND_MIME = 'application/bk-node-type';
+
+// Palette màn CS: bộ node tối giản cho người không kỹ thuật — Start + Announce +
+// Hearing (interaction) + Transfer + Hangup. Màn TS giữ đầy đủ ADDABLE_NODE_TYPES.
+const CS_NODE_TYPES: readonly NodeType[] = ['start', 'announce', 'interaction', 'transfer', 'hangup'];
 
 export function AddModulePanel() {
   // Mở/đóng qua store (canvasPanel) để loại trừ lẫn nhau với panel Main/Sub Flow.
@@ -51,6 +57,10 @@ export function AddModulePanel() {
   // Node Start CHỈ có ở main flow — đang mở sub flow thì không thêm được.
   const inSubflow = useFlowStore((s) => s.activeFlowId !== 'main');
   const { screenToFlowPosition } = useReactFlow();
+  const csMode = useWorkspaceStore((s) => s.mode === 'cs');
+  const addableTypes = csMode
+    ? ADDABLE_NODE_TYPES.filter((type) => CS_NODE_TYPES.includes(type))
+    : ADDABLE_NODE_TYPES;
   const t = useT();
 
   const isDisabled = (type: (typeof ADDABLE_NODE_TYPES)[number]) =>
@@ -106,7 +116,7 @@ export function AddModulePanel() {
           <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-[var(--bk-text-faint)]">
             {t('chooseType')}
           </div>
-          {ADDABLE_NODE_TYPES.map((type) => {
+          {addableTypes.map((type) => {
             const cfg = NODE_CONFIG[type];
             const disabled = isDisabled(type);
             return (
