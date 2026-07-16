@@ -152,7 +152,7 @@ nằm trong 1 file prompt riêng `drawioMapPrompt.ts`):
   | clinicalDepartment | 診療科 | DEPARTMENT |
   | patientDateOfBirth | 生年月日 | DATE_OF_BIRTH |
   | reason | 理由 | TEXT |
-  | reservationDate | 現在の予約 | DATE |
+  | reservationDate | 現在の予約日 | DATE |
   | additionalPhoneNumber | 連絡先電話番号 | PHONE_NUMBER |
 
   Ngoại lệ: `callId 通話ID NUMBER` cũng là mặc định nhưng

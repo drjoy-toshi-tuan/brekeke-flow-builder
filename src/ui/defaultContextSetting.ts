@@ -19,7 +19,7 @@ export const DEFAULT_CONTEXT_SETTING = `[
   },
   {
     "contextName": "patientName",
-    "contextNameJp": "患者氏名",
+    "contextNameJp": "患者名",
     "rangeValues": [],
     "displayType": "TEXT",
     "editable": true,
@@ -85,8 +85,17 @@ export const DEFAULT_CONTEXT_SETTING = `[
     "itemDefault": true
   },
   {
+    "contextName": "reason",
+    "contextNameJp": "理由",
+    "rangeValues": [],
+    "displayType": "TEXT",
+    "editable": true,
+    "deletable": false,
+    "itemDefault": true
+  },
+  {
     "contextName": "reservationDate",
-    "contextNameJp": "予約日",
+    "contextNameJp": "現在の予約日",
     "rangeValues": [],
     "displayType": "DATE",
     "editable": true,
