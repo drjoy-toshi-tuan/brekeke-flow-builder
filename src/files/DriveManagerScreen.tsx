@@ -1918,17 +1918,18 @@ function DriveInner({
 }
 
 // Stamp môi trường deploy: MAS/本番 (xanh emerald ngả cyan) / DEM/デモ (cam) — nền
-// đặc, chữ trắng bold, font display riêng cho nổi bật (fallback dần về sans).
+// đặc, chữ trắng bold (KHÔNG nghiêng). Font cùng phong cách với logo (Space Grotesk):
+// tiếng Nhật dùng Zen Kaku Gothic New — cùng chất geometric/hiện đại.
 function EnvStamp({ env }: { env: 'master' | 'demo' }) {
   const t = useT();
   const master = env === 'master';
   return (
     <span
       title={t('dmAppliedBadge')}
-      className="inline-flex shrink-0 items-center rounded px-1.5 py-px text-[10px] font-black italic uppercase leading-4 tracking-widest text-white"
+      className="inline-flex shrink-0 items-center rounded px-1.5 py-px text-[10px] font-bold uppercase leading-4 tracking-widest text-white"
       style={{
         background: master ? '#10b981' : '#f97316',
-        fontFamily: "'Arial Black', 'Avenir Next Condensed', 'Hiragino Sans', 'Yu Gothic', sans-serif",
+        fontFamily: "'Space Grotesk', 'Zen Kaku Gothic New', sans-serif",
       }}
     >
       {t(master ? 'dmEnvMaster' : 'dmEnvDemo')}
