@@ -137,10 +137,10 @@ nằm trong 1 file prompt riêng `drawioMapPrompt.ts`):
 **Context & Context Settings (node start)**:
 
 - LLM phải **sinh tên context** cho mỗi mục hearing cần lưu, nhưng theo thứ tự:
-  ① khớp bảng context MẶC ĐỊNH bên dưới → dùng đúng tên đó; ② khớp context hay dùng
-  (xem `src/ui/defaultContextSetting.ts` — identityVerification, changeContent,
-  guestType, urgency, phoneType…) → tái dùng; ③ không khớp mới sinh tên mới
-  (camelCase tiếng Anh + contextNameJp theo tên mục hearing).
+  ① khớp bảng context MẶC ĐỊNH bên dưới → dùng đúng tên đó; ② khớp bảng TÊN QUY CHUẨN
+  cho mục hay xuất hiện (bên dưới) → dùng đúng tên đó; ③ không khớp mới sinh tên mới
+  theo quy tắc đặt tên: **camelCase** (chữ đầu viết thường, không dấu cách, chữ đầu
+  mỗi từ sau viết hoa), tiếng Anh dễ hiểu + contextNameJp theo tên mục hearing.
 - Bảng context **mặc định** (tên EN + tên JP + displayType đều CỐ ĐỊNH;
   `editable: true, deletable: false, itemDefault: true`):
 
@@ -157,6 +157,40 @@ nằm trong 1 file prompt riêng `drawioMapPrompt.ts`):
 
   Ngoại lệ: `callId 通話ID NUMBER` cũng là mặc định nhưng
   `editable: true, deletable: true, itemDefault: false`.
+
+  Bộ mặc định này là **bất di bất dịch**: LLM copy NGUYÊN VĂN vào Context Setting,
+  không thêm bớt/đổi tên/đổi type — chỗ DUY NHẤT được điền theo flow là `rangeValues`
+  của các context dạng pulldown (classification theo các giá trị phân loại thực tế
+  trong flow, clinicalDepartment theo danh sách khoa của bệnh viện). File seed
+  `src/ui/defaultContextSetting.ts` chỉ chứa đúng bộ này (rangeValues để dummy).
+- Bảng **tên quy chuẩn** cho các mục hearing hay xuất hiện (context KHÔNG mặc định
+  nhưng cố định tên để tránh phân mảnh giữa các flow — nằm trong playbook, sẽ bổ
+  sung dần):
+
+  | Mục hearing (JP) | contextName chuẩn |
+  |---|---|
+  | 本人確認 | identityVerification |
+  | 受診歴 | visitHistory |
+  | 症状 | symptoms |
+  | 問い合わせ内容 | inquiryContent |
+  | 予約希望日 | preferredReservationDate |
+  | 予約希望時期 | preferredReservationPeriod |
+  | 変更希望日 | preferredChangeDate |
+  | 変更内容 | changeContent |
+  | 詳細変更内容 | changeDetails |
+  | 紹介元医療機関 | referringMedicalInstitution |
+  | 医療機関名 | medicalInstitutionName |
+  | 紹介状有無 | referralLetterExists |
+  | 他科予約有無 | otherAppointmentExists |
+  | 担当者名 | personInCharge |
+  | 患者／医療機関 | guestType |
+  | 年齢／性別 | ageAndGender |
+  | 緊急性 | urgency |
+  | コース | course |
+  | 追加オプション | additionalOptions |
+  | 疾患の概要 | diseaseSummary |
+  | 電話タイプ | phoneType |
+  | 最終確認 | finalConfirmation |
 - **4 displayType độc quyền**: DEPARTMENT / PHONE_NUMBER / CLASSIFICATION /
   DATE_OF_BIRTH chỉ được dùng cho đúng context mặc định tương ứng ở bảng trên —
   context tên khác KHÔNG được mang các type này (validate cứng).
@@ -166,9 +200,11 @@ nằm trong 1 file prompt riêng `drawioMapPrompt.ts`):
   giá trị phân loại thực tế trong flow), clinicalDepartment (danh sách khoa của bệnh
   viện), và các context tự do kiểu changeContent/urgency/guestType/phoneType.
 - **Node start**: LLM tổng hợp TOÀN BỘ context dùng trong flow thành JSON
-  Context Setting (schema như `src/ui/defaultContextSetting.ts` — dùng luôn file này
-  + JSON mẫu của bệnh viện làm few-shot), ghi vào `flow.startData` (cơ chế round-trip
-  đã có sẵn trong fromYaml/toYaml).
+  Context Setting ghi vào `flow.startData` (cơ chế round-trip đã có sẵn trong
+  fromYaml/toYaml): khối context mặc định copy nguyên văn (chỉ điền rangeValues
+  pulldown) + các context không mặc định flow dùng tới. Few-shot cho phần này xây
+  từ chính knowledge trên (bảng mặc định + bảng tên quy chuẩn + quy tắc đặt tên),
+  KHÔNG dùng file context thật của bệnh viện.
 - Validate cứng: mọi `contextName` được saveContext trong flow phải tồn tại trong
   Context Setting của start; đúng quy tắc type độc quyền; context mặc định không bị
   đổi tên/type.
