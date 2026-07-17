@@ -410,7 +410,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     gsTimeout: 'Timeout',
     gsSeconds: 'giây',
     gsAddRange: 'Thêm khung giờ',
-    gs24h: '24H',
+    gs24h: '24 GIỜ',
     gsTimeframe: 'Khung giờ',
     gsFromTime: 'Giờ bắt đầu',
     gsToTime: 'Giờ kết thúc',

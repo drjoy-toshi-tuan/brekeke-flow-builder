@@ -44,6 +44,12 @@ const PAN_BUTTONS: number[] = [1, 2];
 // Phím xoá node/edge đang chọn.
 const DELETE_KEYS = ['Delete', 'Backspace'];
 
+// selectionKeyCode mặc định của React Flow là Shift: giữ Shift thì pane "nuốt"
+// pointerdown để vẽ khung chọn -> Shift+click vào node KHÔNG chọn thêm được.
+// Kéo-chọn đã có selectionOnDrag nên TẮT hẳn phím này; nhờ vậy Shift/⌘+click
+// đi vào multiSelectionKeyCode và chọn thêm/bỏ chọn từng node như mong đợi.
+const SELECTION_KEY = null;
+
 export function FlowCanvas() {
   const ir = useFlowStore((s) => s.ir);
   const setNodePositions = useFlowStore((s) => s.setNodePositions);
@@ -283,6 +289,7 @@ export function FlowCanvas() {
       selectionOnDrag
       selectionMode={SelectionMode.Partial}
       panOnDrag={PAN_BUTTONS}
+      selectionKeyCode={SELECTION_KEY}
       multiSelectionKeyCode={['Meta', 'Shift']}
       fitView
       proOptions={{ hideAttribution: true }}

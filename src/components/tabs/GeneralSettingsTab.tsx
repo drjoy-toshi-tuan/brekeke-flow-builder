@@ -167,9 +167,12 @@ export function GeneralSettingsTab() {
                 <div className="flex flex-col gap-1.5">
                   {DAY_KEYS.map((day) => {
                     const sched = settings.workingDays.find((d) => d.day === day)!;
+                    // T2~T6 bật = xanh lá sáng; T7/CN/NL bật = đỏ tone sáng. Chữ đậm
+                    // tối trên nền sáng -> tương phản tốt ở cả light lẫn dark theme.
+                    const isRedDay = day === 'sat' || day === 'sun' || day === 'holiday';
                     return (
                       <div key={day} className="flex items-start gap-3">
-                        {/* Stamp thứ: bấm bật -> hiện bộ chọn 24H / khung giờ; bấm lại -> tắt */}
+                        {/* Stamp thứ: bấm bật -> hiện bộ chọn 24 GIỜ / khung giờ; bấm lại -> tắt */}
                         <button
                           type="button"
                           onClick={() => {
@@ -182,9 +185,11 @@ export function GeneralSettingsTab() {
                             }
                           }}
                           aria-pressed={sched.enabled}
-                          className={`mt-0.5 inline-flex h-9 w-11 shrink-0 items-center justify-center rounded-lg border text-sm font-bold transition ${
+                          className={`inline-flex h-9 w-11 shrink-0 items-center justify-center rounded-lg border text-sm font-bold transition ${
                             sched.enabled
-                              ? 'border-[var(--bk-accent)] bg-[var(--bk-accent)] text-white'
+                              ? isRedDay
+                                ? 'border-[#f87171] bg-[#f87171] text-[#450a0a]'
+                                : 'border-[#22c55e] bg-[#22c55e] text-[#052e16]'
                               : 'border-[var(--bk-border)] bg-[var(--bk-surface-2)] text-[var(--bk-text-faint)] hover:text-[var(--bk-text)]'
                           }`}
                         >
@@ -192,7 +197,9 @@ export function GeneralSettingsTab() {
                         </button>
 
                         {sched.enabled && (
-                          <div className="flex flex-wrap items-center gap-2">
+                          // min-h = chiều cao stamp thứ (h-9) + items-center -> bộ chọn /
+                          // chip kết quả luôn canh giữa theo hàng, không bị lệch lên trên.
+                          <div className="flex min-h-9 flex-wrap items-center gap-2">
                             {choosingDay === day ? (
                               // Vừa bật -> hỏi chế độ: 24H (24時間) hay 時間帯 (khung giờ).
                               // Chọn xong bộ chọn biến mất, chỉ còn kết quả.
@@ -220,14 +227,14 @@ export function GeneralSettingsTab() {
                                 ))}
                               </span>
                             ) : sched.allDay ? (
-                              // 24H: chip kết quả — bấm để chọn lại chế độ.
+                              // 24 GIỜ (24時間): chip kết quả — bấm để chọn lại chế độ.
                               <button
                                 type="button"
                                 onClick={() => setChoosingDay(day)}
                                 title={t('gsTimeframe')}
                                 className="inline-flex items-center rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface)] px-2.5 py-1 text-sm font-bold text-[var(--bk-text)] transition hover:border-[var(--bk-accent)]"
                               >
-                                24H
+                                {t('gs24h')}
                               </button>
                             ) : (
                               <>
