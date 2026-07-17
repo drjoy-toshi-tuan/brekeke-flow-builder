@@ -88,13 +88,14 @@ export function AnnounceListTab() {
     options: { value: string; label: string }[],
   ) => (
     <label className="flex items-center gap-1.5">
-      <span className="inline-flex shrink-0 rounded-full bg-[var(--bk-surface-2)] px-2 py-0.5 text-[10px] font-bold text-[var(--bk-text-muted)]">
+      {/* Chip nhãn BỀ NGANG CỐ ĐỊNH -> 2 pulldown Status / SMS Flag rộng bằng nhau. */}
+      <span className="inline-flex w-[72px] shrink-0 justify-center whitespace-nowrap rounded-full bg-[var(--bk-surface-2)] px-2 py-0.5 text-[10px] font-bold text-[var(--bk-text-muted)]">
         {label}
       </span>
       <select
         value={str(node.data[key])}
         onChange={(e) => setNodeData(node.id, { [key]: e.target.value })}
-        className="w-full min-w-0 rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface)] px-1.5 py-1 text-xs text-[var(--bk-text)]"
+        className="w-full min-w-0 flex-1 rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface)] px-1.5 py-1 text-xs text-[var(--bk-text)]"
       >
         <option value="">ー</option>
         {options.map((o) => (
