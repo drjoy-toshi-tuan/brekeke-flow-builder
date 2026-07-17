@@ -15,6 +15,7 @@ import { AnnounceListTab } from './components/tabs/AnnounceListTab';
 import { GeneralSettingsTab } from './components/tabs/GeneralSettingsTab';
 import { StatusSettingsTab } from './components/tabs/StatusSettingsTab';
 import { useFlowStore } from './store/flowStore';
+import { useWorkspaceStore } from './store/workspaceStore';
 import { Toast } from './ui/Toast';
 
 export default function App() {
@@ -46,25 +47,28 @@ function Gate() {
 
 function FlowApp() {
   // IR đã được nạp vào store ở màn quản lý file trước khi vào canvas.
-  // Dưới header là dải tab (kiểu tab browser): Flow Diagram (canvas) + các tab
-  // bảng/form (Announce List / General Settings / Status Settings) — tất cả cùng
-  // đọc/ghi IR trong store nên liên động 2 chiều với nhau.
+  // CHỈ màn CS mới có dải tab dưới header (kiểu tab browser): Flow Diagram (canvas)
+  // + các tab bảng/form (Announce List / General Settings / Status Settings) — tất cả
+  // cùng đọc/ghi IR trong store nên liên động 2 chiều với nhau.
+  // Màn TS giữ bố cục cũ: chỉ canvas, không tab.
+  const csMode = useWorkspaceStore((s) => s.mode === 'cs');
   const tab = useFlowStore((s) => s.canvasTab);
+  const showCanvas = !csMode || tab === 'flow';
   return (
     <div className="flex h-full flex-col">
       <Toolbar />
-      <CanvasTabs />
+      {csMode && <CanvasTabs />}
       <main className="relative flex-1 overflow-hidden">
-        {tab === 'flow' && (
+        {showCanvas && (
           <ReactFlowProvider>
             <FlowCanvas />
             <NodeSettingsPanel />
             <ConfirmDeleteModal />
           </ReactFlowProvider>
         )}
-        {tab === 'announce' && <AnnounceListTab />}
-        {tab === 'general' && <GeneralSettingsTab />}
-        {tab === 'status' && <StatusSettingsTab />}
+        {csMode && tab === 'announce' && <AnnounceListTab />}
+        {csMode && tab === 'general' && <GeneralSettingsTab />}
+        {csMode && tab === 'status' && <StatusSettingsTab />}
       </main>
     </div>
   );

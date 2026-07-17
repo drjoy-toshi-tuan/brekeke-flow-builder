@@ -41,7 +41,10 @@ function conditionOutputLabel(raw?: string): string | undefined {
   return raw;
 }
 
-export function irToReactFlow(ir: FlowIR): { nodes: Node[]; edges: Edge[] } {
+// opts.cs: biến thể canvas màn CS (mũi tên đầu dây, nhãn nhánh luôn hiện khi node
+// rẽ nhánh thật). Màn TS (mặc định) giữ hành vi cũ — hàm vẫn thuần, mode do caller truyền.
+export function irToReactFlow(ir: FlowIR, opts?: { cs?: boolean }): { nodes: Node[]; edges: Edge[] } {
+  const cs = opts?.cs === true;
   // Handle output ở đáy mỗi node suy ra từ schema/nhánh (không còn phụ thuộc edge)
   // -> thêm/bớt nhánh trong panel làm số chấm nối tăng/giảm ngay, kể cả khi chưa nối dây.
   const handlesByNode = new Map<string, { id: string; label?: string }[]>();
@@ -95,15 +98,16 @@ export function irToReactFlow(ir: FlowIR): { nodes: Node[]; edges: Edge[] } {
       label:
         (isFixed || mode === 'editable' || handles.length > 1 ? matched : undefined) ??
         conditionOutputLabel(e.condition ?? e.label),
-      // Mũi tên ở đầu đích cho MỌI dây — thấy ngay chiều đi của nhánh. Màu đồng bộ
-      // token qua CSS .react-flow__arrowhead (index.css).
-      markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
+      // CS: mũi tên ở đầu đích cho MỌI dây — thấy ngay chiều đi của nhánh. Màu đồng
+      // bộ token qua CSS .react-flow__arrowhead (index.css). TS không có mũi tên.
+      ...(cs ? { markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 } } : {}),
       data: {
         condition: e.condition,
-        // Nhãn nhánh LUÔN hiện khi node nguồn thật sự rẽ nhánh: nhánh tự do
+        // TS: node condition/script nhãn giá trị nhánh luôn hiện; node khác hover mới hiện.
+        // CS: nhãn nhánh LUÔN hiện khi node nguồn thật sự rẽ nhánh: nhánh tự do
         // (nexus/logic/jump) hoặc có >1 dây ra (vd NEXT + FAILED đều nối). Node chỉ
         // nối 1 đường ra giữ hover-only để canvas không đầy chữ "次へ" thừa.
-        alwaysLabel: mode === 'editable' || (outCount.get(e.source) ?? 0) > 1,
+        alwaysLabel: mode === 'editable' || (cs && (outCount.get(e.source) ?? 0) > 1),
       } satisfies RFEdgeData,
     };
   });
