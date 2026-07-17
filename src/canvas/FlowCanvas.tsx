@@ -18,6 +18,7 @@ import {
   type FinalConnectionState,
 } from '@xyflow/react';
 import { useFlowStore } from '../store/flowStore';
+import { useWorkspaceStore } from '../store/workspaceStore';
 import { useTheme } from '../ui/theme';
 import type { NodeType } from '../ir/types';
 import { irToReactFlow } from './irAdapter';
@@ -63,13 +64,16 @@ export function FlowCanvas() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
+  // Biến thể canvas theo màn: CS có mũi tên đầu dây + nhãn nhánh luôn hiện; TS giữ nguyên.
+  const csMode = useWorkspaceStore((s) => s.mode === 'cs');
+
   // Re-derive trạng thái canvas mỗi khi IR đổi (state -> view, một chiều).
   useEffect(() => {
     if (!ir) return;
-    const rf = irToReactFlow(ir);
+    const rf = irToReactFlow(ir, { cs: csMode });
     setNodes(rf.nodes);
     setEdges(rf.edges);
-  }, [ir, setNodes, setEdges]);
+  }, [ir, csMode, setNodes, setEdges]);
 
   // Đổi flow (main <-> sub) -> fit view vào graph mới sau khi canvas re-derive.
   const activeFlowId = useFlowStore((s) => s.activeFlowId);
