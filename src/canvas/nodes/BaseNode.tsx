@@ -69,14 +69,18 @@ export function makeNode(nodeType: NodeType) {
         ? handles.map((h, i) => ({ key: h.id, left: ((i + 1) / (handles.length + 1)) * 100 }))
         : [{ key: 'default', left: 50 }]
       : [];
+    // TS (không CS): tiếp điểm ĐẾN cũng "khoét lỗ" + chấm tròn ở ĐỈNH node đích, giống
+    // hệt tiếp điểm xuất phát (CS giữ mũi tên -> không khoét). Chỉ khoét khi node có
+    // handle target (showTarget).
+    const targetNotch = showTarget && !csMode;
     // Mask khoét lỗ THẬT trên skin (nền + viền node): mỗi output 1 lỗ tròn tại mép
-    // đáy — viền node tự ĐỨT đúng tại mép lỗ nên khớp hình học với cung hõm.
-    const skinMask =
-      outPositions.length > 0
-        ? outPositions
-            .map((p) => `radial-gradient(circle at ${p.left}% 100%, transparent 7px, #000 8px)`)
-            .join(', ')
-        : undefined;
+    // đáy — viền node tự ĐỨT đúng tại mép lỗ nên khớp hình học với cung hõm. TS thêm
+    // 1 lỗ ở ĐỈNH giữa cho tiếp điểm đến.
+    const skinHoles = [
+      ...outPositions.map((p) => `radial-gradient(circle at ${p.left}% 100%, transparent 7px, #000 8px)`),
+      ...(targetNotch ? ['radial-gradient(circle at 50% 0%, transparent 7px, #000 8px)'] : []),
+    ];
+    const skinMask = skinHoles.length > 0 ? skinHoles.join(', ') : undefined;
     const maskStyle: CSSProperties | undefined = skinMask
       ? ({
           maskImage: skinMask,
@@ -193,10 +197,12 @@ export function makeNode(nodeType: NodeType) {
           </div>
         )}
 
-        {/* CS: cung viền của hõm — ôm đúng mép lỗ đã mask trên skin (cùng toạ độ %). */}
+        {/* Cung viền của hõm — ôm đúng mép lỗ đã mask trên skin (cùng toạ độ %). */}
         {outPositions.map((n) => (
           <span key={n.key} className="bk-cs-notch" style={{ left: `${n.left}%` }} />
         ))}
+        {/* TS: cung hõm tiếp điểm ĐẾN ở ĐỈNH giữa node (mở xuống dưới, đối xứng với hõm output). */}
+        {targetNotch && <span className="bk-cs-notch bk-cs-notch--target" style={{ left: '50%' }} />}
 
         {showSource &&
           (handles && handles.length > 0 ? (
