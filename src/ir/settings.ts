@@ -27,13 +27,14 @@ export const FIXED_STATUSES: readonly StatusEntry[] = [
 
 // URL gửi sau cuộc gọi gắn cuối mỗi SMS — độ dài CỐ ĐỊNH 22 ký tự (cột 文字数
 // đếm: nội dung + 22, KHÔNG cộng thêm ký tự xuống dòng — spec team CS).
+// CHƯA nhập nội dung (rỗng/toàn khoảng trắng) thì URL cũng chưa gắn -> đếm 0.
 export const SMS_URL_LENGTH = 22;
 
 // Ngưỡng cảnh báo độ dài SMS: từ 71 ký tự trở đi hiện cảnh báo.
 export const SMS_WARN_LIMIT = 70;
 
 export function smsCharCount(content: string): number {
-  return content.length + SMS_URL_LENGTH;
+  return content.trim() === '' ? 0 : content.length + SMS_URL_LENGTH;
 }
 
 function emptyDays(): DaySchedule[] {

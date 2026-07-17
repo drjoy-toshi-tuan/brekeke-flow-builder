@@ -304,7 +304,8 @@ function CsIndicators({ type, data }: { type: NodeType; data: Record<string, unk
   return (
     <div className="bk-cs-indicators">
       {icons.map((it) => (
-        <span key={it.key} className="bk-cs-ind" title={it.title} style={{ color: it.color }}>
+        // Màu icon truyền qua biến --ind; CSS pha thêm màu chữ node cho đủ tương phản.
+        <span key={it.key} className="bk-cs-ind" title={it.title} style={{ '--ind': it.color } as CSSProperties}>
           <Icon icon={it.icon} width={13} height={13} />
           {it.text && <span className="bk-cs-ind-num">{it.text}</span>}
         </span>
