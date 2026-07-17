@@ -116,7 +116,7 @@ export function AnnounceListTab() {
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]">
             <Icon icon="lucide:volume-2" width={17} height={17} />
           </span>
-          {t('tabAnnounce')}
+          {t('ctAnnounce')}
         </div>
 
         <div className="overflow-auto rounded-xl border border-[var(--bk-border)] bg-[var(--bk-surface)]">

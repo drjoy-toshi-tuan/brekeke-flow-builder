@@ -91,7 +91,7 @@ export function GeneralSettingsTab() {
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]">
             <Icon icon="lucide:layout-dashboard" width={17} height={17} />
           </span>
-          {t('tabGeneral')}
+          {t('ctGeneral')}
         </div>
 
         <div className="flex flex-col gap-4">

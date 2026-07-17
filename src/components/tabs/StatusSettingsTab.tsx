@@ -67,7 +67,7 @@ export function StatusSettingsTab() {
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]">
             <Icon icon="lucide:circle-check" width={17} height={17} />
           </span>
-          {t('tabStatus')}
+          {t('ctStatus')}
         </div>
 
         {/* ── 状態 ── */}
