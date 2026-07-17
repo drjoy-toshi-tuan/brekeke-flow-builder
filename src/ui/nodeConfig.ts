@@ -32,8 +32,9 @@ export const NODE_CONFIG: Record<NodeType, NodeVisual> = {
 // ── Màn CS (#/cs) ──
 // Bộ node CS dùng TÊN TIẾNG NHẬT cố định (không theo ngôn ngữ UI) — spec từ team CS.
 // Chỉ các loại trong CS_NODE_TYPES mới có nhãn; loại khác không xuất hiện ở màn CS.
+// CS KHÔNG có node Start: シナリオ設計書 là diagram luồng, node đầu tiên chính là
+// điểm bắt đầu (TS mới ráp node Start kỹ thuật khi gen YAML).
 export const CS_TYPE_LABELS: Partial<Record<NodeType, string>> = {
-  start: 'スタート',
   announce: 'アナウンス',
   interaction: '聴取',
   logic: '分岐ロジック',
@@ -47,9 +48,8 @@ export function nodeTypeLabel(type: NodeType, csMode: boolean): string {
 }
 
 // Palette màn CS: bộ node tối giản cho người không kỹ thuật — vẽ luồng kịch bản +
-// rẽ nhánh, không module kỹ thuật (nexus/openai/save/jump…).
+// rẽ nhánh, không node Start, không module kỹ thuật (nexus/openai/save/jump…).
 export const CS_NODE_TYPES: readonly NodeType[] = [
-  'start',
   'announce',
   'interaction',
   'logic',
