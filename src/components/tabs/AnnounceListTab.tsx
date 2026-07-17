@@ -5,6 +5,7 @@ import type { FlowNode, NodeType } from '../../ir/types';
 import { NODE_CONFIG } from '../../ui/nodeConfig';
 import { Icon } from '../../ui/icons';
 import { useT } from '../../ui/i18n';
+import { AutoGrowTextarea } from '../AutoGrowTextarea';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tab "Announce List / アナウンス一覧": bảng mọi node CÓ ANNOUNCE của flow đang mở,
@@ -140,7 +141,9 @@ export function AnnounceListTab() {
                 const contentKey = CONTENT_KEY[node.type]!;
                 const failed = failedTargetOf(node.id);
                 return (
-                  <tr key={node.id} className="border-b border-[var(--bk-border)] align-top last:border-0">
+                  // align-middle: các ô ngoài 発話文言 căn GIỮA theo chiều dọc dòng —
+                  // chiều cao dòng do ô announce (tự cao theo nội dung) quyết định.
+                  <tr key={node.id} className="border-b border-[var(--bk-border)] align-middle last:border-0">
                     {/* 聴取項目: tên node + chấm màu loại */}
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-2">
@@ -203,13 +206,13 @@ export function AnnounceListTab() {
                         dash
                       )}
                     </td>
-                    {/* 発話文言 */}
+                    {/* 発話文言: textbox "1 dòng logic" — không cho Enter, text dài tự
+                        wrap theo đúng bề ngang cột và tự tăng chiều cao dòng. */}
                     <td className="px-3 py-2">
-                      <textarea
+                      <AutoGrowTextarea
                         value={str(node.data[contentKey])}
-                        onChange={(e) => setNodeData(node.id, { [contentKey]: e.target.value })}
-                        rows={2}
-                        className="w-full resize-y rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface)] px-2.5 py-1.5 text-sm leading-relaxed text-[var(--bk-text)]"
+                        onChange={(v) => setNodeData(node.id, { [contentKey]: v })}
+                        className="w-full resize-none overflow-hidden rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface)] px-2.5 py-1.5 text-sm leading-relaxed text-[var(--bk-text)]"
                       />
                     </td>
                   </tr>
