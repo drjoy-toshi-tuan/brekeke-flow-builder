@@ -125,10 +125,11 @@ export function irToReactFlow(ir: FlowIR, opts?: { cs?: boolean }): { nodes: Nod
       sourceHandle: e.sourceHandle ?? undefined,
       type: 'deletable',
       label,
-      // Mũi tên ở đầu đích cho MỌI dây (cả CS lẫn TS) — thấy ngay chiều đi của nhánh,
-      // đồng thời là "tiếp điểm" của dây tại node đích (chấm target đã ẩn). Màu đồng bộ
-      // token qua CSS .react-flow__arrowhead (index.css).
-      markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
+      // CS: mũi tên ở đầu đích — "tiếp điểm" của dây tại node đích là mũi tên (chấm
+      // target đã ẩn). Màu đồng bộ token qua CSS .react-flow__arrowhead (index.css).
+      // TS: KHÔNG mũi tên — tiếp điểm là chấm tròn "khoét lỗ" ở đỉnh node đích, giống
+      // hệt tiếp điểm xuất phát (xem BaseNode: notch/mask target + CSS handle top).
+      ...(cs ? { markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 } } : {}),
       data: {
         condition: e.condition,
         // TS: node condition/script nhãn giá trị nhánh luôn hiện; node khác hover mới hiện.
