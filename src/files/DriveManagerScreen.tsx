@@ -29,10 +29,13 @@ import {
   recordAccess,
   resolveRole,
   saveAdmins,
+  saveDepartment,
+  type Department,
   type PermMember,
   type PermissionsData,
 } from '../drive/permissions';
 import { PermissionsModal } from './PermissionsModal';
+import { useWorkspaceStore } from '../store/workspaceStore';
 import { HoverLabelButton } from '../components/HoverTip';
 import { gdErrorKey } from '../drive/errors';
 import { DRIVE_ROOT_FOLDER_ID, parseVersionFromName, versionFileName } from '../drive/config';
@@ -490,6 +493,12 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
         if (!cancelled) {
           setMembers(log.members);
           setAdmins(log.admins);
+          // Route theo bộ phận: member có department -> vào đúng màn (#/cs | #/ts).
+          // Chỉ áp khi URL chưa chỉ định rõ (hash thắng) — xem workspaceStore.
+          const me = user?.email
+            ? log.members.find((m) => m.email.toLowerCase() === user.email.toLowerCase())
+            : undefined;
+          if (me?.department) useWorkspaceStore.getState().applyDepartment(me.department);
         }
       } catch {
         // bỏ qua — phân quyền là tiện ích, không phải điều kiện dùng app
@@ -529,6 +538,25 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
       const next = admins.filter((a) => a.trim().toLowerCase() !== e);
       if (makeAdmin) next.push(e);
       const log = await saveAdmins(token, next);
+      setAdmins(log.admins);
+      setMembers(log.members);
+      showToast(t('pmSaved'));
+    } catch (err) {
+      if (handledAsExpired(err)) return;
+      setPermError(t(gdErrorKey(err)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Owner gạt bộ phận CS/TS cho 1 thành viên trong modal 権限管理 — ghi vào
+  // members của cùng file access-log.json.
+  const changeDepartment = async (email: string, department: Department) => {
+    if (busy) return;
+    setBusy(true);
+    setPermError(null);
+    try {
+      const log = await saveDepartment(token, email, department);
       setAdmins(log.admins);
       setMembers(log.members);
       showToast(t('pmSaved'));
@@ -745,6 +773,7 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
           ? {
               data: { admins, members },
               onChangeRole: (email, makeAdmin) => void changeRole(email, makeAdmin),
+              onChangeDepartment: (email, department) => void changeDepartment(email, department),
               error: permError,
             }
           : null
@@ -782,6 +811,7 @@ function DriveInner({
   permissions?: {
     data: PermissionsData;
     onChangeRole?: (email: string, makeAdmin: boolean) => void;
+    onChangeDepartment?: (email: string, department: Department) => void;
     error?: string | null; // lỗi khi đổi quyền (hiện trong modal)
   } | null;
 }) {
@@ -1941,6 +1971,7 @@ function DriveInner({
           busy={busy}
           error={permissions.error}
           onChangeRole={permissions.onChangeRole}
+          onChangeDepartment={permissions.onChangeDepartment}
           onClose={() => setShowPermissions(false)}
         />
       )}

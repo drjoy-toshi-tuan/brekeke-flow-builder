@@ -6,6 +6,7 @@ import { NODE_CONFIG } from '../../ui/nodeConfig';
 import { PROPERTY_FIELDS, type PropertyField } from '../../ui/nodeSchema';
 import { Icon } from '../../ui/icons';
 import { useFlowStore } from '../../store/flowStore';
+import { useWorkspaceStore } from '../../store/workspaceStore';
 import { useT, type TKey } from '../../ui/i18n';
 import { HoverTip, useHoverLabel } from '../../components/HoverTip';
 
@@ -26,7 +27,9 @@ export function makeNode(nodeType: NodeType) {
 
   function TypedNode({ id, data, selected }: NodeProps) {
     const d = data as unknown as RFNodeData;
-    const description = pickDescription(d.nodeData);
+    // Dòng dưới tên node: mô tả tự nhập; không có thì hiện NỘI DUNG chính của node
+    // (câu announce/終話) — nhìn node là nắm được nội dung, chi tiết xem ở hover preview.
+    const description = pickDescription(d.nodeData) ?? pickContent(nodeType, d.nodeData);
     const handles = d.sourceHandles;
     const selectNode = useFlowStore((s) => s.selectNode);
     const requestDeleteNode = useFlowStore((s) => s.requestDeleteNode);
@@ -42,6 +45,9 @@ export function makeNode(nodeType: NodeType) {
       return false;
     });
     const t = useT();
+    // Màn CS (#/cs): node lùn, không icon loại (màu accent là đủ), chỉ tên +
+    // icon biểu thị; output "khoét" rời khỏi node (CSS .bk-node--cs).
+    const csMode = useWorkspaceStore((s) => s.mode === 'cs');
     const [hovered, setHovered] = useState(false);
     // Giữ preview mở khi rê chuột từ node sang card preview (có khoảng hở 12px):
     // mouseleave hẹn ẩn sau 180ms; mouseenter card huỷ hẹn -> hover được vào card.
@@ -57,13 +63,47 @@ export function makeNode(nodeType: NodeType) {
       hideTimer.current = setTimeout(() => setHovered(false), 180);
     };
 
+    // CS: vị trí (%) các điểm output — dùng chung cho lỗ mask trên "skin" và cung hõm.
+    const outPositions =
+      csMode && showSource
+        ? handles && handles.length > 0
+          ? handles.map((h, i) => ({ key: h.id, left: ((i + 1) / (handles.length + 1)) * 100 }))
+          : [{ key: 'default', left: 50 }]
+        : [];
+    // Mask khoét lỗ THẬT trên skin (nền + viền node): mỗi output 1 lỗ tròn tại mép
+    // đáy — viền node tự ĐỨT đúng tại mép lỗ nên khớp hình học với cung hõm.
+    const skinMask =
+      outPositions.length > 0
+        ? outPositions
+            .map((p) => `radial-gradient(circle at ${p.left}% 100%, transparent 7px, #000 8px)`)
+            .join(', ')
+        : undefined;
+
     return (
       <div
-        className={['bk-node', selected ? 'bk-node--selected' : ''].join(' ')}
+        className={['bk-node', csMode ? 'bk-node--cs' : '', selected ? 'bk-node--selected' : ''].join(' ')}
         style={{ '--accent': cfg.color } as CSSProperties}
         onMouseEnter={showPreview}
         onMouseLeave={hidePreview}
       >
+        {/* CS: lớp "skin" mang nền + viền + bóng của node, bị mask khoét lỗ tại các
+            output. Root node để trong suốt (xem CSS) — nhờ vậy handle/notch là anh em
+            của skin, KHÔNG bị mask cắt mất. */}
+        {csMode && (
+          <span
+            className="bk-cs-skin"
+            style={
+              skinMask
+                ? ({
+                    maskImage: skinMask,
+                    maskComposite: 'intersect',
+                    WebkitMaskImage: skinMask,
+                    WebkitMaskComposite: 'source-in',
+                  } as CSSProperties)
+                : undefined
+            }
+          />
+        )}
         {/* Hover / chọn node -> xem nhanh các property đang set (bên phải node).
             Node không có property nào cũng không có mô tả (vd hangup) thì KHÔNG hiện
             preview — tránh card "không có tham số" vô nghĩa. */}
@@ -128,22 +168,43 @@ export function makeNode(nodeType: NodeType) {
 
         {showTarget && <Handle type="target" position={Position.Top} className="bk-handle" />}
 
-        <div className="bk-node-body">
-          <div className="bk-node-icon">
-            <Icon icon={cfg.icon} />
-          </div>
-          <div className="bk-node-text">
-            <div className="bk-node-type">{cfg.typeLabel}</div>
-            <div className="bk-node-name" title={d.label}>
-              {d.label}
+        {csMode ? (
+          // CS: icon loại (tile trái) + cột 2 DÒNG — dòng trên: TÊN node căn giữa
+          // (font to); dòng dưới: dải icon biểu thị cấu hình căn PHẢI.
+          <div className="bk-node-body bk-node-body--cs">
+            <div className="bk-node-icon">
+              <Icon icon={cfg.icon} />
             </div>
-            {description && (
-              <div className="bk-node-desc" title={description}>
-                {description}
+            <div className="bk-cs-main">
+              <div className="bk-node-name bk-node-name--cs" title={d.label}>
+                {d.label}
               </div>
-            )}
+              <CsIndicators type={nodeType} data={d.nodeData} />
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="bk-node-body">
+            <div className="bk-node-icon">
+              <Icon icon={cfg.icon} />
+            </div>
+            <div className="bk-node-text">
+              <div className="bk-node-type">{cfg.typeLabel}</div>
+              <div className="bk-node-name" title={d.label}>
+                {d.label}
+              </div>
+              {description && (
+                <div className="bk-node-desc" title={description}>
+                  {description}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* CS: cung viền của hõm — ôm đúng mép lỗ đã mask trên skin (cùng toạ độ %). */}
+        {outPositions.map((n) => (
+          <span key={n.key} className="bk-cs-notch" style={{ left: `${n.left}%` }} />
+        ))}
 
         {showSource &&
           (handles && handles.length > 0 ? (
@@ -191,10 +252,74 @@ function SourceHandle({ id, label, style }: { id: string; label?: string; style?
   );
 }
 
-// Mô tả là field do người dùng tự nhập (data.description). Không lấy text/prompt
-// làm mô tả — những field đó chỉ sửa trong panel setting.
+// ── Icon biểu thị cấu hình trên node CS ──────────────────────────────────────
+// Thay cho chữ: nhìn dải icon là biết node đã set gì (tooltip xem giá trị).
+// Chỉ hiện icon của cấu hình CÓ THẬT — node trống thì không có icon nào.
+function CsIndicators({ type, data }: { type: NodeType; data: Record<string, unknown> }) {
+  const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  // Mỗi loại biểu thị một MÀU cố định riêng (không theo accent node) để nhìn phát
+  // phân biệt được ngay: announce xanh lá, reconfirm hổ phách, retry chàm, phone sky.
+  const icons: { key: string; icon: string; title: string; color: string; text?: string }[] = [];
+
+  const announceText = str(type === 'announce' ? data.text : data.announce);
+  if (announceText)
+    icons.push({ key: 'announce', icon: 'lucide:volume-2', title: announceText, color: '#10b981' });
+  if (type === 'interaction') {
+    if (data.reconfirm === 'yes')
+      icons.push({
+        key: 'reconfirm',
+        icon: 'lucide:rotate-ccw',
+        title: str(data.reconfirmAnnounce) || 'Re-confirm',
+        color: '#f59e0b',
+      });
+    // Retry: hiện số lần (default 2) — icon vòng lặp + con số nhỏ.
+    const retry = str(data.retryCount) || '2';
+    icons.push({
+      key: 'retry',
+      icon: 'lucide:refresh-cw',
+      title: str(data.retryAnnounce),
+      color: '#6366f1',
+      text: retry,
+    });
+  }
+  if (type === 'transfer' && str(data.transferNumber))
+    icons.push({
+      key: 'phone',
+      icon: 'lucide:phone-forwarded',
+      title: str(data.transferNumber),
+      color: '#0ea5e9',
+    });
+
+  if (icons.length === 0) return null;
+  return (
+    <div className="bk-cs-indicators">
+      {icons.map((it) => (
+        <span key={it.key} className="bk-cs-ind" title={it.title} style={{ color: it.color }}>
+          <Icon icon={it.icon} width={13} height={13} />
+          {it.text && <span className="bk-cs-ind-num">{it.text}</span>}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// Mô tả là field do người dùng tự nhập (data.description) — luôn được ưu tiên.
 function pickDescription(data: Record<string, unknown>): string | null {
   const value = data.description;
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+// Field NỘI DUNG chính theo loại node (câu announce/終話) — fallback cho dòng mô tả
+// khi người dùng không tự nhập description (CSS cắt 1 dòng + "…", đầy đủ xem preview).
+const CONTENT_KEYS: Partial<Record<NodeType, string>> = {
+  announce: 'text',
+  interaction: 'announce',
+  transfer: 'announce',
+  hangup: 'announce',
+};
+function pickContent(type: NodeType, data: Record<string, unknown>): string | null {
+  const key = CONTENT_KEYS[type];
+  const value = key ? data[key] : undefined;
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
