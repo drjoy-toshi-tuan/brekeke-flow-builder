@@ -512,12 +512,16 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
         if (!cancelled) {
           setMembers(log.members);
           setAdmins(log.admins);
-          // Route theo bộ phận: member có department -> vào đúng màn (#/cs | #/ts).
-          // Chỉ áp khi URL chưa chỉ định rõ (hash thắng) — xem workspaceStore.
+          // Route theo bộ phận (BẮT BUỘC): member có department -> KHOÁ vào đúng màn
+          // (#/cs | #/ts), ghi đè cả hash URL đang trỏ sai bộ phận — xem workspaceStore.
+          // Ngoại lệ owner: quản trị & hỗ trợ CẢ 2 team nên không khoá (tự do #/cs↔#/ts).
           const me = user?.email
             ? log.members.find((m) => m.email.toLowerCase() === user.email.toLowerCase())
             : undefined;
-          if (me?.department) useWorkspaceStore.getState().applyDepartment(me.department);
+          const isOwner = resolveRole(user?.email, { admins: log.admins }) === 'owner';
+          if (me?.department && !isOwner) {
+            useWorkspaceStore.getState().applyDepartment(me.department);
+          }
         }
       } catch {
         // bỏ qua — phân quyền là tiện ích, không phải điều kiện dùng app
