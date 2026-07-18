@@ -1,10 +1,13 @@
-import { useRef, useState, type CSSProperties } from 'react';
+import { useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Handle, NodeToolbar, Position, useStore, type NodeProps } from '@xyflow/react';
 import type { RFNodeData } from '../irAdapter';
 import type { NodeType } from '../../ir/types';
 import { NODE_CONFIG } from '../../ui/nodeConfig';
 import { propertyFieldsFor, type PropertyField } from '../../ui/nodeSchema';
 import { csBranchSentence, readCsBranches } from '../../ui/csLogic';
+import { ensureSettings } from '../../ir/settings';
+import { computeInheritedFlags } from '../../ir/statusFlow';
+import { FlagInheritStamp } from '../../ui/FlagInheritStamp';
 import { Icon } from '../../ui/icons';
 import { useFlowStore } from '../../store/flowStore';
 import { useWorkspaceStore } from '../../store/workspaceStore';
@@ -113,7 +116,7 @@ export function makeNode(nodeType: NodeType) {
             align="start"
           >
             <div onMouseEnter={showPreview} onMouseLeave={hidePreview}>
-              <NodePreview type={nodeType} data={d.nodeData} cs={csMode} />
+              <NodePreview id={id} type={nodeType} data={d.nodeData} cs={csMode} active={hovered} />
             </div>
           </NodeToolbar>
         )}
@@ -353,13 +356,29 @@ function hasPreviewContent(type: NodeType, data: Record<string, unknown>, cs = f
 // prompt…) cắt 1 dòng + "…" cho vừa bề rộng card (xử lý bằng CSS text-ellipsis).
 // Chỉ render khi hasPreviewContent = true (component cha đã gác) nên không cần
 // nhánh "không có tham số" nữa.
-function NodePreview({ type, data, cs = false }: { type: NodeType; data: Record<string, unknown>; cs?: boolean }) {
+function NodePreview({
+  id,
+  type,
+  data,
+  cs = false,
+  active = false,
+}: {
+  id: string;
+  type: NodeType;
+  data: Record<string, unknown>;
+  cs?: boolean;
+  active?: boolean;
+}) {
   const t = useT();
   const ir = useFlowStore((s) => s.ir);
   const fields = cs && type === 'logic' ? [] : propertyFieldsFor(type, cs).filter((f) => !f.showIf || f.showIf(data));
   const description = pickDescription(data);
   // 分岐ロジック (CS): mỗi nhánh 1 dòng "tên nhánh — câu điều kiện tự sinh".
   const csBranches = cs && type === 'logic' ? readCsBranches(data) : [];
+  // Status/SMS flag KẾ THỪA (tự fill từ node phía trên): chỉ tính khi card đang hiện
+  // (active) để tránh chạy BFS cho MỌI node — preview luôn mount trong NodeToolbar.
+  const settings = ensureSettings(ir?.settings);
+  const inherited = useMemo(() => (active ? computeInheritedFlags(ir).get(id) : undefined), [active, ir, id]);
 
   return (
     <div className="bk-node-preview">
@@ -384,6 +403,39 @@ function NodePreview({ type, data, cs = false }: { type: NodeType; data: Record<
         );
       })}
       {fields.map((f) => {
+        // Status/SMS Flag (settingsSelect): value chỉ lưu SỐ flag -> map ra nhãn đầy đủ
+        // "1 - 未処理" từ Status Settings; node chưa tự đặt mà có flag kế thừa -> hiện
+        // stamp "継続 · Carried" + nhãn flag đang tự fill (thay vì chỉ hiện số / "—").
+        if (f.kind === 'settingsSelect') {
+          const opts =
+            f.settingsOptions === 'smsFlags'
+              ? settings.smsFlags.map((s) => ({ value: String(s.flag), label: `${s.flag} - ${s.type || '—'}` }))
+              : settings.statuses.map((s) => ({ value: String(s.flag), label: `${s.flag} - ${s.name}` }));
+          const labelOf = (v: string) => opts.find((o) => o.value === v)?.label ?? v;
+          const raw = data[f.key];
+          const own = typeof raw === 'number' ? String(raw) : typeof raw === 'string' ? raw.trim() : '';
+          const inheritedVal = f.settingsOptions === 'smsFlags' ? inherited?.smsFlag : inherited?.statusFlag;
+          return (
+            <div key={f.key} className="bk-node-preview-row">
+              <span className="bk-node-preview-key">{t(f.labelKey)}</span>
+              {own ? (
+                <HoverTip className="bk-node-preview-val" content={labelOf(own)}>
+                  {labelOf(own)}
+                </HoverTip>
+              ) : inheritedVal ? (
+                <HoverTip
+                  className="bk-node-preview-val"
+                  content={`${t('flagInherit')} — ${labelOf(inheritedVal)}`}
+                >
+                  <FlagInheritStamp className="mr-1 align-middle" />
+                  {labelOf(inheritedVal)}
+                </HoverTip>
+              ) : (
+                <span className="bk-node-preview-val">—</span>
+              )}
+            </div>
+          );
+        }
         const val = formatFieldValue(f, data, t);
         return (
           <div key={f.key} className="bk-node-preview-row">
