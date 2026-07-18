@@ -1,20 +1,29 @@
 import { useWorkspaceStore } from '../store/workspaceStore';
+import { useT } from './i18n';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stamp bộ phận đang làm việc — hiện trên header (cạnh menu) để biết đang ở màn
-// nào: CS (nền xanh blue sáng) / TS (nền cam, cùng tone logo #ff8c30). Nền đặc,
-// chữ trắng bold, font geometric giống logo/wordmark (Space Grotesk; tiếng Nhật
-// dùng Zen Kaku Gothic New). Dùng chung cho màn quản lý flow lẫn màn design.
+// nào: CS (tone xanh blue) / TS (tone cam, cùng tone logo #ff8c30). Nền để hơi
+// TRONG (color-mix với transparent) cho dịu mắt, chữ tô đúng màu bộ phận, viền
+// mảnh cùng tông. Font geometric giống logo/wordmark (Space Grotesk; tiếng Nhật
+// dùng Zen Kaku Gothic New). Hover -> tooltip "CS/TS Working Screen".
+// Dùng chung cho màn quản lý flow lẫn màn design.
 // ─────────────────────────────────────────────────────────────────────────────
 export function WorkspaceStamp({ className = '' }: { className?: string }) {
   const mode = useWorkspaceStore((s) => s.mode);
+  const t = useT();
   const cs = mode === 'cs';
+  const color = cs ? '#3b82f6' : '#ff8c30';
   return (
     <span
       aria-label={`${cs ? 'CS' : 'TS'} workspace`}
-      className={`inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-xs font-bold uppercase leading-5 tracking-widest text-white ${className}`}
+      title={cs ? t('workScreenCs') : t('workScreenTs')}
+      className={`inline-flex shrink-0 items-center rounded-md border px-2 py-0.5 text-xs font-bold uppercase leading-5 tracking-widest ${className}`}
       style={{
-        background: cs ? '#3b82f6' : '#ff8c30',
+        // Nền trong nhẹ + chữ/viền cùng màu bộ phận -> cảm giác "kính màu" dễ nhìn.
+        background: `color-mix(in srgb, ${color} 15%, transparent)`,
+        borderColor: `color-mix(in srgb, ${color} 35%, transparent)`,
+        color,
         fontFamily: "'Space Grotesk', 'Zen Kaku Gothic New', sans-serif",
       }}
     >
