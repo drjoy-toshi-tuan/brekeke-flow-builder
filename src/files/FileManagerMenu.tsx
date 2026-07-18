@@ -147,10 +147,15 @@ export function FileManagerMenu({
           {/* ── Tài khoản / Đăng xuất ── */}
           <div className="bk-menu-sep" />
           <div className="bk-menu-account">
-            {user?.picture && <img src={user.picture} alt="" className="h-7 w-7 rounded-full" />}
+            {user?.picture && <img src={user.picture} alt="" className="h-9 w-9 rounded-full" />}
             {/* Tên (trên) + badge quyền (dưới) — 2 dòng canh giữa theo chiều cao avatar. */}
-            <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
-              <span className="truncate text-xs font-medium text-[var(--bk-text)]" title={user?.email}>
+            <div className="flex min-w-0 flex-1 flex-col justify-center gap-1">
+              {/* Tên: Noto Sans JP 600 — ưu tiên tiếng Nhật (氏名), nét gọn dày. */}
+              <span
+                className="truncate text-xs font-semibold text-[var(--bk-text)]"
+                style={{ fontFamily: "'Noto Sans JP', 'Noto Sans', sans-serif" }}
+                title={user?.email}
+              >
                 {user?.name}
               </span>
               <RoleBadge role={role} />
