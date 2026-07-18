@@ -6,6 +6,7 @@ import { NODE_CONFIG, nodeTypeLabel } from '../ui/nodeConfig';
 import { CsLogicBranchEditor } from './CsLogicBranchEditor';
 import { ensureSettings } from '../ir/settings';
 import { computeInheritedFlags } from '../ir/statusFlow';
+import { FlagInheritStamp } from '../ui/FlagInheritStamp';
 import {
   PROPERTY_FIELDS,
   propertyFieldsFor,
@@ -635,16 +636,28 @@ function SettingsSelect({
   const inheritedLabel = inheritedValue
     ? options.find((o) => o.value === inheritedValue)?.label ?? inheritedValue
     : '';
+  // Ô đang bỏ trống NHƯNG có flag kế thừa -> phủ stamp "継続 · Carried" + nhãn flag lên
+  // mặt pulldown (đóng) để hiện dạng con dấu thay vì chữ trơn. Stamp pointer-events-none
+  // nên bấm vào vẫn mở list native; chừa mép phải ~1.75rem cho mũi tên pulldown.
+  const showInheritStamp = value === '' && !!inheritedValue;
   return (
-    <select className={inputClass} value={value} onChange={(e) => onChange(e.target.value)}>
-      {/* Ô rỗng: nếu có flag kế thừa từ thượng nguồn -> hiện "継承: <flag>" (đang tự fill). */}
-      <option value="">{inheritedValue ? `${t('flagInherit')}: ${inheritedLabel}` : t('alUnset')}</option>
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
+    <div className="relative">
+      <select className={inputClass} value={value} onChange={(e) => onChange(e.target.value)}>
+        {/* Ô rỗng: có flag kế thừa -> option ghi "継続 · Carried — <flag>" (đang tự fill). */}
+        <option value="">{inheritedValue ? `${t('flagInherit')} — ${inheritedLabel}` : t('alUnset')}</option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {showInheritStamp && (
+        <span className="pointer-events-none absolute inset-y-px left-px right-7 flex items-center gap-1.5 rounded-lg bg-[var(--bk-surface-2)] pl-3 text-sm">
+          <FlagInheritStamp />
+          <span className="min-w-0 truncate text-[var(--bk-text-muted)]">{inheritedLabel}</span>
+        </span>
+      )}
+    </div>
   );
 }
 
