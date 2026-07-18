@@ -133,8 +133,15 @@ function layoutSubtree(tree: TreeNode): SubtreeLayout {
       }
     }
     const mid = (subs.length - 1) / 2;
+    // Node có nhánh side (failed) đi NGANG-TRÁI + số nhánh xuống CHẴN: chừa 1 "slot ảo"
+    // bên trái cho failed rồi đẩy các nhánh xuống sang phải NỬA BƯỚC. Nhờ vậy nhánh GIỮA
+    // (tính cả failed) thẳng cột dưới node cha (vd failed + 2 nhánh -> nhánh đầu thẳng).
+    // Số nhánh xuống LẺ vốn đã có nhánh giữa thẳng -> không dịch (giữ interaction
+    // failed+next 1 nhánh thẳng như cũ). Chỉ dịch khi thật sự có side để không đụng
+    // node rẽ nhánh thường (không failed).
+    const failedSlotShift = tree.side.length > 0 && subs.length % 2 === 0 ? step / 2 : 0;
     subs.forEach((sub, index) => {
-      const dx = (index - mid) * step; // đối xứng qua tâm cha -> mạch 1 con đi thẳng đứng
+      const dx = (index - mid) * step + failedSlotShift; // đối xứng qua tâm cha (+ bù slot failed)
       for (const p of sub.placements) {
         placements.push({ id: p.id, dx: p.dx + dx, dLayer: p.dLayer + 1 });
       }
