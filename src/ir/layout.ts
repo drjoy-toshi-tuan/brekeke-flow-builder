@@ -25,7 +25,7 @@ export const NODE_HEIGHT = 80;
 const LAYER_GAP = 96; // hở trên–dưới giữa 2 tầng
 const ROW_STEP = NODE_HEIGHT + LAYER_GAP; // bước tầng = 176, LUÔN bằng nhau
 const BRANCH_GAP = 320; // hở ngang tối thiểu giữa 2 nhánh rẽ (mép–mép, cố ý rộng)
-const SIDE_GAP = 120; // hở ngang giữa các node trong chuỗi failed nằm ngang
+const SIDE_GAP = 240; // hở ngang giữa các node trong chuỗi failed nằm ngang (rộng gấp đôi cho thoáng)
 const COMPONENT_GAP = 200; // hở giữa các cụm node rời nhau (không nối với nhau)
 
 // Node đặt theo hàng dọc ('down') hay đang trong chuỗi failed nằm ngang ('side').
