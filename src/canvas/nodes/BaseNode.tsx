@@ -266,9 +266,10 @@ function CsIndicators({ type, data }: { type: NodeType; data: Record<string, unk
 
   if (type === 'interaction') {
     // Thứ tự hiển thị trái→phải: retry > reconfirm > flag (retry đẩy vào TRƯỚC).
-    // Retry: hiện số lần (default 2) — icon vòng lặp + con số. Retry = 0 thì ẩn.
-    const retry = str(data.retryCount) || '2';
-    if (retry !== '0')
+    // Retry: hiện số lần (default 2) — icon vòng lặp + con số. Retry = 0 HOẶC bị
+    // xoá trắng (chuỗi rỗng) thì ẩn; chỉ khi CHƯA TỪNG nhập mới áp default 2.
+    const retry = data.retryCount == null ? '2' : str(data.retryCount);
+    if (retry !== '' && retry !== '0')
       icons.push({
         key: 'retry',
         icon: 'akar-icons:arrow-cycle',

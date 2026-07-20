@@ -404,6 +404,19 @@ const DICT: Record<Lang, Record<string, string>> = {
     flagInherit: 'Carried',
     flagInheritHint: 'Giá trị kế thừa từ node phía trên (đang tự fill)',
     alEmpty: 'Flow chưa có node nào có announce.',
+    // ── Announce List: màn phụ (Retry / Re-confirm) + nút chuyển màn ──
+    alSubTitle: 'Retry & Re-confirm Announce',
+    alViewMain: 'Announce chính',
+    alViewSub: 'Retry・Re-confirm',
+    alColType: 'Phân loại',
+    alColSubItems: 'Mục',
+    alTypeRetry: 'Retry',
+    alTypeReconfirm: 'Re-confirm',
+    alSubEmpty: 'Chưa có node Hearing nào bật Retry hoặc Re-confirm.',
+    // Tooltip icon chat ở cột 復唱 / リトライ回数 (màn announce chính).
+    alRetryTipTitle: 'Retry Announce',
+    alReconfirmTipTitle: 'Re-confirm Announce',
+    alTipEmpty: 'Chưa nhập nội dung announce.',
     // ── Tab General Settings ──
     gsGroupBasic: 'Thông tin cơ bản',
     gsGroupPhone: 'Số điện thoại',
@@ -861,6 +874,19 @@ const DICT: Record<Lang, Record<string, string>> = {
     flagInherit: '継続',
     flagInheritHint: '上流ノードから継承した値（自動フィル）',
     alEmpty: 'アナウンスを持つノードがまだありません。',
+    // ── Announce List: màn phụ (Retry / Re-confirm) + nút chuyển màn ──
+    alSubTitle: 'リトライ・復唱アナウンス一覧',
+    alViewMain: 'メイン',
+    alViewSub: 'リトライ・復唱',
+    alColType: '分類',
+    alColSubItems: '項目',
+    alTypeRetry: 'リトライ',
+    alTypeReconfirm: '復唱',
+    alSubEmpty: 'リトライ・復唱が設定された聴取ノードはまだありません。',
+    // Tooltip icon chat ở cột 復唱 / リトライ回数 (màn announce chính).
+    alRetryTipTitle: 'リトライ文言',
+    alReconfirmTipTitle: '復唱アナウンス文言',
+    alTipEmpty: 'アナウンス文言が未入力です。',
     // ── Tab General Settings ──
     gsGroupBasic: '基本情報',
     gsGroupPhone: '電話番号',
