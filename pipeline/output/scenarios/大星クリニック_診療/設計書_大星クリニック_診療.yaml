@@ -1,0 +1,922 @@
+# 設計書 — 大星クリニック 診療
+# 生成元: @director / 2026-04-20
+# 入力: docs/migration/gen2_大星クリニック_診療.md
+# 元資料: docs/reference/customer_docs/【診療1】：大星クリニック.md
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "大星クリニック"
+  group_name: "大星クリニック"
+  flow_name: "大星クリニック$診療"
+  target_facility: "大星クリニック（本院のみ）"
+  office_id: "TODO_要確認"
+  phone_number: "TODO_要確認"           # 着信IVR番号（代表 03-6426-5933 はFAQなし案内時の誘導先）
+  business_hours: "なし（24時間AI応答）"
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "prod"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "大星クリニック$診療"
+      role: "main"
+      description: "メインフロー。用件聴取→個人情報聴取サブフロー→用件別聴取→連絡先→終話"
+  subflows:
+    - name: "大星クリニック$氏名"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "復唱なし。苗字のみ発話時の『下のお名前もお伺いしてもよろしいですか？』再聴取ロジックを必要。標準サブフローが対応していない場合は拡張要（confirmation_items 参照）"
+    - name: "大星クリニック$生年月日"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "入電者が発話した暦（西暦/和暦）にそのまま合わせて復唱（『〇年〇月〇日ですね。』）"
+    - name: "大星クリニック$診察券番号"
+      target: "診察券番号聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "復唱なし。『持っていない』発話を許容。DTMF入力対応"
+    - name: "大星クリニック$電話番号"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "incoming-classifier で 携帯(060/070/080/090)/固定/不明 を3分岐。携帯は着信番号を自動格納して連絡先質問を完全スキップ。固定/不明は聴取→Phone Normalization→復唱。出口で phonetype=携帯/その他 を設定"
+    - name: "大星クリニック$RAG検索"
+      target: "FAQ検索"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "『その他』用件の『その他内容確認』聴取後のみ呼び出す。FAQ未マッチ時は『ありがとうございます』のみ発話して次へ"
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  大星クリニックへの予約専用電話。AIオペレーターが用件（診療／予防接種／その他）を判定し、
+  患者情報と用件別の聴取項目を取得して Dr.JOY に保存する。通話完了後にスタッフからの折り返し
+  または SMS 連絡につなぐ。24時間AI応答。携帯電話着信時は連絡先聴取をスキップし、SMS送信フラグを
+  立てて終話する。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "大星クリニック$診療"
+    diagram: |
+      冒頭(wait 2000ms)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → END_非通知(TTS) → 完了フラグ_非通知 → 切断
+            └─ 通常/携帯/固定 → 冒頭_アナウンス(TTS)
+                                  → 用件確認(hearing, enum)
+                                      ├─ 対象外 → FAQなし_アナウンス → 完了フラグ_FAQなし案内 → 切断
+                                      └─ 診療/予防接種/その他
+                                          → jump_氏名聴取(subflow)
+                                          → jump_生年月日聴取(subflow)
+                                          → 用件分岐(ContextMatchRouter: classification)
+                                              ├─ 診療 → 診療科(hearing) → 内容確認_診療(hearing, text)
+                                              │           → jump_診察券番号聴取 → 予約希望日時(hearing, text)
+                                              │           → jump_電話番号聴取
+                                              │               → 終話分岐_電話種別(ContextMatchRouter: phonetype)
+                                              │                   ├─ 携帯 → END_受付完了_携帯(smsFlag=1)
+                                              │                   └─ その他 → END_受付完了_固定(smsFlag=0)
+                                              ├─ 予防接種 → 希望ワクチン(hearing)
+                                              │           → jump_診察券番号聴取 → 予約希望日時
+                                              │           → jump_電話番号聴取 → 終話分岐_電話種別
+                                              └─ その他 → その他内容確認(hearing, text)
+                                                          → jump_RAG検索(subflow)
+                                                          → jump_電話番号聴取 → 終話分岐_電話種別
+                                                          （診察券番号・予約希望日時は聴取しない）
+    notes: "時間外判定（acceptance_times）なし。携帯/固定 SMS 送信有無は phonetype で分岐"
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭ブロック ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: false
+    next: 冒頭_アナウンス
+
+  # --- 冒頭アナウンス ---
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 用件確認
+
+  # --- 用件確認 (Pattern A: OpenAI直後分岐) ---
+  - step: 用件確認
+    type: hearing
+    stt_type: AmiVoice_STT
+    echo_back: false
+    save_to: classification
+    output_format: enum
+    output_labels:
+      - 診療
+      - 予防接種
+      - その他
+      - 対象外
+    conditions:
+      - match: "診療"
+        next: jump_氏名聴取
+      - match: "予防接種"
+        next: jump_氏名聴取
+      - match: "その他"
+        next: jump_氏名聴取
+      - match: "対象外"
+        next: END_FAQなし案内
+    retry_failure: end_failure
+    notes: |
+      『予約』『薬』『お薬』→ 診療 にマップ。『印刷』『定期』『新薬』『再診』『最新』『禁忌』→ 診療。
+      変更・キャンセルは『その他』にマップ。リスト外の質問（FAQ非対応）は『対象外』を出力して END_FAQなし案内 へ。
+
+  # --- 氏名聴取サブフロー ---
+  - step: jump_氏名聴取
+    type: subflow
+    flowname: "大星クリニック$氏名"
+    next: jump_生年月日聴取
+
+  # --- 生年月日聴取サブフロー ---
+  - step: jump_生年月日聴取
+    type: subflow
+    flowname: "大星クリニック$生年月日"
+    next: 用件分岐
+
+  # --- 用件分岐 (Pattern B: context_match_router on classification) ---
+  - step: 用件分岐
+    type: context_match_router
+    reference_module: "classification"
+    conditions:
+      - match: "診療"
+        next: 診療科
+      - match: "予防接種"
+        next: 希望ワクチン
+      - match: "その他"
+        next: その他内容確認
+
+  # ================== 診療ルート ==================
+  - step: 診療科
+    type: hearing
+    stt_type: AmiVoice_STT
+    echo_back: false
+    save_to: clinicalDepartment
+    output_format: enum
+    no_result_default: "登録なし"
+    output_labels:
+      - 内科
+      - 泌尿器科
+      - 皮膚科
+      - 脳神経外科
+      - 消化器内科・胃腸
+      - 女性専門外来
+      - 整形外科
+      - メディカルダイエット外来
+      - 登録なし
+    conditions:
+      - match: "default"
+        next: 内容確認_診療
+    retry_failure: skip
+    notes: "リストにない科の場合は『当院に〇〇はございませんが、〇〇でしょうか？』と近い診療科をレコメンド（OpenAIプロンプトで処理）。復唱・相槌なしで次へ。"
+
+  - step: 内容確認_診療
+    type: hearing
+    stt_type: AmiVoice_STT
+    echo_back: false
+    save_to: confirmation
+    output_format: text
+    next: jump_診察券番号聴取
+    retry_failure: skip
+    notes: "『記録優先モード』。入電者の発言がFAQと一致してもFAQ回答は一切行わない。記録のみして次へ進む。"
+
+  # ================== 予防接種ルート ==================
+  - step: 希望ワクチン
+    type: hearing
+    stt_type: AmiVoice_STT
+    echo_back: false
+    save_to: vaccine
+    output_format: enum
+    output_labels:
+      - インフルエンザワクチン
+      - 子宮頸がんワクチン
+      - 肺炎球菌ワクチン
+      - 帯状疱疹ワクチン
+      - コロナワクチン
+    conditions:
+      - match: "default"
+        next: jump_診察券番号聴取
+    retry_failure: skip
+    notes: "リスト外ワクチンの場合は『当院に〇〇はございませんが、〇〇でしょうか？』と近いワクチンをレコメンド。復唱・相槌なしで次へ。"
+
+  # ================== その他ルート ==================
+  - step: その他内容確認
+    type: hearing
+    stt_type: AmiVoice_STT
+    echo_back: false
+    save_to: confirmation2
+    output_format: text
+    next: jump_RAG検索
+    retry_failure: skip
+    notes: "FAQ案内モード。質問の復唱・前置きはしない。RAG検索サブフローで回答を取得。未マッチ時は『ありがとうございます』のみ発話して次へ。"
+
+  - step: jump_RAG検索
+    type: subflow
+    flowname: "大星クリニック$RAG検索"
+    next: jump_電話番号聴取
+    # 『その他』ルート専用。診察券番号・予約希望日時を聞かずに電話番号聴取へ
+
+  # ================== 共通後続（診療・予防接種） ==================
+  - step: jump_診察券番号聴取
+    type: subflow
+    flowname: "大星クリニック$診察券番号"
+    next: 予約希望日時
+
+  - step: 予約希望日時
+    type: hearing
+    stt_type: AmiVoice_STT
+    echo_back: false
+    save_to: DesiredreservationDate
+    output_format: text
+    next: jump_電話番号聴取
+    retry_failure: skip
+    notes: |
+      フリーワードで言われたままを文字起こし（日付形式に変換しない）。『5月の20日』等の繋ぎ言葉許容。
+      『今日／明日／明後日』のみ着信日時から換算。過去日付は未来の日付かどうか確認を促す。
+
+  # ================== 連絡先・終話 ==================
+  - step: jump_電話番号聴取
+    type: subflow
+    flowname: "大星クリニック$電話番号"
+    next: 終話分岐_電話種別
+
+  - step: 終話分岐_電話種別
+    type: context_match_router
+    reference_module: "phonetype"
+    conditions:
+      - match: "携帯"
+        next: END_受付完了_携帯
+      - match: "その他"
+        next: END_受付完了_固定
+
+  # --- 終話ブロック ---
+  - step: END_受付完了_携帯
+    type: termination
+    termination_ref: "END_受付完了_携帯"
+
+  - step: END_受付完了_固定
+    type: termination
+    termination_ref: "END_受付完了_固定"
+
+  - step: END_FAQなし案内
+    type: termination
+    termination_ref: "END_FAQなし案内"
+
+# --- セクション5: コンテキストフィールド一覧 ---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "診療"
+      - id: "2"
+        order: "2"
+        value: "予防接種"
+      - id: "3"
+        order: "3"
+        value: "その他"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "用件区分。『予約』『変更』『キャンセル』は OpenAI プロンプトで診療/その他 にマップ"
+
+  - context_name: "patientName"
+    context_name_jp: "患者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "氏名サブフローで格納"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "生年月日サブフローで格納。和暦/西暦両対応"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "内科"
+      - id: "2"
+        order: "2"
+        value: "泌尿器科"
+      - id: "3"
+        order: "3"
+        value: "皮膚科"
+      - id: "4"
+        order: "4"
+        value: "脳神経外科"
+      - id: "5"
+        order: "5"
+        value: "消化器内科・胃腸"
+      - id: "6"
+        order: "6"
+        value: "女性専門外来"
+      - id: "7"
+        order: "7"
+        value: "整形外科"
+      - id: "8"
+        order: "8"
+        value: "メディカルダイエット外来"
+      - id: "9"
+        order: "9"
+        value: "登録なし"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "診療ルートのみ格納。NO_RESULT 時は『登録なし』を格納"
+
+  - context_name: "confirmation"
+    context_name_jp: "内容確認（診療）"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "診療ルート『今日はどうされましたか？』の回答。記録優先モード（FAQ案内なし）"
+
+  - context_name: "confirmation2"
+    context_name_jp: "その他内容確認"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "その他ルート『お問合せ内容』の回答。FAQ案内モード（RAG検索対象）"
+
+  - context_name: "vaccine"
+    context_name_jp: "希望ワクチン"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予防接種ルートのみ格納。enum: インフルエンザ/子宮頸がん/肺炎球菌/帯状疱疹/コロナ"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "診療・予防接種ルートのみ。その他ルートでは格納しない"
+
+  - context_name: "DesiredreservationDate"
+    context_name_jp: "予約希望日時"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "フリーワード保存（日付形式に変換しない）。その他ルートでは格納しない"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "電話番号サブフローで格納。携帯着信時は着信番号をそのまま格納"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "着信番号自動格納"
+
+  - context_name: "phonetype"
+    context_name_jp: "電話種別"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "電話番号サブフロー出口で設定（携帯 or その他）。終話分岐・smsFlag決定に使用"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "1=受付完了 2=FAQなし案内（代表電話案内） 6=非通知/時間外（本フローは24h AI応答のため6は実質非通知のみ）"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "用件確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "診療"
+      - "予防接種"
+      - "その他"
+      - "対象外"
+    notes: "音声のみ。OpenAI で入力を 診療/予防接種/その他/対象外 に分類。『予約』『薬』→ 診療、『変更』『キャンセル』→ その他、リスト外質問 → 対象外"
+
+  - order: 2
+    name: "診療科"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "内科"
+      - "泌尿器科"
+      - "皮膚科"
+      - "脳神経外科"
+      - "消化器内科・胃腸"
+      - "女性専門外来"
+      - "整形外科"
+      - "メディカルダイエット外来"
+      - "登録なし"
+    notes: "診療ルートのみ。復唱禁止。リスト外はレコメンド（『当院に〇〇はございませんが、〇〇でしょうか？』）。NO_RESULT時は『登録なし』保存"
+
+  - order: 3
+    name: "内容確認_診療"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "confirmation"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "記録優先モード。FAQ一致してもFAQ案内は一切しない。相槌も最小限で次へ"
+
+  - order: 4
+    name: "希望ワクチン"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "vaccine"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "インフルエンザワクチン"
+      - "子宮頸がんワクチン"
+      - "肺炎球菌ワクチン"
+      - "帯状疱疹ワクチン"
+      - "コロナワクチン"
+    notes: "予防接種ルートのみ。復唱禁止。リスト外はレコメンド"
+
+  - order: 5
+    name: "その他内容確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "confirmation2"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "その他ルートのみ。FAQ案内モード（RAGサブフローで回答検索）。未マッチ時は『ありがとうございます』のみ"
+
+  - order: 6
+    name: "予約希望日時"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "DesiredreservationDate"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "診療・予防接種ルートのみ。フリーワード保存（日付形式に変換しない）"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "用件確認"
+    tts_announcement: "ご用件を、診察予約、予防接種、その他、からお選びください。変更やキャンセルも「その他」でお願いします。それではどうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "診療"
+        - "予防接種"
+        - "その他"
+        - "対象外"
+      mapping:
+        - input: "診察予約／予約／印刷／定期／新薬／再診／最新／禁忌／薬／お薬／診療"
+          output: "診療"
+        - input: "予防接種／ワクチン／ワクチン接種"
+          output: "予防接種"
+        - input: "変更／キャンセル／その他／取消／取り消し"
+          output: "その他"
+        - input: "上記いずれにも該当しない質問（アクセス、費用、診療時間の単発質問等）"
+          output: "対象外"
+      no_result_condition: "音声が聞き取れなかった場合"
+    save_to: "classification"
+    next_step: "jump_氏名聴取（対象外→END_FAQなし案内）"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "診療科"
+    tts_announcement: "診療科がわかれば最初にお知らせください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "内科"
+        - "泌尿器科"
+        - "皮膚科"
+        - "脳神経外科"
+        - "消化器内科・胃腸"
+        - "女性専門外来"
+        - "整形外科"
+        - "メディカルダイエット外来"
+        - "登録なし"
+      mapping:
+        - input: "内科／風邪／発熱／花粉／糖尿病"
+          output: "内科"
+        - input: "泌尿器／おしっこ／尿／性病／石"
+          output: "泌尿器科"
+        - input: "皮膚／やけど／湿疹／痒み"
+          output: "皮膚科"
+        - input: "脳神経／頭痛／頭／ふらつき／めまい"
+          output: "脳神経外科"
+        - input: "消化器／胃腸／内視鏡／胃カメラ／腹痛／下痢／胸やけ／ピロリ／消化器科（誤呼称）"
+          output: "消化器内科・胃腸"
+        - input: "婦人科／女性外来／おりもの／生理"
+          output: "女性専門外来"
+        - input: "整形／腰／肩／関節"
+          output: "整形外科"
+        - input: "ダイエット／メディカルダイエット／マンジャロ"
+          output: "メディカルダイエット外来"
+        - input: "上記リストにない診療科"
+          output: "登録なし"
+      no_result_condition: "音声が聞き取れなかった場合 → saveContext2DB で『登録なし』を格納してから次へ"
+    save_to: "clinicalDepartment"
+    next_step: "内容確認_診療"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "内容確認_診療"
+    tts_announcement: "今日はどうされましたか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "OpenAI不要（text保存）"
+    save_to: "confirmation"
+    next_step: "jump_診察券番号聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "希望ワクチン"
+    tts_announcement: "ご希望のワクチンを、インフルエンザワクチンまたはコロナワクチンからお選びください。その他ワクチンをご希望の場合は、ワクチン名をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "インフルエンザワクチン"
+        - "子宮頸がんワクチン"
+        - "肺炎球菌ワクチン"
+        - "帯状疱疹ワクチン"
+        - "コロナワクチン"
+      mapping:
+        - input: "インフル／インフルエンザ"
+          output: "インフルエンザワクチン"
+        - input: "子宮頸がん／子宮／HPV／ガーダシル／シルガード／4価ワクチン／9価ワクチン"
+          output: "子宮頸がんワクチン"
+        - input: "肺炎／肺炎球菌／ニューモバックス"
+          output: "肺炎球菌ワクチン"
+        - input: "帯状疱疹／シングリックス"
+          output: "帯状疱疹ワクチン"
+        - input: "コロナ／コロナウイルス／コロナワクチン"
+          output: "コロナワクチン"
+      no_result_condition: "リスト外ワクチン発話時はレコメンド（OpenAIプロンプトで対応）"
+    save_to: "vaccine"
+    next_step: "jump_診察券番号聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "その他内容確認"
+    tts_announcement: "その他のお問合せ。予約の変更。キャンセル。についてお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "OpenAI不要（text保存）。RAGサブフローに遷移してFAQ検索"
+    save_to: "confirmation2"
+    next_step: "jump_RAG検索"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "予約希望日時"
+    tts_announcement: "希望する日にちとお時間をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "OpenAI不要（text保存、フリーワードのまま）"
+    save_to: "DesiredreservationDate"
+    next_step: "jump_電話番号聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須） ---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外（24h応答のため実運用では到達しない。テンプレート要件で定義のみ残す）"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達（用件確認時のみ到達）"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+  # --- 正常系 ---
+  - name: "END_受付完了_携帯"
+    condition: "全聴取完了 かつ phonetype=携帯"
+    tts_announcement: "内容を確認後、スタッフからお電話またはＳＭＳでご連絡します。ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了_携帯"
+  - name: "END_受付完了_固定"
+    condition: "全聴取完了 かつ phonetype=その他（固定・不明含む）"
+    tts_announcement: "内容を確認後、スタッフからお電話またはＳＭＳでご連絡します。ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_受付完了_固定"
+  - name: "END_FAQなし案内"
+    condition: "用件確認で対象外（FAQ非対応質問）と判定"
+    tts_announcement: "ご質問いただいた内容はAI電話ではご対応できませんので、代表電話の『03-6426-5933』におかけ直しください。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_FAQなし案内"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: true
+  routing_keys:
+    - "phonetype"
+  patterns:
+    - condition: "phonetype=携帯"
+      sms_flag: "1"
+      notes: "携帯着信時はSMSで詳細送信"
+    - condition: "phonetype=その他"
+      sms_flag: "0"
+      notes: "固定・不明はSMS送信なし（固定はSMS受信不可）"
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "1"
+  inquiry_insertion_point: "その他内容確認"
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "はい、大星クリニックです。予約のお電話ありがとうございます。専用AIオペレーターが内容をおうかがいします。"
+
+  - module_name: "用件確認"
+    purpose: "用件聴取"
+    announcement: "ご用件を、診察予約、予防接種、その他、からお選びください。変更やキャンセルも「その他」でお願いします。それではどうぞ。"
+
+  - module_name: "診療科"
+    purpose: "診療科聴取（診療ルート）"
+    announcement: "診療科がわかれば最初にお知らせください。"
+
+  - module_name: "内容確認_診療"
+    purpose: "診療内容聴取（記録優先モード）"
+    announcement: "今日はどうされましたか？"
+
+  - module_name: "希望ワクチン"
+    purpose: "希望ワクチン聴取（予防接種ルート）"
+    announcement: "ご希望のワクチンを、インフルエンザワクチンまたはコロナワクチンからお選びください。その他ワクチンをご希望の場合は、ワクチン名をお話しください。"
+
+  - module_name: "その他内容確認"
+    purpose: "その他お問合せ聴取（FAQ案内モード）"
+    announcement: "その他のお問合せ。予約の変更。キャンセル。についてお話しください。"
+
+  - module_name: "予約希望日時"
+    purpose: "予約希望日時聴取"
+    announcement: "希望する日にちとお時間をお話しください。"
+
+  - module_name: "END_受付完了_携帯"
+    purpose: "携帯向け終話（SMS案内あり）"
+    announcement: "内容を確認後、スタッフからお電話またはＳＭＳでご連絡します。ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_受付完了_固定"
+    purpose: "固定/その他向け終話（SMS案内あり・smsFlag=0）"
+    announcement: "内容を確認後、スタッフからお電話またはＳＭＳでご連絡します。ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_FAQなし案内"
+    purpose: "FAQ非対応質問時の代表電話案内"
+    announcement: "ご質問いただいた内容はAI電話ではご対応できませんので、代表電話の『03-6426-5933』におかけ直しください。それでは失礼いたします。"
+
+  - module_name: "END_非通知"
+    purpose: "非通知着信拒否案内"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_時間外"
+    purpose: "時間外案内（24h応答のため実運用では未使用）"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "聴取失敗時の終話"
+    announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "用件確認"
+    words: |
+      診療 しんりょう
+      予防接種 よぼうせっしゅ
+      その他 そのた
+      予約 よやく
+      変更 へんこう
+      キャンセル きゃんせる
+      薬 くすり
+      お薬 おくすり
+      印刷 いんさつ
+      定期 ていき
+      新薬 しんやく
+      再診 さいしん
+      最新 さいしん
+      禁忌 きんき
+      ワクチン わくちん
+
+  - step_name: "診療科"
+    words: |
+      内科 ないか
+      内科 ねつっぽい
+      内科 かぜ
+      内科 かふん
+      内科 とうにょうびょう
+      泌尿器科 ひにょうきか
+      泌尿器科 ひにょう
+      泌尿器科 おしっこ
+      泌尿器科 にょう
+      泌尿器科 せいびょう
+      泌尿器科 あそこ
+      泌尿器科 いし
+      皮膚科 ひふか
+      皮膚科 ひふ
+      皮膚科 やけど
+      皮膚科 しっしん
+      皮膚科 かゆみ
+      脳神経外科 のうしんけいげか
+      脳神経外科 のうげ
+      脳神経外科 ずつう
+      脳神経外科 あたま
+      脳神経外科 ふらつき
+      脳神経外科 めまい
+      消化器内科・胃腸 しょうかきないか
+      消化器内科・胃腸 いちょう
+      消化器内科・胃腸 しょうかき
+      消化器内科・胃腸 いカメラ
+      消化器内科・胃腸 ないしきょう
+      消化器内科・胃腸 ふくつう
+      消化器内科・胃腸 おなか
+      消化器内科・胃腸 げり
+      消化器内科・胃腸 むねやけ
+      消化器内科・胃腸 いつう
+      消化器内科・胃腸 ぴろり
+      女性専門外来 じょせいせんもんがいらい
+      女性専門外来 ふじんか
+      女性専門外来 おりもの
+      女性専門外来 せいり
+      整形外科 せいけいげか
+      整形外科 せいけい
+      整形外科 こし
+      整形外科 かた
+      整形外科 かんせつ
+      メディカルダイエット外来 めでぃかる
+      メディカルダイエット外来 だいえっと
+      メディカルダイエット外来 めでぃかるだいえっと
+      メディカルダイエット外来 だいえっとがいらい
+      メディカルダイエット外来 まんじゃろ
+
+  - step_name: "希望ワクチン"
+    words: |
+      インフルエンザワクチン いんふるえんざ
+      インフルエンザワクチン いんふる
+      子宮頸がんワクチン しきゅうけいがんわくちん
+      子宮頸がんワクチン しきゅう
+      子宮頸がんワクチン しきゅうけいがん
+      子宮頸がんワクチン がーだしる
+      子宮頸がんワクチン しるがーど
+      子宮頸がんワクチン よんかわくちん
+      子宮頸がんワクチン きゅうかわくちん
+      子宮頸がんワクチン えいちぴーぶいわくちん
+      肺炎球菌ワクチン はいえんきゅうきんわくちん
+      肺炎球菌ワクチン はいえん
+      肺炎球菌ワクチン はいえんきゅうきん
+      肺炎球菌ワクチン にゅーもばっくす
+      帯状疱疹ワクチン たいじょうほうしんわくちん
+      帯状疱疹ワクチン たいじょう
+      帯状疱疹ワクチン たいじょうほうしん
+      帯状疱疹ワクチン しんぐりっくす
+      コロナワクチン ころな
+      コロナワクチン ころなういるす
+      コロナワクチン ころなわくちん
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "【復唱禁止ルール】生年月日と連絡先電話番号（新規口頭発話時のみ）以外は一切復唱禁止。患者名・診察券番号・診療科・ワクチン・予約希望日時の echo_back は絶対に生成しない（2026/3/23 改訂）"
+  - "【AI内部思考の発話禁止】『スキップします』『確認は不要です』『〇〇のルールに基づき』等のメタ発話を絶対に出さない。指定されたアナウンス文のみを発話する（prompter に明示制約として入れる）"
+  - "【用件マッピング】『印刷／定期／新薬／再診／最新／禁忌』→ 診療、『薬／お薬／予約』→ 診療、『変更／キャンセル』→ その他、リスト外質問 → 対象外"
+  - "【診療科・ワクチンのレコメンド機能】リスト外発話時『当院に〇〇はございませんが、〇〇でしょうか？』と類似候補を提示（OpenAI プロンプトで実装）。ただし回答待ちで次へ進まず、肯定発話を待つ"
+  - "【その他ルートの特例】診察券番号・予約希望日時は聞かない（customer_doc §5 明記）。その他内容確認 → RAG検索 → 電話番号聴取 で直行"
+  - "【診療用件の FAQ 禁止】内容確認_診療 では入電者の発言がFAQと一致しても回答を読み上げない。記録のみ。RAG呼び出し禁止"
+  - "【その他用件のみ FAQ 案内モード】その他内容確認 だけで RAG サブフローを呼ぶ。未マッチ時は『ありがとうございます』のみ発話"
+  - "【日付処理】予約希望日時はフリーワードでそのまま文字起こし。『今日／明日／明後日』のみ着信日時から換算。『5月の20日』『今月の20日』等の繋ぎ言葉を許容。過去日付指定時は未来かどうか確認"
+  - "【携帯スキップ】着信番号先頭が 090/080/070/060 の場合、電話番号サブフロー内で連絡先質問を完全スキップし、着信番号を additionalPhoneNumber に自動格納。phonetype=携帯"
+  - "【非通知扱い】Gen2仕様では非通知も受付して電話番号を口頭聴取（条件C）。第3世代標準 opening chain では非通知を弾く実装（END_非通知）。本設計書は標準通り弾く（confirmation_items 参照）"
+  - "【24時間対応】acceptance_times 不要。END_時間外 は template 要件で定義のみ残すが到達しない"
+  - "【氏名の下の名前追加聴取】苗字のみ発話時に『下のお名前もお伺いしてもよろしいですか？』で再聴取。復唱確認ではない再質問。氏名サブフロー内で対応要（標準サブフローで対応可能か要確認 → confirmation_items）"
+  - "【TTS制約】`{tts_g:...}` 小文字形式固定。SSML タグ（`<break>`, `<speak type=\"telephone\">`, `<dtmf>`, `<forward>` 等）は Gen3 では禁止。customer_doc に多数登場するがすべて除去して運用。電話番号復唱は Phone Normalization + Re-confirmation モジュールで代替。DTMF 受付は Brekeke 側 STT モジュール設定で対応"
+  - "【顧客側設定】受付時間・SMS文面・認証設定（生年月日/診察券番号/電話番号の優先順位）は Dr.JOY 側で設定。フローJSONには含まない"
+
+# --- セクション12: 要確認事項 ---
+confirmation_items:
+  - item: "office_id（施設ID）— Dr.JOY 管理画面で確認。フローJSONには不要だがIVR設定時に必要"
+    resolved: false
+  - item: "着信IVR電話番号（ARS番号）— Brekeke 設定時に設定。本番環境の番号を確認"
+    resolved: false
+  - item: "非通知着信の扱い — Gen2 では非通知も受付して電話番号を口頭聴取していたが、第3世代標準では END_非通知 で弾く実装にしている。Gen2 同様に受付するかCS確認"
+    resolved: false
+  - item: "氏名サブフロー『下の名前追加聴取』対応 — customer_doc §5 で『苗字のみ発話時は下の名前も再聴取』とあるが、標準氏名サブフロー（docs/reference/bivr/samples/個人情報サブフロー.bivr）がこの分岐を含むか要確認。含まない場合は拡張要"
+    resolved: false
+  - item: "RAG検索サブフローの FAQ ナレッジ本体 — customer_doc にナレッジ本体（QA対）の記載なし。Dr.JOY 側のFAQリストを事前登録する必要あり"
+    resolved: false
+  - item: "診療科・ワクチン レコメンド時の確認待ちロジック — 『〇〇でしょうか？』と投げた後、肯定応答を待って次へ進む。肯定/否定の判定をOpenAIプロンプトに含める方針で問題ないか確認"
+    resolved: false
+  - item: "checkout フィールド（Gen2のトラッキング用）— Gen2 特有の途中切断ステータス追跡。Gen3 では status=0（Gen3では非推奨）相当の扱いとなり、saveContextModel2DB に含めていない。本当に不要か確認"
+    resolved: false
+  - item: "smsFlag の確認 — 携帯=1, 固定=0 としている（phonetype で分岐）。Gen2 function では『status=1 のとき自動的に 1』とあったが、第3世代では固定電話はSMS受信不可のため sms_flag=0 に分けている。顧客の意図どおりか確認"
+    resolved: false
+  - item: "電話番号 未入電（先頭番号取得不可）時の扱い — 電話番号サブフロー内 incoming-classifier で『不明』→ 連絡先直接聴取 → phonetype=その他 → END_受付完了_固定（smsFlag=0）。Gen2 仕様と整合"
+    resolved: false

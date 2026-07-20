@@ -1,0 +1,1231 @@
+# 設計書 -- 沖縄県立南部医療センター・こども医療センター 地域連携
+# 生成元: @director エージェント
+# 生成日: 2026/04/23
+# 確認レポート: docs/designs/確認レポート_沖縄県立南部医療センター_地域連携_20260423.md
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "沖縄県立南部医療センター・こども医療センター"
+  scenario_name: "地域連携"
+  group_name: "沖縄県立南部医療センター・こども医療センター"
+  flow_name: "沖縄県立南部医療センター・こども医療センター$地域連携"
+  target_facility: "沖縄県立南部医療センター・こども医療センター（地域連携室）"
+  office_id: "TODO_要確認"
+  phone_number: "098-888-0123"
+  business_hours: "日曜祝日・年末年始除く月〜土 8:30〜12:00"
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "prod"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "沖縄県立南部医療センター・こども医療センター$地域連携"
+      role: "main"
+      description: "冒頭チェーン → 緊急対応ゲート → 共通聴取(医療機関名→入電者氏名→入電者電話番号) → 用件4分岐 → 各用件別聴取 → 終話"
+  subflows:
+    - name: "沖縄県立南部医療センター・こども医療センター$電話番号聴取_20260423"
+      target: "電話番号聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "本番版プロンプト準拠で復唱なし。入電者電話番号（additionalPhoneNumber）を10/11桁判定で聴取"
+    - name: "沖縄県立南部医療センター・こども医療センター$氏名聴取_20260423"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "患者氏名（patientName）聴取専用サブフロー。PatientName 型 1 本のみ。3 用件ルート（外来/情報提供/入退院）から同一 flowname を参照"
+    - name: "沖縄県立南部医療センター・こども医療センター$生年月日聴取_20260423"
+      target: "生年月日聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "患者生年月日（patientDateOfBirth）聴取。本番版準拠で復唱なし。和暦→西暦変換ルールを含む"
+
+# --- セクション3: フローの目的 ---
+purpose: "地域連携室専用 AI 電話。他医療機関の連携担当者からの電話を受け、冒頭で緊急対応の有無を判定した上で、医療機関名・担当者氏名・担当者連絡先を共通聴取し、用件（外来入院申込み / 情報提供依頼 / 入退院支援室 / その他お問い合わせ）に応じた追加情報（患者情報・FAX送信時期・診療科・返信期限・問い合わせ内容）を聴取して折り返し受付を自動化する。緊急対応要または整形外科（情報提供依頼内）は AI 対応不可として代表電話（098-888-0123）案内で終話する。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "沖縄県立南部医療センター・こども医療センター$地域連携"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → END_非通知(TTS) → 完了フラグ_非通知(status=2) → 切断
+            └─ 通常 → acceptance_times
+                        ├─ 時間外 → END_時間外(TTS) → 完了フラグ_時間外(status=6) → 切断
+                        └─ 受付可 → 冒頭_アナウンス(TTS: 施設名＋緊急対応問いかけ)
+                                      → 緊急対応確認(hearing enum: 有り/無し)
+                                          ├─ 有り → END_緊急対応不可(TTS: 代表電話案内) → 完了フラグ(status=2) → 切断
+                                          └─ 無し → 医療機関名聴取(hearing text, clinicName)
+                                                      → 入電者氏名聴取(hearing text, callerName)
+                                                      → jump_電話番号聴取(Custom Jump to Flow: 電話番号聴取サブフロー)
+                                                      → 用件(hearing enum 4分岐)
+                                                          ├─ 外来入院申込み → 患者氏名聴取_外来(subflow)
+                                                          │                    → 患者生年月日聴取_外来(subflow)
+                                                          │                    → FAX送信時期(hearing text, fax)
+                                                          │                    → END_終話1(TTS) → 完了フラグ(status=1, smsFlag=1) → 切断
+                                                          │
+                                                          ├─ 情報提供依頼 → 診療科(hearing enum)
+                                                          │                    ├─ 整形外科 → END_整形外科案内(TTS: 代表電話案内) → 完了フラグ(status=2) → 切断
+                                                          │                    └─ その他 → 患者氏名聴取_情報提供(subflow)
+                                                          │                                  → 患者生年月日聴取_情報提供(subflow)
+                                                          │                                  → 返信期限(hearing text, responseDeadline)
+                                                          │                                  → END_終話2(TTS) → 完了フラグ(status=1, smsFlag=1) → 切断
+                                                          │
+                                                          ├─ 入退院支援室 → 担当者名聴取(hearing text, contactName)
+                                                          │                    → 患者氏名聴取_入退院(subflow)
+                                                          │                    → 患者生年月日聴取_入退院(subflow)
+                                                          │                    → END_終話2(TTS) → 完了フラグ(status=1, smsFlag=1) → 切断
+                                                          │
+                                                          └─ その他お問い合わせ → 問い合わせ内容(hearing text, details, 「以上です」待ち)
+                                                                                    → END_終話2(TTS) → 完了フラグ(status=1, smsFlag=1) → 切断
+    notes: |
+      - 冒頭_アナウンスに緊急対応の問いかけを統合。緊急対応確認 hearing の TTS は再質問時用の短文。
+      - 患者氏名聴取／患者生年月日聴取は 3 用件ルートから同一 flowname（氏名聴取 / 生年月日聴取）を異なる step 名で参照。flow_structure.subflows[] では各 1 本のみ登録。
+      - 全聴取項目で復唱なし（本番版プロンプト準拠）、再質問最大 2 回、2 回失敗で END_聴取失敗（代表電話案内）へ。
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "外来入院申込み"
+      - id: "2"
+        order: "2"
+        value: "情報提供依頼"
+      - id: "3"
+        order: "3"
+        value: "入退院支援室"
+      - id: "4"
+        order: "4"
+        value: "その他お問い合わせ"
+      - id: "5"
+        order: "5"
+        value: "登録なし"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件区分。元資料 function.classification.enum に準拠"
+
+  - context_name: "patientName"
+    context_name_jp: "患者氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "患者本人のフルネーム（カタカナ格納）"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "患者生年月日(和暦)"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "和暦→西暦変換（大正/昭和/平成/令和対応）。わからない場合は空欄"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values:
+      - order: "1"
+        value: "救急集中治療科"
+      - order: "2"
+        value: "感染症内科"
+      - order: "3"
+        value: "血液腫瘍内科"
+      - order: "4"
+        value: "消化器内科"
+      - order: "5"
+        value: "リウマチ膠原病科"
+      - order: "6"
+        value: "総合診療科"
+      - order: "7"
+        value: "成人先天性心疾患外来"
+      - order: "8"
+        value: "脳卒中センター"
+      - order: "9"
+        value: "血管内治療センター"
+      - order: "10"
+        value: "ぱいかじ大動脈センター"
+      - order: "11"
+        value: "外科"
+      - order: "12"
+        value: "耳鼻咽喉科"
+      - order: "13"
+        value: "皮膚科"
+      - order: "14"
+        value: "眼科"
+      - order: "15"
+        value: "歯科口腔外科"
+      - order: "16"
+        value: "精神科"
+      - order: "17"
+        value: "放射線科"
+      - order: "18"
+        value: "リハビリテーション科"
+      - order: "19"
+        value: "心臓血管外科"
+      - order: "20"
+        value: "循環器内科"
+      - order: "21"
+        value: "呼吸器内科"
+      - order: "22"
+        value: "病理診断科"
+      - order: "23"
+        value: "脳神経内科"
+      - order: "24"
+        value: "腎臓内科"
+      - order: "25"
+        value: "形成外科"
+      - order: "26"
+        value: "整形外科"
+      - order: "27"
+        value: "脳神経外科"
+      - order: "28"
+        value: "麻酔科"
+      - order: "29"
+        value: "産婦人科"
+      - order: "30"
+        value: "内科"
+      - order: "31"
+        value: "小児形成外科"
+      - order: "32"
+        value: "小児眼科"
+      - order: "33"
+        value: "小児感染症内科"
+      - order: "34"
+        value: "小児血液・腫瘍内科"
+      - order: "35"
+        value: "新生児内科"
+      - order: "36"
+        value: "小児歯科口腔外科"
+      - order: "37"
+        value: "小児神経内科こころ科"
+      - order: "38"
+        value: "小児腎臓科"
+      - order: "39"
+        value: "小児整形外科"
+      - order: "40"
+        value: "小児内分泌・代謝内科"
+      - order: "41"
+        value: "小児脳神経外科"
+      - order: "42"
+        value: "小児外科"
+      - order: "43"
+        value: "小児心臓血管外科"
+      - order: "44"
+        value: "小児集中治療科"
+      - order: "45"
+        value: "小児循環器内科"
+      - order: "46"
+        value: "小児麻酔科"
+      - order: "47"
+        value: "小児泌尿器科"
+      - order: "48"
+        value: "小児総合診療科"
+      - order: "49"
+        value: "小児科"
+      - order: "50"
+        value: "登録なし"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "元資料 function.clinicalDepartment.enum に準拠（49 診療科 + 登録なし）。情報提供依頼ルートで『整形外科』判定時は END_整形外科案内へ分岐"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "入電者（医療機関担当者）の連絡先。10/11 桁判定（070/080/090/050 は 11 桁、それ以外は 10 桁）"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=未処理（正常完了） 2=代表案内（緊急対応／整形外科／聴取失敗／非通知） 6=時間外。Gen2 の status=0 は Gen3 では使用しない"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: ""
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値"
+
+  # --- 地域連携固有フィールド（Gen2 function から移管。itemDefault: false）---
+  - context_name: "emergencyResponse"
+    context_name_jp: "当日対応希望"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "冒頭ゲートの回答。『有り』=代表案内へ、『無し』=本フロー継続。元資料 function.emergencyResponse.enum=[有り, 無し]"
+
+  - context_name: "clinicName"
+    context_name_jp: "医療機関名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "入電元の医療機関名。元資料 §2-1 所属リスト（60+ 施設）の正規化マッピングあり"
+
+  - context_name: "callerName"
+    context_name_jp: "入電者氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "入電者（医療機関担当者）のフルネーム。患者氏名（patientName）とは別フィールド"
+
+  - context_name: "contactName"
+    context_name_jp: "当院担当者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "入退院支援室ルート専用。当院側の担当者名。わからない場合は『わからない』をそのまま格納"
+
+  - context_name: "fax"
+    context_name_jp: "FAX送信時期"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "外来入院申込みルート専用。FAX を送信した日付と時間帯（自由テキスト）"
+
+  - context_name: "responseDeadline"
+    context_name_jp: "返信期限"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "情報提供依頼ルート専用。回答期限の日時（自由テキスト）"
+
+  - context_name: "details"
+    context_name_jp: "問い合わせ内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "その他お問い合わせルート専用。『以上です。』を発話するまで遷移しない。自由テキスト格納"
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # ===== 冒頭チェーン =====
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 緊急対応確認
+
+  # ===== 緊急対応ゲート（Pattern A: OpenAI 直後分岐）=====
+  - step: 緊急対応確認
+    type: hearing
+    output_format: enum
+    save_to: emergencyResponse
+    conditions:
+      - match: "有り"
+        next: END_緊急対応不可
+      - match: "default"
+        next: 医療機関名聴取
+
+  # ===== 共通聴取（医療機関名 → 入電者氏名 → 入電者電話番号）=====
+  - step: 医療機関名聴取
+    type: hearing
+    output_format: text
+    save_to: clinicName
+    next: 入電者氏名聴取
+
+  - step: 入電者氏名聴取
+    type: hearing
+    output_format: text
+    save_to: callerName
+    next: jump_電話番号聴取
+
+  - step: jump_電話番号聴取
+    type: subflow
+    flowname: "沖縄県立南部医療センター・こども医療センター$電話番号聴取_20260423"
+    next: 用件
+
+  # ===== 用件（Pattern A: OpenAI 直後分岐 4 分岐）=====
+  - step: 用件
+    type: hearing
+    output_format: enum
+    save_to: classification
+    conditions:
+      - match: "外来入院申込み"
+        next: 患者氏名聴取_外来
+      - match: "情報提供依頼"
+        next: 診療科
+      - match: "入退院支援室"
+        next: 担当者名聴取
+      - match: "その他お問い合わせ"
+        next: 問い合わせ内容
+
+  # ===== 用件ルート1: 外来入院申込み =====
+  - step: 患者氏名聴取_外来
+    type: subflow
+    flowname: "沖縄県立南部医療センター・こども医療センター$氏名聴取_20260423"
+    next: 患者生年月日聴取_外来
+
+  - step: 患者生年月日聴取_外来
+    type: subflow
+    flowname: "沖縄県立南部医療センター・こども医療センター$生年月日聴取_20260423"
+    next: FAX送信時期
+
+  - step: FAX送信時期
+    type: hearing
+    output_format: text
+    save_to: fax
+    next: END_終話1
+
+  # ===== 用件ルート2: 情報提供依頼 =====
+  - step: 診療科
+    type: hearing
+    output_format: enum
+    save_to: clinicalDepartment
+    no_result_default: "登録なし"
+    conditions:
+      - match: "整形外科"
+        next: END_整形外科案内
+      - match: "default"
+        next: 患者氏名聴取_情報提供
+
+  - step: 患者氏名聴取_情報提供
+    type: subflow
+    flowname: "沖縄県立南部医療センター・こども医療センター$氏名聴取_20260423"
+    next: 患者生年月日聴取_情報提供
+
+  - step: 患者生年月日聴取_情報提供
+    type: subflow
+    flowname: "沖縄県立南部医療センター・こども医療センター$生年月日聴取_20260423"
+    next: 返信期限
+
+  - step: 返信期限
+    type: hearing
+    output_format: text
+    save_to: responseDeadline
+    next: END_終話2
+
+  # ===== 用件ルート3: 入退院支援室 =====
+  - step: 担当者名聴取
+    type: hearing
+    output_format: text
+    save_to: contactName
+    next: 患者氏名聴取_入退院
+
+  - step: 患者氏名聴取_入退院
+    type: subflow
+    flowname: "沖縄県立南部医療センター・こども医療センター$氏名聴取_20260423"
+    next: 患者生年月日聴取_入退院
+
+  - step: 患者生年月日聴取_入退院
+    type: subflow
+    flowname: "沖縄県立南部医療センター・こども医療センター$生年月日聴取_20260423"
+    next: END_終話2
+
+  # ===== 用件ルート4: その他お問い合わせ =====
+  - step: 問い合わせ内容
+    type: hearing
+    output_format: text
+    save_to: details
+    next: END_終話2
+
+  # ===== 終話ブロック =====
+  - step: END_緊急対応不可
+    type: termination
+    termination_ref: END_緊急対応不可
+
+  - step: END_整形外科案内
+    type: termination
+    termination_ref: END_整形外科案内
+
+  - step: END_終話1
+    type: termination
+    termination_ref: END_終話1
+
+  - step: END_終話2
+    type: termination
+    termination_ref: END_終話2
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "緊急対応確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "emergencyResponse"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "有り"
+      - "無し"
+    notes: "Yes/No ゲート。『はい』『そう』『緊急』『必要』『優先』→有り、『いいえ』『いや』『ちがいます』→無し。判定不可は『無し』扱いで本フロー継続（安全側）"
+
+  - order: 2
+    name: "医療機関名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicName"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "元資料 §2-1 所属リスト 60+ 施設の正規化マッピングあり。OpenAI プロンプトに所属リストを含め、キーワードマッチで正規化表現を出力。マッチしない入力はそのまま保存"
+
+  - order: 3
+    name: "入電者氏名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "callerName"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "入電者（医療機関担当者）のフルネーム。テキストそのまま保存"
+
+  - order: 4
+    name: "用件"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "外来入院申込み"
+      - "情報提供依頼"
+      - "入退院支援室"
+      - "その他お問い合わせ"
+    notes: "DTMF 1=外来入院申込み, 2=情報提供依頼, 3=入退院支援室, 4=その他お問い合わせ。音声では『外来』『申込み』→1、『情報提供』→2、『入退院』『支援室』→3、『その他』『問い合わせ』→4"
+
+  - order: 5
+    name: "診療科"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "整形外科"
+      - "default"
+    notes: |
+      情報提供依頼ルート専用。整形外科判定時のみ END_整形外科案内 に分岐、それ以外は次ステップ（患者氏名聴取_情報提供）へ。
+      元資料 function.clinicalDepartment.enum 全 49 科を OpenAI プロンプトに列挙し、正規化名を出力。
+      『整形外科』『整形』『せけげか』『せけいげか』は整形外科判定。
+      NO_RESULT 時は no_result_default=『登録なし』で context に保存してリトライ。
+
+  - order: 6
+    name: "担当者名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "contactName"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "入退院支援室ルート専用。当院担当者名（わからない場合は『わからない』をそのまま格納）"
+
+  - order: 7
+    name: "FAX送信時期"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "fax"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "外来入院申込みルート専用。FAX を送信した日付と時間帯。datetime ではなく text（『先ほど』『午前中に送りました』等の曖昧表現を許容）"
+
+  - order: 8
+    name: "返信期限"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "responseDeadline"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "情報提供依頼ルート専用。回答期限の日時。datetime ではなく text（『今週中』『至急』等の曖昧表現を許容）"
+
+  - order: 9
+    name: "問い合わせ内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "details"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: |
+      その他お問い合わせルート専用。
+      【ターン制御ルール（必須）】
+      利用者の発話内容に『以上です。』が含まれた場合にのみ、次の処理・次のステップへ進む。
+      利用者が『以上です。』を発話していない間は、最後まで待機。絶対に発話を途中で遮断しない。
+      prompter はこのターン制御ルールを OpenAI プロンプトに必ず含めること。
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "冒頭_アナウンス"
+    tts_announcement: "お電話ありがとうございます。沖縄県立南部医療センター・こども医療センター、地域連携室専用AI電話です。本件は、緊急対応が必要でしょうか。はい、いいえでお答えください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: ""
+    next_step: "緊急対応確認"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "緊急対応確認"
+    tts_announcement: "本件は、緊急対応が必要でしょうか。はい、いいえでお答えください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "有り"
+        - "無し"
+      mapping:
+        - input: "『はい』『そう』『そうです』『はいそうです』を含む"
+          output: "有り"
+        - input: "『緊急』『緊急対応』を含む"
+          output: "有り"
+        - input: "『必要』を含む"
+          output: "有り"
+        - input: "『優先』を含む"
+          output: "有り"
+        - input: "『いいえ』『いえ』『いや』『違います』『ちがいます』『ちがう』を含む"
+          output: "無し"
+        - input: "『緊急対応じゃない』『当日じゃない』を含む"
+          output: "無し"
+      no_result_condition: "上記いずれにも該当しない場合は『無し』扱い（安全側。本フロー継続）"
+    save_to: "emergencyResponse"
+    next_step: "医療機関名聴取（無しの場合） / END_緊急対応不可（有りの場合）"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "医療機関名聴取"
+    tts_announcement: "お電話をいただいている方の、医療機関名をお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "所属リスト（元資料 §2-1）に記載のキーワードを含む発話"
+          output: "正規化表現（例: 『とうきょうとそうごうくみあいほけんしせつしんこうかい』→『東振協』）"
+        - input: "所属リストに該当しない発話"
+          output: "発話内容をそのまま保存（正規化不可）"
+      no_result_condition: ""
+    save_to: "clinicName"
+    next_step: "入電者氏名聴取"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "入電者氏名聴取"
+    tts_announcement: "次に、ご担当者様の氏名を「名前は、南部 太郎です」のようにお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "氏名発話"
+          output: "氏名部分のみを抽出（『名前は』『です』等は除去）"
+      no_result_condition: ""
+    save_to: "callerName"
+    next_step: "jump_電話番号聴取"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "用件"
+    tts_announcement: "ご用件を次の4つのうちのいずれかでお話ください。1番、外来入院申込みについて。2番、情報提供依頼。3番、入退院支援室へのお問い合わせ。4番、その他お問合せ。それではお話ください。どうぞ。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "外来入院申込み"
+        - "情報提供依頼"
+        - "入退院支援室"
+        - "その他お問い合わせ"
+      mapping:
+        - input: "DTMF 1 または『外来』『申込み』『外来入院申込み』『外来入院』『一』『一です』『一番』を含む"
+          output: "外来入院申込み"
+        - input: "DTMF 2 または『情報提供』『じょうほうていきょう』『じょうほうていきょういらい』『じょうほう』『ていきょう』『二』『二です』『二番』を含む"
+          output: "情報提供依頼"
+        - input: "DTMF 3 または『入退院』『入院』『支援室』『退院』『三』『三です』『三番』を含む"
+          output: "入退院支援室"
+        - input: "DTMF 4 または『その他』『問い合わせ』『よん』『四』『四番』『よんです』を含む"
+          output: "その他お問い合わせ"
+      no_result_condition: "上記いずれにも該当しない場合は NO_RESULT（リトライへ）"
+    save_to: "classification"
+    next_step: "患者氏名聴取_外来（外来）/ 診療科（情報提供）/ 担当者名聴取（入退院）/ 問い合わせ内容（その他）"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "診療科"
+    tts_announcement: "まず、該当の診療科をお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "整形外科"
+        - "default"
+      mapping:
+        - input: "『整形外科』『整形』『せけげか』『せけいげか』を含む"
+          output: "整形外科"
+        - input: "function.clinicalDepartment.enum 全 49 科（整形外科以外）のいずれかのキーワード／類義語（元資料 §2.2）を含む"
+          output: "default（context には該当する正規化診療科名を保存した上で次ステップへ）"
+      no_result_condition: "上記いずれにも該当しない場合は context に『登録なし』を保存した上で default ルートへ（NO_RESULT はリトライ、no_result_default=『登録なし』）"
+    save_to: "clinicalDepartment"
+    next_step: "END_整形外科案内（整形外科の場合） / 患者氏名聴取_情報提供（default）"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "担当者名聴取"
+    tts_announcement: "当院の担当者がお分かりの場合は担当者名をお話しください。わからない場合は「わからない」とお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "担当者名発話"
+          output: "氏名部分のみを抽出"
+        - input: "『わからない』『わかりません』『不明』を含む"
+          output: "わからない"
+      no_result_condition: ""
+    save_to: "contactName"
+    next_step: "患者氏名聴取_入退院"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "FAX送信時期"
+    tts_announcement: "FAXを送信した日付と時間帯をお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "日付と時間帯を含む発話"
+          output: "発話内容をそのまま保存（text）"
+      no_result_condition: ""
+    save_to: "fax"
+    next_step: "END_終話1"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "返信期限"
+    tts_announcement: "本件について、ご回答期限の日時を教えてください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "日時を含む発話"
+          output: "発話内容をそのまま保存（text）"
+      no_result_condition: ""
+    save_to: "responseDeadline"
+    next_step: "END_終話2"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "問い合わせ内容"
+    tts_announcement: "本件のお問い合わせ内容を、簡潔にお話しください。話し終わりましたら、「以上です。」とおっしゃってください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "『以上です。』を含む発話"
+          output: "『以上です。』以前の発話内容をそのまま保存"
+      no_result_condition: "発話内容に『以上です。』が含まれない場合は next へ遷移せず、発話を待機し続ける（ターン制御ルール）"
+    save_to: "details"
+    next_step: "END_終話2"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外（日曜祝日・年末年始 または 月〜土 8:30 未満 / 12:00 以降）"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間は、日曜祝日・年末年始を除く、月曜日から土曜日の8時30分から12時です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限（2回）到達"
+    tts_announcement: "大変申し訳ございません。ご回答を聞き取ることができませんでした。恐れ入りますが、代表電話番号へおかけなおしください。受付時間は、日曜祝日、年末年始を除く、月曜日から土曜日の8時30分から12時です。お電話番号をご案内いたしますので、メモをご準備ください。098-888-0123。もう一度お伝えします。098-888-0123。最後にもう一度お伝えします。098-888-0123。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 施設固有・代表案内系 ---
+  - name: "END_緊急対応不可"
+    condition: "冒頭ゲートで緊急対応『有り』判定"
+    tts_announcement: "当日の緊急対応はAI電話では対応できません。恐れ入りますが、代表電話番号へおかけなおしください。受付時間は、日曜祝日、年末年始を除く、月曜日から土曜日の8時30分から12時です。お電話番号をご案内いたしますので、メモをご準備ください。098-888-0123。もう一度お伝えします。098-888-0123。最後にもう一度お伝えします。098-888-0123。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_緊急対応不可"
+
+  - name: "END_整形外科案内"
+    condition: "情報提供依頼ルートで診療科『整形外科』判定"
+    tts_announcement: "申し訳ございません。整形外科は、AI電話では承ることができません。恐れ入りますが、代表電話番号へおかけなおしください。受付時間は、日曜祝日、年末年始を除く、月曜日から土曜日の8時30分から12時です。お電話番号をご案内いたしますので、メモをご準備ください。098-888-0123。もう一度お伝えします。098-888-0123。最後にもう一度お伝えします。098-888-0123。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_整形外科案内"
+
+  # --- 正常系 ---
+  - name: "END_終話1"
+    condition: "外来入院申込みルート完了（患者氏名 + 生年月日 + FAX送信時期 聴取済み）"
+    tts_announcement: "かしこまりました。確認事項がある場合のみ、担当者より折り返しご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_終話1"
+
+  - name: "END_終話2"
+    condition: "情報提供依頼 / 入退院支援室 / その他お問い合わせ の各ルート完了"
+    tts_announcement: "かしこまりました。内容を確認のうえ、5診療日以内にスタッフからご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_終話2"
+
+# smsFlag 分岐設計
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "施設名案内 + 緊急対応問いかけ（opening 直後）"
+    announcement: "お電話ありがとうございます。沖縄県立南部医療センター・こども医療センター、地域連携室専用AI電話です。本件は、緊急対応が必要でしょうか。はい、いいえでお答えください。どうぞ。"
+
+  - module_name: "緊急対応確認"
+    purpose: "緊急対応 Yes/No 判定の再質問用 TTS（冒頭_アナウンスで既に問いかけ済みなので、リトライ時のみ使用）"
+    announcement: "本件は、緊急対応が必要でしょうか。はい、いいえでお答えください。どうぞ。"
+
+  - module_name: "医療機関名聴取"
+    purpose: "医療機関名の問いかけ"
+    announcement: "お電話をいただいている方の、医療機関名をお話しください。どうぞ。"
+
+  - module_name: "入電者氏名聴取"
+    purpose: "入電者（担当者）の氏名問いかけ"
+    announcement: "次に、ご担当者様の氏名を「名前は、南部 太郎です」のようにお話しください。どうぞ。"
+
+  - module_name: "用件"
+    purpose: "用件 4 択の問いかけ（DTMF + 音声）"
+    announcement: "ご用件を次の4つのうちのいずれかでお話ください。1番、外来入院申込みについて。2番、情報提供依頼。3番、入退院支援室へのお問い合わせ。4番、その他お問合せ。それではお話ください。どうぞ。"
+
+  - module_name: "診療科"
+    purpose: "診療科問いかけ（情報提供依頼ルート）"
+    announcement: "まず、該当の診療科をお話しください。どうぞ。"
+
+  - module_name: "担当者名聴取"
+    purpose: "当院担当者名問いかけ（入退院支援室ルート）"
+    announcement: "当院の担当者がお分かりの場合は担当者名をお話しください。わからない場合は「わからない」とお話しください。"
+
+  - module_name: "FAX送信時期"
+    purpose: "FAX 送信時期問いかけ（外来入院申込みルート）"
+    announcement: "FAXを送信した日付と時間帯をお話しください。どうぞ。"
+
+  - module_name: "返信期限"
+    purpose: "返信期限問いかけ（情報提供依頼ルート）"
+    announcement: "本件について、ご回答期限の日時を教えてください。どうぞ。"
+
+  - module_name: "問い合わせ内容"
+    purpose: "問い合わせ内容問いかけ（その他お問い合わせルート。『以上です。』待ち）"
+    announcement: "本件のお問い合わせ内容を、簡潔にお話しください。話し終わりましたら、「以上です。」とおっしゃってください。どうぞ。"
+
+  - module_name: "END_緊急対応不可"
+    purpose: "緊急対応要の場合の代表電話案内＋終話"
+    announcement: "当日の緊急対応はAI電話では対応できません。恐れ入りますが、代表電話番号へおかけなおしください。受付時間は、日曜祝日、年末年始を除く、月曜日から土曜日の8時30分から12時です。お電話番号をご案内いたしますので、メモをご準備ください。098-888-0123。もう一度お伝えします。098-888-0123。最後にもう一度お伝えします。098-888-0123。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_整形外科案内"
+    purpose: "情報提供依頼で整形外科指定時の代表電話案内＋終話"
+    announcement: "申し訳ございません。整形外科は、AI電話では承ることができません。恐れ入りますが、代表電話番号へおかけなおしください。受付時間は、日曜祝日、年末年始を除く、月曜日から土曜日の8時30分から12時です。お電話番号をご案内いたしますので、メモをご準備ください。098-888-0123。もう一度お伝えします。098-888-0123。最後にもう一度お伝えします。098-888-0123。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_終話1"
+    purpose: "外来入院申込みルート完了時の終話"
+    announcement: "かしこまりました。確認事項がある場合のみ、担当者より折り返しご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_終話2"
+    purpose: "情報提供依頼 / 入退院支援室 / その他お問い合わせ ルート完了時の終話（5 診療日以内折り返し）"
+    announcement: "かしこまりました。内容を確認のうえ、5診療日以内にスタッフからご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ 2 回失敗時の代表電話案内＋終話"
+    announcement: "大変申し訳ございません。ご回答を聞き取ることができませんでした。恐れ入りますが、代表電話番号へおかけなおしください。受付時間は、日曜祝日、年末年始を除く、月曜日から土曜日の8時30分から12時です。お電話番号をご案内いたしますので、メモをご準備ください。098-888-0123。もう一度お伝えします。098-888-0123。最後にもう一度お伝えします。098-888-0123。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_非通知"
+    purpose: "非通知着信時の終話（テンプレデフォルト）"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_時間外"
+    purpose: "営業時間外着信時の終話"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間は、日曜祝日・年末年始を除く、月曜日から土曜日の8時30分から12時です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "緊急対応確認"
+    words: |
+      緊急 きんきゅう
+      緊急対応 きんきゅうたいおう
+      必要 ひつよう
+      優先 ゆうせん
+      はい はい
+      いいえ いいえ
+      いや いや
+      違います ちがいます
+      ちがう ちがう
+
+  - step_name: "医療機関名聴取"
+    words: |
+      深川市包括支援センター ふかがわしほうかつしえんせんたー
+      妹背牛町包括支援センター もせうしちょうほうかつしえんせんたー
+      秩父別町包括支援センター ちっぷべつちょうほうかつしえんせんたー
+      北竜町包括支援センター ほうくりゅうちょうほうかつしえんせんたー
+      アニスティ深川 あにすてぃふかがわ
+      深川市社会福祉協議会 ふかがわししゃかいふくしきょうぎかい
+      安寿ケアセンター あんじゅけあせんたー
+      みんソラ みんそら
+      清祥園 せいしょうえん
+      清祥園ハピネス せいしょうえんはぴねす
+      りぶれ りぶれ
+      和敬園 わけいえん
+      秩父別町社会福祉協議会 ちっぷべつしゃかいふくしきょうぎかい
+      永楽園 えいらくえん
+      沼田町社会福祉協議会 ぬまたちょうしゃかいふくしきょうぎかい
+      ひろさと ひろさと
+      永福園 えいふくえん
+      旭寿園 きょくじゅえん
+      和風園 わふうえん
+      こんにちは金さん銀さん こんにちはきんさんぎんさん
+      アットホームサルビア あっとほーむさるびあ
+      ひいらぎ荘 ひいらぎそう
+      忘れな草 わすれなぐさ
+      優和の郷信 ゆうわのさとしん
+      べにばら妹背牛 べにばらもせうし
+      グループホーム碧水 ぐるーぷほーむへきすい
+      なごみ なごみ
+      秩父別べにばら ちっぷべつべにばら
+      ケアハウスえんれい草 けあはうすえんれいそう
+      ライフシップ深川 らいふしっぷふかがわ
+      ライフマップ深川 らいふまっぷふかがわ
+      雨竜町包括支援センター うりゅうちょうほうかつしえんせんたー
+      雨竜寿園 うりゅうことぶきえん
+      雨竜居宅支援センター うりゅうきょたくしえんせんたー
+      サポート24 さぽーとにじゅうよん
+      深川地域訪問看護ステーション ふかがわちいきほうもんかんごすてーしょん
+      訪問看護ステーションいしずえ深川 ほうもんかんごすてーしょんいしずえふかがわ
+      定期巡回みんソラ ていきじゅんかいみんそら
+      あっぷる あっぷる
+      あかとき学園 あかときがくえん
+      深川保健所 ふかがわほけんじょ
+      旭川医大 あさひかわいだい
+      旭川厚生病院 あさひかわこうせいびょういん
+      旭川赤十字病院 あさひかわせきじゅうじびょういん
+      市立旭川病院 しりつあさひかわびょういん
+      旭川医療センター あさひかわいりょうせんたー
+      旭川リハビリテーション病院 あさひかわりはびりてーしょんびょういん
+      滝川市立病院 たきかわしりつびょういん
+      砂川市立病院 すながわしりつびょういん
+      留萌市立病院 るもいしりつびょういん
+      深川第一病院 ふかがわだいいちびょういん
+      北海道中央病院 ほっかいどうちゅうおうびょういん
+      東が丘病院 ひがしがおかびょういん
+      吉本病院 よしもとびょういん
+      沼田厚生クリニック ぬまたこうせいくりにっく
+      北竜診療所 ほくりゅうしんりょうじょ
+      秩父別診療所 ちっぷべつしんりょうじょ
+      妹背牛診療所 もせうししんりょうじょ
+      納内診療所 おさむないしんりょうじょ
+      若葉台病院 わかばだいびょういん
+      留萌記念病院 るもいきねんびょういん
+      西原腎泌尿器科クリニック にしはらじんひにょうきくりにっく
+      旭川高砂台病院 あさひかわたかさごだいびょういん
+      東振協 とうしんきょう
+
+  - step_name: "用件"
+    words: |
+      外来入院申込み がいらいにゅういんもうしこみ
+      外来入院 がいらいにゅういん
+      外来 がいらい
+      申込み もうしこみ
+      申し込み もうしこみ
+      情報提供依頼 じょうほうていきょういらい
+      情報提供 じょうほうていきょう
+      情報 じょうほう
+      提供 ていきょう
+      入退院支援室 にゅうたいいんしえんしつ
+      入退院 にゅうたいいん
+      入院 にゅういん
+      支援室 しえんしつ
+      退院 たいいん
+      その他 そのた
+      問い合わせ といあわせ
+      お問い合わせ おといあわせ
+
+  - step_name: "診療科"
+    words: |
+      救急集中治療科 きゅうきゅうしゅうちゅうちりょうか
+      救急 きゅうきゅう
+      集中治療科 しゅうちゅうちりょうか
+      感染症内科 かんせんしょうないか
+      感染症 かんせんしょう
+      感染内科 かんせんないか
+      感染 かんせん
+      感染症科 かんせんしょうか
+      血液腫瘍内科 けつえきしゅようないか
+      血液内科 けつえきないか
+      腫瘍内科 しゅようないか
+      血内 けつない
+      消化器内科 しょうかきないか
+      消化器 しょうかき
+      消内 しょうない
+      消化器科 しょうかきか
+      リウマチ膠原病科 りうまちこうげんびょうか
+      リウマチ りうまち
+      膠原病 こうげんびょう
+      膠原 こうげん
+      膠原病内科 こうげんびょうないか
+      リウマチ膠原病内科 りうまちこうげんびょうないか
+      リウマチ科 りうまちか
+      膠原病科 こうげんびょうか
+      リウマチ内科 りうまちないか
+      総合診療科 そうごうしんりょうか
+      総合内科 そうごうないか
+      総合診療 そうごうしんりょう
+      成人先天性心疾患外来 せいじんせんてんせいしんしっかんがいらい
+      成人心疾患外来 せいじんしんしっかんがいらい
+      心疾患外来 しんしっかんがいらい
+      先天性心疾患 せんてんせいしんしっかん
+      先天性心疾患外来 せんてんせいしんしっかんがいらい
+      脳卒中センター のうそっちゅうせんたー
+      脳卒中 のうそっちゅう
+      血管内治療センター けっかんないちりょうせんたー
+      血管内科 けっかんないか
+      血管治療 けっかんちりょう
+      ぱいかじ大動脈センター ぱいかじだいどうみゃくせんたー
+      ぱいかじセンター ぱいかじせんたー
+      大動脈センター だいどうみゃくせんたー
+      外科 げか
+      一般外科 いっぱんげか
+      耳鼻咽喉科 じびいんこうか
+      耳鼻咽喉 じびいんこう
+      耳鼻 じび
+      咽喉 いんこう
+      耳鼻科 じびか
+      皮膚科 ひふか
+      皮膚 ひふ
+      眼科 がんか
+      目科 めか
+      歯科口腔外科 しかこうくうげか
+      歯科 しか
+      口腔 こうくう
+      歯医者 はいしゃ
+      口外 こうげ
+      口腔外科 こうくうげか
+      精神科 せいしんか
+      精神 せいしん
+      放射線科 ほうしゃせんか
+      放射線 ほうしゃせん
+      リハビリテーション科 りはびりてーしょんか
+      リハ りは
+      リハビリ りはびり
+      心臓血管外科 しんぞうけっかんげか
+      心外 しんげ
+      血管外科 けっかんげか
+      心臓外科 しんぞうげか
+      循環器内科 じゅんかんきないか
+      循内 じゅんない
+      循環器 じゅんかんき
+      呼吸器内科 こきゅうきないか
+      呼吸器 こきゅうき
+      呼吸 こきゅう
+      呼内 こない
+      呼吸科 こきゅうか
+      病理診断科 びょうりしんだんか
+      脳神経内科 のうしんけいないか
+      脳内 のうない
+      神経内科 しんけいないか
+      脳神経 のうしんけい
+      神経 しんけい
+      腎臓内科 じんぞうないか
+      腎臓 じんぞう
+      腎内 じんない
+      形成外科 けいせいげか
+      形成 けいせい
+      整形外科 せいけいげか
+      整形 せいけい
+      せけげか せけげか
+      せけいげか せけいげか
+      脳神経外科 のうしんけいげか
+      脳外 のうげ
+      脳血管治療 のうけっかんちりょう
+      脳血管 のうけっかん
+      脳外科 のうげか
+      神経外科 しんけいげか
+      脳血管治療科 のうけっかんちりょうか
+      麻酔科 ますいか
+      麻酔 ますい
+      産婦人科 さんふじんか
+      婦人科 ふじんか
+      産科 さんか
+      内科 ないか
+      小児形成外科 しょうにけいせいげか
+      小児形成 しょうにけいせい
+      小児眼科 しょうにがんか
+      小児感染症内科 しょうにかんせんしょうないか
+      小児感染症科 しょうにかんせんしょうか
+      小児感染 しょうにかんせん
+      小児感染症 しょうにかんせんしょう
+      小児血液腫瘍内科 しょうにけつえきしゅようないか
+      小児血液 しょうにけつえき
+      新生児内科 しんせいじないか
+      新生児 しんせいじ
+      小児歯科口腔外科 しょうにしかこうくうげか
+      小児神経内科こころ科 しょうにしんけいないかこころか
+      小児神経 しょうにしんけい
+      こころ科 こころか
+      小児こころ科 しょうにこころか
+      小児腎臓科 しょうにじんぞうか
+      小児腎臓 しょうにじんぞう
+      小児整形外科 しょうにせいけいげか
+      小児整形 しょうにせいけい
+      小児内分泌代謝内科 しょうにないぶんぴつたいしゃないか
+      小児内分泌 しょうにないぶんぴつ
+      小児内分泌科 しょうにないぶんぴつか
+      内分泌 ないぶんぴつ
+      代謝内科 たいしゃないか
+      小児脳神経外科 しょうにのうしんけいげか
+      小児脳神経 しょうにのうしんけい
+      小児脳外 しょうにのうげ
+      小児外科 しょうにげか
+      しょうにげか しょうにげか
+      小児心臓血管外科 しょうにしんぞうけっかんげか
+      小児心臓血管 しょうにしんぞうけっかん
+      小児心臓 しょうにしんぞう
+      小児心外 しょうにしんげ
+      小児集中治療科 しょうにしゅうちゅうちりょうか
+      小児集中 しょうにしゅうちゅう
+      小児循環器内科 しょうにじゅんかんきないか
+      小児循環器 しょうにじゅんかんき
+      小児麻酔科 しょうにますいか
+      小児麻酔 しょうにますい
+      小児泌尿器科 しょうにひにょうきか
+      小児泌尿器 しょうにひにょうき
+      泌尿器 ひにょうき
+      小児総合診療科 しょうにそうごうしんりょうか
+      小児総合 しょうにそうごう
+      小児科 しょうにか
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "入電者は他医療機関の連携担当者（患者本人ではない）。入電者情報（clinicName / callerName / additionalPhoneNumber）と患者情報（patientName / patientDateOfBirth）は別フィールドで聴取する。入退院支援室ルートでは当院側の担当者名（contactName）も聴取する 3 者構造。"
+  - "冒頭ゲート（緊急対応 yes/no）は必ず opening 直後に配置する。共通聴取の後に配置すると、緊急時に無駄な聴取が発生するため設計崩壊となる。"
+  - "情報提供依頼ルートで診療科が『整形外科』『整形』『せけげか』『せけいげか』等と判定された場合は AI 対応不可として END_整形外科案内（代表電話案内）で終話する。他のルート（外来入院申込み / 入退院支援室 / その他）では診療科聴取なし。"
+  - "その他お問い合わせルートの問い合わせ内容（details）は、利用者が『以上です。』を発話するまで次ステップへ遷移しない。prompter は OpenAI プロンプトに必ずターン制御ルールを含めること。"
+  - "全項目で復唱禁止（echo_back=false）。本番版プロンプト（2026/02/09 版）に準拠。デモ版では連絡先電話番号のみ復唱ありだが本番版を採用。"
+  - "再質問は最大 2 回。2 回失敗で END_聴取失敗（代表電話案内）へ。"
+  - "Gen2 プロンプトの SSML タグ（`<speak type=\"telephone\">` / `<break time=\"300ms\"/>`）は Gen3 では使用禁止。TTS 文言は自然文化して tts_g（Google TTS）で読み上げる。"
+  - "Gen2 の smsFlag=0 は Gen3 では smsFlag=-1（SMS 送信なし）にマッピング。Gen3 の許可値は [-1, 1] のみ。"
+  - "Gen2 の 初期 status=0 は Gen3 では使用しない。終話時の saveCompletionFlag2db で status=1/2/6 を確定的にセット。"
+  - "医療機関名（clinicName）は元資料 §2-1 所属リスト 60+ 施設の正規化マッピングあり。OpenAI プロンプトに所属リストを含め、キーワードマッチで正規化表現を出力。マッチしない入力はそのまま保存（正規化失敗は許容、text 保存）。"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "office_id"
+    resolved: false
+    notes: "Dr.JOY 管理画面で確認。フローJSONには不要（Dr.JOY 側設定事項）"
+  - item: "IVR 着信電話番号（ARS番号）"
+    resolved: false
+    notes: "Brekeke 設定時に配線。設計書には含めない"
+  - item: "非通知アナウンス文言（テンプレデフォルト使用可否）"
+    resolved: false
+    notes: "Gen2 プロンプトに記載なし。テンプレデフォルト（『電話番号を通知しておかけ直しください』）で進めるが、施設固有文言があれば差し替え"
+  - item: "時間外アナウンス文言（テンプレデフォルト使用可否）"
+    resolved: false
+    notes: "Gen2 プロンプトに記載なし。テンプレデフォルト（『ただいまの時間は受付時間外です』）で進めるが、代表電話番号案内を含めるか確認"
+  - item: "グループ名（Brekeke 上のグループ名）"
+    resolved: false
+    notes: "元資料にグループ名の明示なし。施設名と同一値（『沖縄県立南部医療センター・こども医療センター』）で仮設定。Brekeke 側で別名を使っている場合は差し替え"
+  - item: "SMS 送信文面（END_終話1 / END_終話2 対応）"
+    resolved: false
+    notes: "Dr.JOY 管理画面から設定。フロー側は smsFlag=1 のフラグのみ送出"
+  - item: "営業時間スケジュール（日曜祝日・年末年始の休止設定）"
+    resolved: false
+    notes: "月〜土 8:30〜12:00、日祝・年末年始休止。Dr.JOY 管理画面から設定。フロー側は acceptance_times モジュール配置のみ"

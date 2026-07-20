@@ -1,0 +1,513 @@
+# 設計書テンプレート（YAML形式）
+# このファイルをコピーして docs/designs/設計書_{施設名}_{フロー名}.yaml として保存し、各項目を埋めてください。
+# "" の部分はすべて実際の値に置き換えてください。
+# "TODO_要確認" の項目は confirmation_items にも列挙してください。
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: ""               # 施設名（例: 〇〇病院）
+  scenario_name: ""               # シナリオ識別子（例: 診療 / 健診 / 地域連携 / 薬剤部 / 病棟）。orchestrator の state.flow / ブランチ名 / 成果物ファイル名に使用
+  group_name: ""                  # Brekeke上のグループ名。末尾に作業日 _YYYYMMDD を必ず付ける（例: 〇〇CL_診療_20260604）。日付はグループ名のみ・フロー名には付けない（naming_convention.md / E-16）
+  flow_name: ""                   # メインフロー名（「グループ名$シナリオ名」形式）。$ より前は group_name と完全一致（T-2d）、$ 以降は scenario_name と完全一致（T-2b）。例: 〇〇CL_診療_20260604$診療
+  target_facility: ""             # 対応施設（例: 本院のみ / 複数施設の場合は列挙）
+  office_id: "TODO_要確認"        # 施設ID
+  phone_number: ""                # 対応電話番号
+  business_hours: ""              # 営業時間（例: 祝日除く月〜土 9:00〜17:00 / なし）
+  flow_type: "1flow"              # 1flow（Gen3 slot型・新規作成既定） | subflow（Gen2移管・明示指定時）
+  work_type: "new"                # new | modify | gen2_migration | gen1_migration
+  environment: "demo"             # demo | prod
+
+  # プラットフォーム選択（施設単位で統一。設計前段の資料・指示で明示された選択を director が転記する）
+  tts_platform: "GOOGLE"          # GOOGLE | AI_TALK（AI_TALK は本番稼働後の施設でのみ。APIキー別途設定要）
+  stt_platform: "AMIVOICE"        # AMIVOICE | SONIOX（SONIOX は将来。AMIVOICE がデフォルト）
+  openai_platform: "OPENAI"       # OPENAI | AZURE（AZURE は顧客要件で Azure OpenAI 必須の案件のみ）
+
+# --- セクション2: フロー構成 ---
+# モジュール選定ガイドのセクション0に従い選択。
+#
+# ★ Gen 3（新規作成・既定）: flow_type="1flow" + scenario_flow に type: slot を使う。
+#   氏名=slot: patient_name / 生年月日=slot: date_of_birth / 電話=slot: phone / 診察券=slot: card_number
+#   scaffold_generator が認定スクリプトでインライン展開。サブフロー不要・OpenAI 不使用。
+#
+# ★ サブフロー分割型（Gen2/Gen1移管・明示指定時のみ）:
+#   flow_type="subflow" + flow_structure.subflows[] に個人情報サブフローを列挙。
+#   docs/reference/bivr/samples/個人情報サブフロー.bivr を完全コピー（構造変更禁止）。
+#
+# ★ termination（終話方式）:
+#   - return（デフォルト）: サブフローは結果を返却してメインフローに戻る。
+#   - self_contained: サブフロー内で終話チェーンまで完結（smsFlag分岐等）。
+#   記載がない場合は return として扱う。
+flow_structure:
+  type: "1flow"                   # 1flow（Gen3 slot型・新規作成既定） | subflow（Gen2移管・明示指定時）
+  flows:
+    - name: ""                    # フロー名（Brekeke）
+      role: "main"                # main | sub
+      description: ""             # 概要
+  subflows:
+    - name: ""                    # サブフロー名（Brekeke）
+      target: ""                  # 聴取対象（例: 氏名聴取 / 生年月日聴取 / 電話番号聴取 / 診察券番号聴取）
+      recitation: "あり"          # あり | なし（生年月日聴取・電話番号聴取のみ適用。それ以外は無視）
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"       # return（メインフロー返却 — デフォルト）| self_contained（サブフロー内完結 — 終話チェーンを含む場合のみ）
+      notes: ""
+
+# --- セクション3: フローの目的 ---
+purpose: ""
+# このボイスボットが何をするのかを簡潔に記述。
+# 例: 患者からの電話を受け、用件・診療科・患者情報を聴取して折り返し受付を自動化する。
+
+# --- セクション4: シナリオフロー図 ---
+# フローごとにASCII図で記述。
+flow_diagrams:
+  - flow_name: ""                 # 対象フロー名
+    diagram: |
+      冒頭(wait)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → 非通知_アナウンス(TTS) → 完了フラグ_非通知 → 切断
+            ├─ 海外   → （必要に応じて）
+            └─ 通常   → 営業時間チェック(acceptance_times)
+                          ├─ 時間外 → 時間外_アナウンス(TTS) → 完了フラグ_時間外 → 切断
+                          └─ 受付可 → 冒頭_アナウンス(TTS)
+                                        └─ {ここから本フローの聴取ステップ}
+                                              └─ 終話(TTS) → 完了フラグ → 切断
+    notes: ""
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+# フローの全体構造をブロック型の列として定義する。
+# scaffold_generator がブロック単位で JSON を生成し、merge_blocks.py で1行 JSON に結合する。
+# generator は各ブロックを独立して処理するため、ブロック間の会話コンテキストは共有されない。
+#
+# ブロック型一覧:
+#   opening                 : 冒頭（wait + saveContextModel2DB + incoming-classifier + [acceptance_times] + TTS）
+#   announcement            : 発話のみ（TTS + save2db → next）
+#   hearing                 : 聴取（TTS + STT + [OpenAI] + Retry + save2db）
+#   subflow                 : サブフロー呼出（Custom Jump to Flow）
+#   context_match_router    : コンテキスト値で分岐（reference_module でどのモジュール出力を参照するか指定）
+#   script                  : Script モジュールで分岐（用件判定・phonetype判定等）
+#   date_of_call_classifier : 受付時間・曜日判定で分岐
+#   call_transfer           : 担当者への転送（成功→status=3、失敗→status=9、END_転送成功/失敗を自動生成）
+#   termination             : 終話（saveCompletionFlag2db + TTS + Disconnect。セクション8の定義を参照）
+#
+# 各ブロック共通フィールド:
+#   step     : ブロック名（モジュール命名のベースになる）
+#   type     : ブロック型（上記のいずれか）
+#   next     : 次のブロックの step 名（単線遷移の場合）
+#   conditions: 分岐先の定義（分岐がある場合。next の代わりに使用）
+#
+# 分岐ブロック固有フィールド:
+#   reference_module : ContextMatchRouter/Script が参照するモジュール名（出力値の取得元）
+#
+# hearing ブロック固有フィールド:
+#   output_format      : datetime | text | enum（モジュール選定ガイド 2.4.1 参照）
+#   retry_failure      : skip（次へ進む）| end_failure（聴取失敗終話）| disconnect（切断）
+#   no_result_default  : NO_RESULT 時に save_to に保存する固定値（診療科の「登録なし」等。モジュール選定ガイド 2.5 参照）
+#
+# termination ブロック固有フィールド:
+#   termination_ref  : セクション8 termination_patterns の name を参照
+#
+scenario_flow:
+  # --- 冒頭ブロック ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true     # true=営業時間チェックあり / false=なし
+    next: ""                       # 冒頭アナウンス or 最初の聴取ステップ
+
+  # --- 発話ブロック（例）---
+  # - step: 冒頭_アナウンス
+  #   type: announcement
+  #   next: ""                     # 次のブロック
+
+  # --- 聴取ブロック（例: enum分岐あり）---
+  # - step: 用件確認
+  #   type: hearing
+  #   output_format: enum
+  #   conditions:                  # enum の場合は conditions で分岐先を定義
+  #     - match: "予約"
+  #       next: ""
+  #     - match: "変更"
+  #       next: ""
+  #     - match: "キャンセル"
+  #       next: ""
+
+  # --- 聴取ブロック（例: datetime単線）---
+  # - step: 予約日
+  #   type: hearing
+  #   output_format: datetime
+  #   next: ""                     # 次のブロック
+  #   retry_failure: skip          # skip | end_failure | disconnect
+
+  # --- 聴取ブロック（例: text単線）---
+  # - step: 理由
+  #   type: hearing
+  #   output_format: text
+  #   next: ""
+
+  # --- 聴取ブロック（例: 診療科 — no_result で「登録なし」を保存してリトライ）---
+  # - step: 診療科
+  #   type: hearing
+  #   output_format: enum
+  #   no_result_default: "登録なし"   # ← 診療科は必須。モジュール選定ガイド 2.5
+  #   conditions:
+  #     - match: "病理診断科"
+  #       next: END_病理診断科案内
+  #     - match: "default"
+  #       next: 次のステップ
+
+  # --- サブフローブロック（例）---
+  # - step: jump_個人情報聴取
+  #   type: subflow
+  #   flowname: "{group}$個人情報聴取"
+  #   next: ""                     # サブフロー完了後の遷移先
+
+  # --- RAG サブフローブロック（例: rag_subflow.pattern != none の場合は必須）---
+  # - step: jump_RAG検索
+  #   type: subflow
+  #   flowname: "{group}$RAG検索"
+  #   next: ""                     # RAG 回答後の遷移先（通常は次の聴取 or 終話チェーン）
+  # ※ rag_subflow セクションだけ設定しても scenario_flow に subflow ブロックがないと
+  #   scaffold は RAG への jump モジュールを生成しない
+
+  # --- 分岐ブロック: ContextMatchRouter（例）---
+  # - step: 終話分岐_電話種別
+  #   type: context_match_router
+  #   reference_module: "phonetype" # どのモジュール出力を参照するか（設計書で明示必須）
+  #   conditions:
+  #     - match: "1"               # 携帯
+  #       next: ""
+  #     - match: "2"               # 固定/その他
+  #       next: ""
+
+  # --- 分岐ブロック: Script（例）---
+  # - step: 終話分岐_用件
+  #   type: script
+  #   reference_module: "OpenAI_用件確認"
+  #   conditions:
+  #     - match: "予約"
+  #       next: ""
+  #     - match: "変更"
+  #       next: ""
+
+  # --- 分岐ブロック: 受付時間判定（例）---
+  # - step: 曜日判定
+  #   type: date_of_call_classifier
+  #   conditions:
+  #     - match: "時間外"
+  #       next: ""                 # 時間外終話
+  #     - match: "受付可"
+  #       next: ""                 # 通常フローへ
+
+  # --- 分岐ブロック: Script モジュール（テンプレート利用）---
+  # - step: 営業日判定
+  #   type: script
+  #   script_template: future_date    # future_date | phone_type | day_of_week | business_hours | custom
+  #   reference_module: "OpenAI_希望日"  # {{INPUT_MODULE}} に自動置換
+  #   template_params: {}              # business_hours の場合: {START_HOUR: 9, END_HOUR: 17}
+  #   conditions:
+  #     - match: "SUCCESS"
+  #       next: ""
+  #     - match: "FAIL"
+  #       next: ""
+
+  # --- 転送ブロック: Call Transfer（例）---
+  # - step: 担当者へ転送
+  #   type: call_transfer
+  #   transfer_type: "Blind Transfer"  # Attended Transfer | Blind Transfer | Media Before Answer
+  #   on_failure_announcement: ""      # 省略時はデフォルト文言を埋め込み
+  #   # 転送先電話番号は人間が後から IVR プロパティで設定（params.number は空文字）
+  #   # call_transfer がある場合、status=3(転送成功)/9(転送失敗) と
+  #   # END_転送成功 / END_転送失敗 終話チェーンが scaffold で自動追加される
+
+  # --- 終話ブロック（例）---
+  # - step: END_受付完了_携帯
+  #   type: termination
+  #   termination_ref: "END_受付完了_携帯"  # セクション8 の name を参照
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+# Dr.JOY画面に表示される項目の定義。
+# contextDisplayType: CLASSIFICATION | DEPARTMENT | TEXT | NUMBER | DATE_OF_BIRTH | PHONE_NUMBER | PHONE_NUMBER_CALL | DATE | STATUS
+# itemDefault: true=Dr.JOYデフォルト項目, false=フロー固有項目
+# Dr.JOYデフォルト項目は deletable: false 固定（削除・値の変更禁止。rangeValues のみカスタマイズ可）
+# telephoneNumber / dateOfCall はシステムが自動取得する項目（editable: false）
+# 仕様準拠: docs/brekeke/モジュール詳細設定ガイド_1.md §デフォルト項目 / §案件固有フィールド
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:                 # CLASSIFICATION/DEPARTMENT/STATUS の場合に設定
+      - id: "1"
+        order: "1"
+        value: ""                 # 例: 初診
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件区分。フロー固有の値を設定"
+
+  - context_name: "patientName"
+    context_name_jp: "患者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values: []             # 案件の診療科リストに合わせて設定
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "rangeValues は施設の診療科一覧から作成"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日(和暦)"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+
+  - context_name: "reason"
+    context_name_jp: "理由"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+
+  - context_name: "reservationDate"
+    context_name_jp: "予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false              # システム自動取得のため編集不可
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "聴取する電話番号"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "転送"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=未処理 2=代表案内 3=転送 6=時間外"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false              # システム自動取得のため編集不可
+    deletable: false
+    notes: ""
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false          # 案件固有フィールド扱い（itemDefault: false で追加）
+    editable: true
+    deletable: false
+    notes: "システム固定値。displayType/itemDefault/deletable は変更不可（scaffold 側でも強制上書き）"
+
+  # 施設固有フィールド（itemDefault: false, deletable: false）はここに追加
+
+# --- セクション6: 聴取項目一覧 ---
+# STTタイプ選択基準（モジュール選定ガイド 2.3 参照）:
+#   DTMF入力を受け付ける項目 → DTMF_AmiVoice
+#   音声のみの項目（氏名・自由発話など）→ AmiVoice_STT
+hearing_items:
+  - order: 1
+    name: ""                      # 聴取項目名（例: 用件確認）
+    stt_type: "DTMF_AmiVoice"    # DTMF_AmiVoice | AmiVoice_STT
+    dtmf_max_length: 1            # DTMF最大桁数（AmiVoice_STTの場合はnull）
+    retry_count: 2                # リトライ回数
+    echo_back: false              # true=復唱確認あり（Re-confirmation node data + 復唱STT + 復唱OpenAI）
+    save_to: ""                   # 保存先contextName
+    openai_processing: "classify" # classify | judge | normalize | convert | summarize | none
+    output_format: "enum"         # enum | datetime | text（モジュール選定ガイド 2.4.1 参照）
+                                  #   enum: OpenAI必須 + next多分岐（用件確認、診療科等）
+                                  #   datetime: OpenAI必須 + YYYY-MM-DD HH:MM正規化（予約日等）
+                                  #   text: OpenAI不要 + 自由テキスト保存（理由、症状等）
+    output_labels:                # enum の場合: 分岐ラベル（Single Source of Truth — next配列・promptの両方がこの値を参照）
+      - ""                        # 例: 予約
+      - ""                        # 例: 問い合わせ
+    notes: ""                     # 例: DTMF 1=予約, 2=問い合わせ
+    # ⚠️ stt_type が DTMF_AmiVoice の場合、notes に「DTMF {番号}={意味}」の対応を必ず記載すること（QA I-6）
+    # 例: "DTMF 1=予約取得, 2=変更, 3=キャンセル"
+    # Gen2移管時にDTMF対応表がない場合: Gen2の分岐選択肢に1から順番を振って記載する
+
+# --- セクション7: ステップ詳細 ---
+# 各聴取項目のアナウンス文言・正規化ルール・分岐先を定義。
+step_details:
+  - step_name: ""                 # ステップ名（例: 用件確認）
+    tts_announcement: ""          # TTS発話テキスト
+    input_method: "dtmf_voice"    # dtmf_voice | voice_only
+    openai_rules:
+      output_values:              # OpenAI出力値リスト
+        - ""
+      mapping:                    # 入力→出力マッピング
+        - input: ""               # 例: DTMF 1 または「予約」を含む
+          output: ""              # 例: 予約
+      no_result_condition: ""     # NO_RESULTとなる条件（例: 上記いずれにも該当しない）
+    save_to: ""                   # 保存先contextName
+    next_step: ""                 # 次のモジュール名
+    retry_failure: "end_failure"  # skip | end_failure | disconnect（モジュール選定ガイド 2.6 参照）
+    retry_failure_announcement: "" # リトライ失敗時のカスタム文言（省略時はscaffoldデフォルト）
+                                  # デフォルト: end_failure → {tts_g:ご回答の確認ができませんでしたので...}、skip → 空欄（無言で次へ）
+
+# --- セクション8: 終話パターン ---
+# 以下の異常系3パターンはデフォルトで必ず含めること（削除禁止）。
+# Gen2移管時にGen2プロンプトに記載がなくても、第3世代では必須。
+# tts_announcement が施設固有の場合は顧客資料から転記し、不明な場合はデフォルト文言をそのまま使用する。
+termination_patterns:
+  # --- 異常系（デフォルト必須 — 削除禁止）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+  # --- 正常系（施設ごとに追加・編集する）---
+  - name: ""                      # 終話名（例: END_受付完了）
+    condition: ""                 # 条件（例: 全聴取完了 かつ 携帯）
+    tts_announcement: ""          # TTSアナウンス文言
+    status: "1"                   # saveCompletionFlag2db の status値
+    sms_flag: "1"                 # smsFlag値（-1=SMS送信なし）
+    completion_flag_name: ""      # 完了フラグ変数名（例: 完了フラグ_受付完了）
+
+# smsFlag分岐設計（複数パターンがある場合）
+sms_flag_routing:
+  enabled: false                  # true=ContextMatchRouter/Scriptで分岐
+  routing_keys: []                # 分岐キーとなるcontextName群（例: [clinicalDepartment, classification]）
+  patterns: []                    # [{condition: "...", sms_flag: "1", notes: ""}]
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+# RAGサブフローの配置パターン。CLAUDE.md Rule 16 参照。
+# パターン1: 問い合わせフロー内にRAGサブフローのみ（新規作成・修正のデフォルト）
+# パターン2: 全終話前に「最後にご質問は？」RAGサブフロー（Gen1→Gen3移管のデフォルト）
+# パターン3: パターン1+2の複合（Gen2→Gen3移管のデフォルト）
+# none: RAGサブフローなし
+rag_subflow:
+  pattern: "none"                   # none | 1 | 2 | 3
+  inquiry_insertion_point: ""       # パターン1,3: RAGサブフローを挿入するステップ名（例: 用件_その他問合せの後）
+  pre_termination: false            # パターン2,3: true=全終話前にRAGサブフローを配置
+
+# --- セクション8c: Dr.JOY 電話帳エントリ ---
+# 電話帳ベースの送信元判定（incoming-category-classifier / Phone2Name 等）を使う場合のみ enabled: true。
+# 未使用なら enabled: false（または phonebook セクション自体を省略）でよい。enabled: true のとき
+# orchestrator の step_phonebook_csv が scripts/gen_phonebook_csv.py を呼んで
+# output/scenarios/{施設}_{flow}/phonebook_{施設}_{flow}.csv を生成し、Dr.JOY 管理画面に
+# インポートできる形式（sample_phonebook_相談室.csv 形式）で出力する。
+# 詳細は docs/reference/incoming_category_examples/README.md / docs/brekeke/モジュール選定ガイド_v2.md §1.4 参照。
+#
+# フリガナは元資料（PDF / customer_doc）に記載がある場合のみ記入。記載がない場合は空欄
+# （CSV 上も空欄で出力 → Dr.JOY 管理画面で人間が補完）。AI 推測でカタカナを埋めることは禁止。
+phonebook:
+  enabled: false                    # true: CSV 自動生成あり / false: スキップ
+  list_labels:                      # リスト1〜5 の運用上の意味付け（CSV には出力されない、ドキュメンテーション目的）
+    list1: ""                       # 例: "薬局カテゴリ"
+    list2: ""
+    list3: ""
+    list4: ""
+    list5: ""
+  entries:
+    - phone_number: ""              # ハイフン無し国内番号（例: "0333205751"）
+      name: ""                      # 氏名 / 施設名 / 薬局名（例: "クオール薬局"）
+      furigana: ""                  # カタカナ表記。元資料に記載があれば記入、無ければ空欄（推測禁止）
+      blacklist: 0                  # 0 = 通常 / 1 = ブラックリスト
+      list1: 0                      # 1 = 該当 / 0 = 非該当
+      list2: 0
+      list3: 0
+      list4: 0
+      list5: 0
+      notification: 0               # 0 = 入電通知なし / 1 = あり
+
+# --- セクション9: TTSモジュール一覧 ---
+# IVRプロパティに記載するモジュール名の一覧。モジュール名とプロパティ名の完全一致が必須。
+tts_modules:
+  - module_name: ""               # モジュール名（例: 冒頭_アナウンス）
+    purpose: ""                   # 用途（例: 冒頭施設案内）
+    announcement: ""              # アナウンス文言（要確認の場合は "TODO_要確認"）
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+# STTモジュールに設定する辞書単語。フォーマット: "表記 よみがな"（半角スペース区切り、改行区切り）
+amivoice_dictionary:
+  - step_name: ""                 # 対象ステップ名（例: 用件確認）
+    words: |
+      表記 よみがな
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - ""                            # 施設固有の制約や注意点
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+# generatorへの入力前に人間が確認・埋めるべき項目。
+confirmation_items:
+  - item: "営業時間（曜日・時間帯）"
+    resolved: false
+  - item: "時間外アナウンスの文言"
+    resolved: false
+  - item: "非通知アナウンスの文言"
+    resolved: false
+  - item: "office_id"
+    resolved: false
+  - item: "smsFlag の割り当て"
+    resolved: false

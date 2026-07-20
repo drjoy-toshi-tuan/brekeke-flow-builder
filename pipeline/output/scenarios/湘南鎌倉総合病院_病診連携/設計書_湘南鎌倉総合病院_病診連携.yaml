@@ -1,0 +1,537 @@
+# 設計書 -- 湘南鎌倉総合病院 病診連携
+# 生成元: @director エージェント
+# 生成日: 2026/04/30
+# 確認レポート: docs/designs/確認レポート_湘南鎌倉総合病院_病診連携_20260430.md
+# 元資料: commubo抽出/【001】湘南鎌倉総合病院/【0001湘南鎌倉総合病院】病診連携1_M_本番/
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "湘南鎌倉総合病院"
+  scenario_name: "病診連携"
+  group_name: "湘南鎌倉総合病院"
+  flow_name: "湘南鎌倉総合病院$病診連携"
+  target_facility: "湘南鎌倉総合病院（病診連携室）"
+  office_id: "TODO_要確認"
+  phone_number: "TODO_要確認"   # 元資料に発信元代表電話の明記なし。callbackボットのため受発両用は別途確認
+  business_hours: "なし（callbackボット 24時間運用）"
+  flow_type: "subflow"
+  work_type: "gen1_migration"
+  environment: "prod"
+
+  # プラットフォーム選択
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+# callbackボット: 院内代表が出られなかった架電を AI が一次受けして用件・連絡先を記録するシナリオ。
+# 用件分類による分岐は無し（単一フロー直線構造）。
+# 個人情報の聴取は連絡先電話番号のみ（氏名・生年月日・診察券番号は無し）。
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "湘南鎌倉総合病院$病診連携"
+      role: "main"
+      description: "callback冒頭挨拶 → 施設情報（医療機関・部署・担当者名）→ 連絡先電話番号 → 緊急時携帯番号 → 用件 → 終話"
+  subflows:
+    - name: "湘南鎌倉総合病院$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。電話番号聴取サブフロー（復唱あり）をリファレンスから完全コピー。phonetypeを保存"
+
+# --- セクション3: フローの目的 ---
+purpose: "湘南鎌倉総合病院 病診連携室の callback ボイスボット。院内代表電話で繋がらなかった医療機関・施設からの架電を AI が一次受けし、医療機関名・部署・担当者名・連絡先電話番号・緊急時携帯番号・用件を聴取して、担当者からの折り返し連絡に必要な情報を Dr.JOY に記録する。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "湘南鎌倉総合病院$病診連携"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → END_非通知(TTS) → 完了フラグ_非通知(status=2) → 切断
+            └─ 通常（携帯/固定/その他/WebRTC）→ 冒頭_アナウンス(TTS, callbackメッセージ)
+                  → はじめに_アナウンス(TTS, "はじめに、")
+                  → 施設情報_聴取(TTS) → 入力_施設情報(AmiVoice STT) → OpenAI_施設情報(text正規化) → リトライ_施設情報
+                        ├─ success → では次に_アナウンス(TTS, "では次に、")
+                        └─ No more → END_聴取失敗(status=3) → 切断
+                  → では次に_アナウンス(TTS)
+                  → 電話番号聴取(Custom Jump to Flow → サブフロー)
+                        ├─ 完了 → 携帯番号_聴取
+                        └─ retry失敗 → 連絡先聞き取り不可_アナウンス(TTS) → 携帯番号_聴取
+                              ※ Gen3標準サブフローでは retry 失敗時の親フロー復帰経路が
+                                サブフロー内で完結するため、Brekeke UI で手動配線が必要
+                                （confirmation_items 参照）
+                  → 携帯番号_聴取(TTS+DTMF AmiVoice STT) → OpenAI_携帯番号(text正規化) → リトライ_携帯番号
+                        ├─ success → それでは_アナウンス
+                        └─ No more → それでは_アナウンス（skip: 緊急連絡先は任意項目）
+                  → それでは_アナウンス(TTS, "それでは、")
+                  → 用件_聴取(TTS) → 入力_用件(AmiVoice STT) → OpenAI_用件(text正規化) → リトライ_用件
+                        ├─ success → END_受付完了(TTS) → 完了フラグ_受付完了(status=1, smsFlag=-1) → 切断
+                        └─ No more → END_聴取失敗(status=3) → 切断
+
+      ─── 終話パターン一覧 ───
+      END_非通知(status=2, smsFlag=-1) → 切断
+      END_聴取失敗(status=3, smsFlag=-1) → 切断
+      END_受付完了(status=1, smsFlag=-1) → 切断
+    notes: |
+      callbackボット仕様のため acceptance_times（受付時間判定）は不要。24時間受付。
+      用件分類による分岐は無し（用件は記録のみ）。
+      連絡先電話番号聴取サブフローは復唱あり。phonetype は context に保存されるが分岐に使わない（SMS送信なし）。
+      携帯緊急連絡先は phone subflow の後段に独立 hearing ブロックとして配置。
+      電話番号聴取サブフローの retry 失敗時の親フロー連結は Brekeke UI 手動配線（confirmation_items 参照）。
+
+  - flow_name: "湘南鎌倉総合病院$電話番号聴取"
+    diagram: |
+      ★★★ 完全コピー対象（CLAUDE.md Rule 9） ★★★
+      docs/reference/bivr/samples/json/電話番号聴取_復唱あり.json を完全コピーする。
+      フロー名プレフィックスのみ「湘南鎌倉総合病院$」に置換。構造・接続・スクリプトは一切変更不可。
+    notes: "CLAUDE.md Rule 9/10/11 準拠。電話番号聴取サブフロー（復唱あり）を完全コピー"
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭ブロック ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: false
+    next: 冒頭_アナウンス
+
+  # --- 冒頭アナウンス（callback メッセージ）---
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: はじめに_アナウンス
+
+  # --- "はじめに、" 前置き ---
+  - step: はじめに_アナウンス
+    type: announcement
+    next: 施設情報_聴取
+
+  # --- 施設情報聴取（医療機関名・部署・担当者名を1ブロックで合成聴取）---
+  - step: 施設情報_聴取
+    type: hearing
+    output_format: text
+    save_to: organizationContact
+    retry_failure: end_failure
+    next: では次に_アナウンス
+
+  # --- "では次に、" 前置き ---
+  - step: では次に_アナウンス
+    type: announcement
+    next: 電話番号聴取
+
+  # --- 電話番号聴取サブフロー ---
+  - step: 電話番号聴取
+    type: subflow
+    flowname: "湘南鎌倉総合病院$電話番号聴取"
+    next: 携帯番号_聴取
+
+  # --- 緊急時携帯番号聴取（phone subflow の後段に独立配置）---
+  # text format: 数字または「持っていない」を受け付ける。OpenAI正規化は最小限
+  - step: 携帯番号_聴取
+    type: hearing
+    output_format: text
+    save_to: emergencyMobileNumber
+    retry_failure: skip          # 緊急連絡先は任意項目。失敗時は無言で次へ進む
+    next: それでは_アナウンス
+
+  # --- "それでは、" 前置き ---
+  - step: それでは_アナウンス
+    type: announcement
+    next: 用件_聴取
+
+  # --- 用件聴取（自由文記録のみ。分岐なし）---
+  - step: 用件_聴取
+    type: hearing
+    output_format: text
+    save_to: details
+    retry_failure: end_failure
+    next: END_受付完了
+
+  # --- 終話 ---
+  - step: END_受付完了
+    type: termination
+    termination_ref: "END_受付完了"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "organizationContact"
+    context_name_jp: "施設・部署・担当者"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "医療機関名・所属部署・担当者名を1自由文として保存（Gen1の合成聴取をそのまま転記）"
+
+  - context_name: "emergencyMobileNumber"
+    context_name_jp: "緊急時携帯番号"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "緊急連絡用の携帯電話番号。「持っていない」と回答された場合はその旨を保存"
+
+  - context_name: "details"
+    context_name_jp: "用件"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件を自由文として記録。分岐には使わず、担当者が運用で読む"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "電話番号聴取サブフローで保存される連絡先電話番号"
+
+  - context_name: "phonetype"
+    context_name_jp: "電話種別"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "電話番号聴取サブフローが保存（携帯/固定/IP/フリー）。本フローでは分岐に使わないが Dr.JOY 側で参考情報として保持"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "聴取失敗"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=未処理(正常受付完了) 2=代表案内(非通知) 3=聴取失敗(リトライ上限) 6=時間外(本フロー未使用)"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "受電日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "施設情報_聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "organizationContact"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "医療機関名・所属部署・担当者名を1発話で受ける合成聴取。1自由文として organizationContact に保存。OpenAIは最小限の整形のみ（分類なし）"
+
+  - order: 2
+    name: "携帯番号_聴取"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 11
+    retry_count: 2
+    echo_back: false
+    save_to: "emergencyMobileNumber"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "緊急時の連絡先として携帯番号を任意聴取。「持っていない」も text としてそのまま保存。DTMF対応表: 数字キー(0-9)で電話番号を入力。retry_failure: skip（任意項目のため）"
+
+  - order: 3
+    name: "用件_聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "details"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "用件を自由文記録。分岐なし。OpenAIは最小限の整形のみ（分類なし）"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "冒頭_アナウンス"
+    tts_announcement: "お呼び出ししましたが、お繋ぎできませんでした。AI電話がご用件をお伺いし、担当者から折り返し電話連絡いたします。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: ""
+    next_step: "はじめに_アナウンス"
+    retry_failure: "skip"
+
+  - step_name: "はじめに_アナウンス"
+    tts_announcement: "はじめに、"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: ""
+    next_step: "施設情報_聴取"
+    retry_failure: "skip"
+
+  - step_name: "施設情報_聴取"
+    tts_announcement: "医療機関名、所属部署、お名前をおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "施設情報テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "施設情報テキスト（医療機関名・部署・担当者名を含む自由文）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "organizationContact"
+    next_step: "では次に_アナウンス"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "では次に_アナウンス"
+    tts_announcement: "では次に、"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: ""
+    next_step: "電話番号聴取"
+    retry_failure: "skip"
+
+  - step_name: "携帯番号_聴取"
+    tts_announcement: "緊急時の連絡方法として、携帯電話の番号をお伺いしています。携帯電話をお持ちの場合は、番号をおっしゃってください。お持ちでない場合は「持っていない」とおっしゃってください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "携帯番号テキスト"
+      mapping:
+        - input: "10〜11桁の数値"
+          output: "正規化済み携帯番号"
+        - input: "「持っていない」「ない」「ありません」等"
+          output: "持っていない"
+      no_result_condition: "音声認識結果が空"
+    save_to: "emergencyMobileNumber"
+    next_step: "それでは_アナウンス"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "それでは_アナウンス"
+    tts_announcement: "それでは、"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: ""
+    next_step: "用件_聴取"
+    retry_failure: "skip"
+
+  - step_name: "用件_聴取"
+    tts_announcement: "ご用件を簡潔におっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "用件テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "用件テキスト（自由文そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "details"
+    next_step: "END_受付完了"
+    retry_failure: "end_failure"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須 -- 削除禁止）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外（本フロー未使用 — 24時間受付）"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達（施設情報聴取または用件聴取が失敗）"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+  # --- 正常系 ---
+  - name: "END_受付完了"
+    condition: "全聴取完了（施設情報・電話番号・携帯番号・用件）"
+    tts_announcement: "ご用件を承りました。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_受付完了"
+
+# smsFlag分岐設計（本フローでは SMS 送信なし）
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+# Gen1 元資料に FAQ/RAG 関連箱は存在しないため none。
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "callback挨拶（呼び出し失敗→AI受付に切り替えた旨を伝える）"
+    announcement: "お呼び出ししましたが、お繋ぎできませんでした。AI電話がご用件をお伺いし、担当者から折り返し電話連絡いたします。"
+
+  - module_name: "はじめに_アナウンス"
+    purpose: "施設情報聴取への前置き"
+    announcement: "はじめに、"
+
+  - module_name: "施設情報_聴取"
+    purpose: "医療機関名・部署・担当者名の合成聴取"
+    announcement: "医療機関名、所属部署、お名前をおっしゃってください。"
+
+  - module_name: "では次に_アナウンス"
+    purpose: "電話番号聴取への前置き"
+    announcement: "では次に、"
+
+  - module_name: "携帯番号_聴取"
+    purpose: "緊急時携帯番号の任意聴取"
+    announcement: "緊急時の連絡方法として、携帯電話の番号をお伺いしています。携帯電話をお持ちの場合は、番号をおっしゃってください。お持ちでない場合は「持っていない」とおっしゃってください。"
+
+  - module_name: "それでは_アナウンス"
+    purpose: "用件聴取への前置き"
+    announcement: "それでは、"
+
+  - module_name: "用件_聴取"
+    purpose: "用件の自由文聴取"
+    announcement: "ご用件を簡潔におっしゃってください。"
+
+  - module_name: "END_受付完了"
+    purpose: "正常終話"
+    announcement: "ご用件を承りました。お電話ありがとうございました。"
+
+  - module_name: "END_非通知"
+    purpose: "非通知終話"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ上限終話"
+    announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "連絡先聞き取り不可_アナウンス"
+    purpose: "電話番号聴取サブフローのretry失敗時に出すアナウンス（Brekeke UI 手動配線必要）"
+    announcement: "大変申し訳ございません、お電話番号を聞き取ることができませんでした。後ほど、担当者にて確認させていただきます。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+# 元資料 entity_classification.md: 47診療科の R1_STT_PROPER_NOUN_GROUP / R2_STT_TEMPLATE_REUSE エントリは
+# 本フロー内に診療科聴取箱が無いため STT 辞書には積まない（director判断、移管ノート §director見落としポイント参照）。
+# 用件 hearing への補助としても、用件は記録のみで分岐に使わないため辞書追加の効果は薄い。
+amivoice_dictionary:
+  - step_name: "施設情報_聴取"
+    words: |
+      湘南鎌倉総合病院 しょうなんかまくらそうごうびょういん
+      地域連携室 ちいきれんけいしつ
+      病診連携 びょうしんれんけい
+      クリニック くりにっく
+      診療所 しんりょうじょ
+      訪問看護ステーション ほうもんかんごすてーしょん
+
+  - step_name: "携帯番号_聴取"
+    words: |
+      持っていない もっていない
+      持ってない もってない
+      ない ない
+      ありません ありません
+
+  - step_name: "用件_聴取"
+    words: |
+      紹介 しょうかい
+      紹介状 しょうかいじょう
+      転院 てんいん
+      逆紹介 ぎゃくしょうかい
+      退院 たいいん
+      検査 けんさ
+      予約 よやく
+      照会 しょうかい
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "callbackボット仕様: 院内代表電話で繋がらなかった医療機関・施設からの架電を AI が一次受けする。通常の inbound 受付ではない"
+  - "用件分類による分岐は無し。用件は記録のみ（OpenAI で text 正規化、ContextMatchRouter なし）"
+  - "ヒアリング項目は3つのみ: ①施設情報（医療機関名・部署・担当者名の合成自由文）/ ②連絡先電話番号（subflow）/ ③用件（自由文）"
+  - "氏名・生年月日・診察券番号・診療科の聴取は無し（PatientName/DOB/PatientID サブフロー不要）"
+  - "施設情報は1自由文として organizationContact に保存（Gen1 合成聴取をそのまま転記。OpenAI で 3 項目に分割しない）"
+  - "緊急時携帯番号は phone subflow の後段に独立 hearing ブロックとして配置。retry_failure: skip（任意項目）"
+  - "電話番号聴取サブフロー（復唱あり）は CLAUDE.md Rule 9 準拠で完全コピー"
+  - "47 診療科辞書は STT に積まない（フロー内で診療科聴取がないため）"
+  - "acceptance_times（受付時間判定）使用しない（24時間 callback 受付）"
+  - "call_transfer なし（一次受けして折り返しに必要な情報を記録するのみ）"
+  - "SMS送信なし（全終話で sms_flag: -1）"
+  - "phonetype は context に保存されるが本フローでは分岐に使わない（Dr.JOY 側で参考情報として保持）"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "office_id（Dr.JOY管理画面で確認）"
+    resolved: false
+  - item: "対応電話番号（callbackボット用 IVR 着信番号）が設計書に未記載。元資料に明記なし"
+    resolved: false
+  - item: "[電話番号聴取] サブフロー内の retry 上限到達時に '連絡先聞き取り不可_アナウンス' → '携帯番号_聴取' へ合流するよう Brekeke UI で手動配線。Custom Jump to Flow からは親フローの retry 失敗 path を直接配線できないため、サブフロー内の retry_false パスに「連絡先聞き取り不可_アナウンス」TTS を追加するか、サブフロー出口に context フラグを保存して親フローで CMR 分岐させる"
+    status: "TODO"
+    assignee: "人間（Brekeke IVR UI）"
+    resolved: false
+  - item: "施設情報を1自由文（organizationContact）で保存する設計でよいか。元資料記載: 「医療機関名、所属部署、お名前をおっしゃってください。」を1発話で受ける合成聴取。3 context（organizationName / department / personName）に分割する代替案もあり。担当者運用と合わせて要確認"
+    resolved: false
+  - item: "緊急時携帯番号の聴取位置: 連絡先電話番号サブフロー後に常に聞く設計。連絡先が既に携帯（phonetype=携帯）の場合はスキップする CMR 分岐を追加するか確認"
+    resolved: false
+  - item: "緊急時携帯番号の保存先 context 名（emergencyMobileNumber）が運用上わかりやすいか。Dr.JOY 画面表示名「緊急時携帯番号」で問題ないか"
+    resolved: false
+  - item: "47 診療科辞書を STT に積まない判断でよいか（フロー内で診療科聴取が無いため不要と判断）。用件聴取の精度向上目的で追加するか要確認"
+    resolved: false
+  - item: "用件聴取の保存先 context 名（details）でよいか。reason / question / inquiry など別名にするか"
+    resolved: false

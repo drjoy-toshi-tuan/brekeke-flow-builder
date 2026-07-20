@@ -1,0 +1,1543 @@
+# 設計書 — 神栖済生会病院 診療
+# 生成元: @director エージェント（Gen2→Gen3移管）
+# 生成日: 2026/04/20
+# 確認レポート: docs/designs/確認レポート_神栖済生会病院_診療_20260420.md
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "神栖済生会病院"
+  group_name: "神栖済生会病院"
+  flow_name: "神栖済生会病院$診療"
+  target_facility: "本院のみ"
+  office_id: "TODO_要確認"
+  phone_number: "TODO_要確認"
+  business_hours: "なし（24時間受付 / customer_doc に時刻判定なし）"
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "prod"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "神栖済生会病院$診療"
+      role: "main"
+      description: "診療予約・変更・キャンセル・確認を受け付けるメインフロー。用件分岐と診療科分岐を含む"
+  subflows:
+    - name: "神栖済生会病院$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "個人情報サブフロー.bivr の氏名聴取を完全コピー。接続先はメインフロー側で jump_氏名聴取 として参照"
+    - name: "神栖済生会病院$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "復唱必須。DOB Re-confirmation 構成。肺＝はい救済は prompter の Yes/No テンプレ側で同義語追加"
+    - name: "神栖済生会病院$診察券番号聴取"
+      target: "診察券番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "8桁バリデーション＋「わからない／持っていない」分岐を含むサンプルをそのまま使用。桁数不一致は1回だけ再聴取→空文字格納"
+    - name: "神栖済生会病院$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "incoming-classifier で mobile/landline を分岐。mobile は入電番号ショートカット、landline は10/11桁バリデーション＋復唱。smsFlag=1 はデータ格納時に併せて更新"
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  神栖済生会病院の予約専用 AI 電話窓口。
+  患者からの電話を受けて以下の用件を聴取・分岐処理する:
+    - 新規予約（受診歴で新規／再診を判定し、新規は紹介状確認を追加聴取）
+    - 予約変更（診療科・診療科2・現在の予約日・予約希望日）
+    - 予約キャンセル（診療科・診療科2・現在の予約日・理由）
+    - その他問い合わせ（確認内容）
+  診療科が インフルエンザワクチン／コロナウイルスワクチン／予防接種／皮膚科 の場合は受付終了案内で終話する。
+  複数診療科（clinicalDepartment2 が正式名称 or "不明"）を同時受付した場合は status=8 固定。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "神栖済生会病院$診療"
+    diagram: |
+      冒頭(wait)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → 非通知_アナウンス → 完了フラグ_非通知(status=9) → 切断
+            └─ 通常   → 冒頭_アナウンス
+                          → jump_氏名聴取 (サブフロー)
+                            → jump_生年月日聴取 (サブフロー, 復唱あり)
+                              → jump_診察券番号聴取 (サブフロー, 8桁検証＋復唱)
+                                → jump_電話番号聴取 (サブフロー, 携帯/固定分岐＋復唱)
+                                  → 用件聴取 (enum, 復唱あり)
+                                      ├─ 新規   → 受診歴聴取 → (肯定→紹介状確認聴取) → 診療科_新規
+                                      │           → 診療科_新規:
+                                      │               ├─ インフル    → END_インフルエンザ
+                                      │               ├─ コロナ      → END_コロナ
+                                      │               ├─ 予防接種    → END_予防接種
+                                      │               ├─ 皮膚科      → END_皮膚科案内
+                                      │               └─ default     → 予約希望日聴取_新規 → END_予約完了_単一
+                                      │
+                                      ├─ 変更   → 診療科_変更:
+                                      │           ├─ インフル／コロナ／予防接種／皮膚科 → 各終話
+                                      │           └─ default → 診療科2聴取_変更
+                                      │                       ├─ 皮膚科 → END_皮膚科案内
+                                      │                       ├─ 空文字 → 現在の予約日聴取_変更
+                                      │                       └─ default → 現在の予約日聴取_変更
+                                      │                                     → 過去日判定_変更
+                                      │                                         ├─ 過去 → 過去受付不可_変更(TTS) → 予約希望日聴取_変更
+                                      │                                         └─ 未来 → 予約希望日聴取_変更
+                                      │                                     → 分岐_変更終話 (clinicalDepartment2 で分岐)
+                                      │                                         ├─ ""       → END_予約完了_単一
+                                      │                                         └─ default → END_予約完了_複数(status=8)
+                                      │
+                                      ├─ キャンセル → 診療科_キャンセル:
+                                      │           ├─ 皮膚科 → END_皮膚科案内
+                                      │           └─ default → 診療科2聴取_キャンセル
+                                      │                        ├─ 皮膚科 → END_皮膚科案内
+                                      │                        ├─ 空文字 → 現在の予約日聴取_キャンセル
+                                      │                        └─ default → 現在の予約日聴取_キャンセル
+                                      │                                      → 過去日判定_キャンセル
+                                      │                                          ├─ 過去 → 過去受付不可_キャンセル(TTS) → 理由聴取
+                                      │                                          └─ 未来 → 理由聴取
+                                      │                                      → 分岐_キャンセル終話 (clinicalDepartment2 で分岐)
+                                      │                                          ├─ ""      → END_キャンセル完了_単一
+                                      │                                          └─ default → END_キャンセル完了_複数(status=8)
+                                      │
+                                      └─ 確認   → 確認内容聴取 → END_確認完了
+    notes: |
+      - 全 hearing のリトライ失敗時は原則 skip（空文字格納して次へ）。customer_doc の再質問ルール準拠
+      - 診療科の NO_RESULT は "登録なし" を保存してリトライ（モジュール選定ガイド 2.5）
+      - 肺＝はい救済は prompter の Yes/No テンプレで同義語として埋め込む
+      - reason / details は AI からの復唱・同情発話禁止。prompter で明示
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭 ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: false
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: jump_氏名聴取
+
+  # --- サブフロー 4 本 ---
+  - step: jump_氏名聴取
+    type: subflow
+    flowname: "神栖済生会病院$氏名聴取"
+    next: jump_生年月日聴取
+
+  - step: jump_生年月日聴取
+    type: subflow
+    flowname: "神栖済生会病院$生年月日聴取"
+    next: jump_診察券番号聴取
+
+  - step: jump_診察券番号聴取
+    type: subflow
+    flowname: "神栖済生会病院$診察券番号聴取"
+    next: jump_電話番号聴取
+
+  - step: jump_電話番号聴取
+    type: subflow
+    flowname: "神栖済生会病院$電話番号聴取"
+    next: 用件聴取
+
+  # --- 用件聴取（復唱必須）---
+  - step: 用件聴取
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "新規"
+        next: 受診歴聴取
+      - match: "変更"
+        next: 診療科_変更
+      - match: "キャンセル"
+        next: 診療科_キャンセル
+      - match: "確認"
+        next: 確認内容聴取
+
+  # --- 新規ルート ---
+  - step: 受診歴聴取
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "新規"
+        next: 紹介状確認聴取
+      - match: "再診"
+        next: 診療科_新規
+
+  - step: 紹介状確認聴取
+    type: hearing
+    output_format: enum
+    next: 診療科_新規
+
+  - step: 診療科_新規
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    conditions:
+      - match: "インフルエンザワクチン"
+        next: END_インフルエンザ
+      - match: "コロナウイルスワクチン"
+        next: END_コロナ
+      - match: "予防接種"
+        next: END_予防接種
+      - match: "皮膚科"
+        next: END_皮膚科案内
+      - match: "default"
+        next: 予約希望日聴取_新規
+
+  - step: 予約希望日聴取_新規
+    type: hearing
+    output_format: text
+    next: END_予約完了_単一
+
+  # --- 変更ルート ---
+  - step: 診療科_変更
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    conditions:
+      - match: "インフルエンザワクチン"
+        next: END_インフルエンザ
+      - match: "コロナウイルスワクチン"
+        next: END_コロナ
+      - match: "予防接種"
+        next: END_予防接種
+      - match: "皮膚科"
+        next: END_皮膚科案内
+      - match: "default"
+        next: 診療科2聴取_変更
+
+  - step: 診療科2聴取_変更
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "皮膚科"
+        next: END_皮膚科案内
+      - match: "default"
+        next: 現在の予約日聴取_変更
+
+  - step: 現在の予約日聴取_変更
+    type: hearing
+    output_format: datetime
+    next: 過去日判定_変更
+
+  - step: 過去日判定_変更
+    type: script
+    script_template: future_date
+    reference_module: "OpenAI_現在の予約日聴取_変更"
+    conditions:
+      - match: "SUCCESS"
+        next: 予約希望日聴取_変更
+      - match: "FAIL"
+        next: 過去受付不可_変更
+
+  - step: 過去受付不可_変更
+    type: announcement
+    next: 予約希望日聴取_変更
+
+  - step: 予約希望日聴取_変更
+    type: hearing
+    output_format: text
+    next: 分岐_変更終話
+
+  - step: 分岐_変更終話
+    type: context_match_router
+    reference_module: "clinicalDepartment2"
+    conditions:
+      - match: ""
+        next: END_予約完了_単一
+      - match: "default"
+        next: END_予約完了_複数
+
+  # --- キャンセルルート ---
+  - step: 診療科_キャンセル
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    conditions:
+      - match: "皮膚科"
+        next: END_皮膚科案内
+      - match: "default"
+        next: 診療科2聴取_キャンセル
+
+  - step: 診療科2聴取_キャンセル
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "皮膚科"
+        next: END_皮膚科案内
+      - match: "default"
+        next: 現在の予約日聴取_キャンセル
+
+  - step: 現在の予約日聴取_キャンセル
+    type: hearing
+    output_format: datetime
+    next: 過去日判定_キャンセル
+
+  - step: 過去日判定_キャンセル
+    type: script
+    script_template: future_date
+    reference_module: "OpenAI_現在の予約日聴取_キャンセル"
+    conditions:
+      - match: "SUCCESS"
+        next: 理由聴取
+      - match: "FAIL"
+        next: 過去受付不可_キャンセル
+
+  - step: 過去受付不可_キャンセル
+    type: announcement
+    next: 理由聴取
+
+  - step: 理由聴取
+    type: hearing
+    output_format: text
+    next: 分岐_キャンセル終話
+
+  - step: 分岐_キャンセル終話
+    type: context_match_router
+    reference_module: "clinicalDepartment2"
+    conditions:
+      - match: ""
+        next: END_キャンセル完了_単一
+      - match: "default"
+        next: END_キャンセル完了_複数
+
+  # --- 確認ルート ---
+  - step: 確認内容聴取
+    type: hearing
+    output_format: text
+    next: END_確認完了
+
+  # --- 終話 ---
+  - step: END_予約完了_単一
+    type: termination
+    termination_ref: "END_予約完了_単一"
+  - step: END_予約完了_複数
+    type: termination
+    termination_ref: "END_予約完了_複数"
+  - step: END_キャンセル完了_単一
+    type: termination
+    termination_ref: "END_キャンセル完了_単一"
+  - step: END_キャンセル完了_複数
+    type: termination
+    termination_ref: "END_キャンセル完了_複数"
+  - step: END_確認完了
+    type: termination
+    termination_ref: "END_確認完了"
+  - step: END_インフルエンザ
+    type: termination
+    termination_ref: "END_インフルエンザ"
+  - step: END_コロナ
+    type: termination
+    termination_ref: "END_コロナ"
+  - step: END_予防接種
+    type: termination
+    termination_ref: "END_予防接種"
+  - step: END_皮膚科案内
+    type: termination
+    termination_ref: "END_皮膚科案内"
+
+# --- セクション5: コンテキストフィールド一覧 ---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "新規"
+      - id: "2"
+        order: "2"
+        value: "再診"
+      - id: "3"
+        order: "3"
+        value: "変更"
+      - id: "4"
+        order: "4"
+        value: "キャンセル"
+      - id: "5"
+        order: "5"
+        value: "確認"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "受診歴で「新規」「再診」に上書きされる"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "カタカナ格納。「名前は」「です」等のクッション言葉は除外"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "YYYY-MM-DD 00:00"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "8桁半角数字。「わからない／持っていない」時は空文字"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "incoming_phone_number を自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "10/11桁半角数字。mobile 時は incoming_phone_number を流用"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "内科"
+      - id: "2"
+        order: "2"
+        value: "消化器外科"
+      - id: "3"
+        order: "3"
+        value: "小児外科"
+      - id: "4"
+        order: "4"
+        value: "乳腺外科"
+      - id: "5"
+        order: "5"
+        value: "脳神経外科"
+      - id: "6"
+        order: "6"
+        value: "麻酔科"
+      - id: "7"
+        order: "7"
+        value: "甲状腺内分泌"
+      - id: "8"
+        order: "8"
+        value: "整形外科"
+      - id: "9"
+        order: "9"
+        value: "泌尿器科"
+      - id: "10"
+        order: "10"
+        value: "形成外科"
+      - id: "11"
+        order: "11"
+        value: "耳鼻咽喉科"
+      - id: "12"
+        order: "12"
+        value: "皮膚科"
+      - id: "13"
+        order: "13"
+        value: "眼科"
+      - id: "14"
+        order: "14"
+        value: "婦人科"
+      - id: "15"
+        order: "15"
+        value: "禁煙外来"
+      - id: "16"
+        order: "16"
+        value: "リハビリテーション科"
+      - id: "17"
+        order: "17"
+        value: "小児科"
+      - id: "18"
+        order: "18"
+        value: "インフルエンザワクチン"
+      - id: "19"
+        order: "19"
+        value: "コロナウイルスワクチン"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "customer enum 19値。皮膚科は受付終了案内対象、インフル/コロナ/予防接種キーワードは status=7 の終話へ"
+
+  - context_name: "clinicalDepartment2"
+    context_name_jp: "診療科2"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "変更/キャンセル時のみ。正式名称 or 「不明」が入れば status=8 固定、空文字なら status 維持"
+
+  - context_name: "reservationDate"
+    context_name_jp: "現在の予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "YYYY-MM-DD 00:00。変更/キャンセル時のみ。過去日検出時は [予約日過去受付不可] で予約希望日へ戻す"
+
+  - context_name: "desiredreservationDate"
+    context_name_jp: "予約希望日"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "自由テキスト。「連休明け」「夏休み明け」等の相対表現もそのまま格納"
+
+  - context_name: "reason"
+    context_name_jp: "キャンセル理由"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "システム内部記録用。AI は復唱・同情発話禁止"
+
+  - context_name: "details"
+    context_name_jp: "確認内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "システム内部記録用。AI は復唱・言及禁止"
+
+  - context_name: "introduction"
+    context_name_jp: "紹介状"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "「有」「無」「」。新規ルートの受診歴=肯定時のみ聴取"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "受付完了"
+      - id: "2"
+        order: "2"
+        value: "案内"
+      - id: "7"
+        order: "7"
+        value: "予防接種"
+      - id: "8"
+        order: "8"
+        value: "複数診療科"
+      - id: "9"
+        order: "9"
+        value: "非通知"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "Gen2 customer enum を保持。1=受付完了 / 2=案内(皮膚科案内・冒頭切断相当) / 7=予防接種 / 8=複数診療科 / 9=非通知。director.md 規則で Gen2 の 0 は 2 に置換済み"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "用件聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: true
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "新規"
+      - "変更"
+      - "キャンセル"
+      - "確認"
+    notes: |
+      - 復唱必須（customer_doc 2.1）。肺＝はい救済を Yes/No テンプレで対応
+      - キーワード→出力値: 予約/新規/しんき/鍼灸薬/しんきゅうやく/通訳/ようやく/予約/お薬 → 新規、取り直したい/別の日に/変えたい/予約変更 → 変更、やめる/取り消し/キャンセル → キャンセル、確認/問い合わせ/その他 → 確認
+
+  - order: 2
+    name: "受診歴聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "新規"
+      - "再診"
+    notes: |
+      - 肯定／初めて → 新規、否定 → 再診 で classification を上書き
+      - 肺＝はい救済（Yes/No 肯定同義語）
+
+  - order: 3
+    name: "紹介状確認聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "introduction"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "有"
+      - "無"
+    notes: |
+      - 肯定 → 有、否定 → 無
+      - 肺＝はい救済
+
+  - order: 4
+    name: "診療科_新規"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "内科"
+      - "消化器外科"
+      - "小児外科"
+      - "乳腺外科"
+      - "脳神経外科"
+      - "麻酔科"
+      - "甲状腺内分泌"
+      - "整形外科"
+      - "泌尿器科"
+      - "形成外科"
+      - "耳鼻咽喉科"
+      - "皮膚科"
+      - "眼科"
+      - "婦人科"
+      - "禁煙外来"
+      - "リハビリテーション科"
+      - "小児科"
+      - "インフルエンザワクチン"
+      - "コロナウイルスワクチン"
+      - "予防接種"
+    notes: |
+      no_result_default="登録なし"。皮膚科／インフル／コロナ／予防接種は専用終話へ分岐、その他は予約希望日へ。
+      診療科キーワード対応は セクション10 amivoice_dictionary 参照
+
+  - order: 5
+    name: "予約希望日聴取_新規"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "desiredreservationDate"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "自由テキスト格納。「連休明け」等の相対表現もそのまま"
+
+  - order: 6
+    name: "診療科_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "内科"
+      - "消化器外科"
+      - "小児外科"
+      - "乳腺外科"
+      - "脳神経外科"
+      - "麻酔科"
+      - "甲状腺内分泌"
+      - "整形外科"
+      - "泌尿器科"
+      - "形成外科"
+      - "耳鼻咽喉科"
+      - "皮膚科"
+      - "眼科"
+      - "婦人科"
+      - "禁煙外来"
+      - "リハビリテーション科"
+      - "小児科"
+      - "インフルエンザワクチン"
+      - "コロナウイルスワクチン"
+      - "予防接種"
+    notes: "新規と同じ enum。default は診療科2聴取へ"
+
+  - order: 7
+    name: "診療科2聴取_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "clinicalDepartment2"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "皮膚科"
+      - ""
+      - "default"
+    notes: |
+      - 「ないです／ありません」 → 空文字
+      - 「皮膚科／皮膚／肌」 → 皮膚科
+      - 診療科一覧の正式名称 or 不明（その他） → default（scaffold が既定 label として扱う）
+
+  - order: 8
+    name: "現在の予約日聴取_変更"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 8
+    retry_count: 1
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: |
+      - 「4月1日」のように日付で聴取 → YYYY-MM-DD HH:MM 正規化
+      - 過去日時は後段の script(future_date) で検出し [予約日過去受付不可] アナウンスへ
+      - DTMF 対応表（dtmf_max_length=8 / YYYYMMDD 形式）:
+          DTMF 8桁数字 = YYYYMMDD（例: 20260401 → 2026年4月1日）
+          DTMF 4桁数字 = MMDD（例: 0401 → 当年または翌年の4月1日。年は今日基準で未来補完）
+          DTMF 2桁数字 = DD（例: 15 → 当月または翌月の15日。月は今日基準で未来補完）
+          # 終了キー入力（# 押下）で確定。未入力タイムアウト時は音声入力にフォールバック
+
+  - order: 9
+    name: "予約希望日聴取_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "desiredreservationDate"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "自由テキスト"
+
+  - order: 10
+    name: "診療科_キャンセル"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "内科"
+      - "消化器外科"
+      - "小児外科"
+      - "乳腺外科"
+      - "脳神経外科"
+      - "麻酔科"
+      - "甲状腺内分泌"
+      - "整形外科"
+      - "泌尿器科"
+      - "形成外科"
+      - "耳鼻咽喉科"
+      - "皮膚科"
+      - "眼科"
+      - "婦人科"
+      - "禁煙外来"
+      - "リハビリテーション科"
+      - "小児科"
+      - "インフルエンザワクチン"
+      - "コロナウイルスワクチン"
+      - "予防接種"
+    notes: |
+      - キャンセル経路は customer_doc 1.10 準拠で 皮膚科 のみ分岐、他は診療科2へ
+      - インフル/コロナ/予防接種の分岐は仕様上ないが、保守性のため output_labels に残し conditions には含めない
+      - scaffold の conditions は customer_doc 厳守で 皮膚科 のみ分岐を使用
+
+  - order: 11
+    name: "診療科2聴取_キャンセル"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "clinicalDepartment2"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "皮膚科"
+      - ""
+      - "default"
+    notes: "診療科2_変更と同じルール"
+
+  - order: 12
+    name: "現在の予約日聴取_キャンセル"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 8
+    retry_count: 1
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: |
+      - datetime 正規化。過去日時は future_date テンプレで検出
+      - DTMF 対応表（dtmf_max_length=8 / YYYYMMDD 形式）:
+          DTMF 8桁数字 = YYYYMMDD（例: 20260401 → 2026年4月1日）
+          DTMF 4桁数字 = MMDD（例: 0401 → 当年または翌年の4月1日。年は今日基準で未来補完）
+          DTMF 2桁数字 = DD（例: 15 → 当月または翌月の15日。月は今日基準で未来補完）
+          # 終了キー入力（# 押下）で確定。未入力タイムアウト時は音声入力にフォールバック
+
+  - order: 13
+    name: "理由聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: |
+      - [理由の主体]+[事象] 形式の名詞句に要約
+      - AI は復唱・同情発話（お大事に等）厳禁。prompter に明示
+
+  - order: 14
+    name: "確認内容聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "details"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: |
+      - [対象]+[アクション] 形式の名詞句に要約
+      - AI は内容に回答・補足せず格納のみ。prompter に明示
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "用件聴取"
+    tts_announcement: "ご用件を、『予約』、『予約変更』、『キャンセル』、『その他問い合わせ』の中からお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["新規", "変更", "キャンセル", "確認"]
+      mapping:
+        - input: "予約／お薬／よやく／しんきよやく／新規／しんき／鍼灸薬／しんきゅうやく／通訳／ようやく"
+          output: "新規"
+        - input: "取り直したい／取り直す／別の日に／変えたい／変える／変えて／予約変更"
+          output: "変更"
+        - input: "やめる／取り消し／取り消す／取消／やめたい／経験／建設／キャンセル"
+          output: "キャンセル"
+        - input: "確かめる／かくにん／予約確認／ようやくび／問い合わせ／その他／その他のお問い合わせ"
+          output: "確認"
+      no_result_condition: "上記いずれにも該当しない場合"
+    save_to: "classification"
+    next_step: "（scenario_flow の conditions を参照）"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "受診歴聴取"
+    tts_announcement: "今回の症状でのご受診は初めてですか？『はい、そうです』、または、『いいえ違います』、のようにお答えください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["新規", "再診"]
+      mapping:
+        - input: "はい／そう／そうです／そうですね／あっています／せいかい／肺／はい持っています／初めて"
+          output: "新規"
+        - input: "いいえ／いえ／いや／ちがう／ちゃう／ちがいます／ふせいかい／いいえ持っています／再診"
+          output: "再診"
+      no_result_condition: "上記いずれにも該当しない場合"
+    save_to: "classification"
+    next_step: "（scenario_flow の conditions を参照）"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "紹介状確認聴取"
+    tts_announcement: "他の医療機関からの紹介状はお持ちですか？『はい、持ってます』、または、『いいえ、持っていません』、のようにお答えください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["有", "無"]
+      mapping:
+        - input: "はい／そう／そうです／あっています／せいかい／肺／はい持っています／持っている／持ってる"
+          output: "有"
+        - input: "いいえ／いえ／いや／ちがう／ふせいかい／いいえ持っていません／持っていない"
+          output: "無"
+      no_result_condition: "上記いずれにも該当しない場合"
+    save_to: "introduction"
+    next_step: "診療科_新規"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "診療科_新規"
+    tts_announcement: "診療科をお話ください。わからない場合は、『わからない』、とお話ください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "内科"
+        - "消化器外科"
+        - "小児外科"
+        - "乳腺外科"
+        - "脳神経外科"
+        - "麻酔科"
+        - "甲状腺内分泌"
+        - "整形外科"
+        - "泌尿器科"
+        - "形成外科"
+        - "耳鼻咽喉科"
+        - "皮膚科"
+        - "眼科"
+        - "婦人科"
+        - "禁煙外来"
+        - "リハビリテーション科"
+        - "小児科"
+        - "インフルエンザワクチン"
+        - "コロナウイルスワクチン"
+        - "予防接種"
+      mapping:
+        - input: "【診療科一覧】の正式名称・類義語に合致"
+          output: "該当正式名称"
+        - input: "インフル／インフルエンザ／インフルワクチン／インフルエンザ予防接種／インフル予防接種"
+          output: "インフルエンザワクチン"
+        - input: "コロナ／コロナウイルス／コロナワクチン／コロナウイルスワクチン／コロナ予防接種／コロナウイルス予防接種"
+          output: "コロナウイルスワクチン"
+        - input: "ワクチン／予防接種／接種（インフル・コロナに一致しない場合）"
+          output: "予防接種"
+        - input: "皮膚科／皮膚／肌"
+          output: "皮膚科"
+      no_result_condition: "いずれの正式名称・類義語・キーワードにも合致しない／「わからない」"
+    save_to: "clinicalDepartment"
+    next_step: "（scenario_flow の conditions を参照）"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "予約希望日聴取_新規"
+    tts_announcement: "次に、予約希望日をお伺いいたします。ご都合の良い日付や曜日をお話ください。なお、このお電話では確定いたしませんので、ご注意ください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["自由テキスト"]
+      mapping:
+        - input: "日付／曜日／時期表現（連休明け／夏休み明け 等）"
+          output: "発話をそのまま格納（不要語除外）"
+      no_result_condition: "無音・無関係発話"
+    save_to: "desiredreservationDate"
+    next_step: "END_予約完了_単一"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "診療科_変更"
+    tts_announcement: "診療科をお話ください。わからない場合は、『わからない』、とお話ください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "内科"
+        - "消化器外科"
+        - "小児外科"
+        - "乳腺外科"
+        - "脳神経外科"
+        - "麻酔科"
+        - "甲状腺内分泌"
+        - "整形外科"
+        - "泌尿器科"
+        - "形成外科"
+        - "耳鼻咽喉科"
+        - "皮膚科"
+        - "眼科"
+        - "婦人科"
+        - "禁煙外来"
+        - "リハビリテーション科"
+        - "小児科"
+        - "インフルエンザワクチン"
+        - "コロナウイルスワクチン"
+        - "予防接種"
+      mapping:
+        - input: "診療科_新規 と同じマッピング"
+          output: "該当正式名称"
+      no_result_condition: "診療科_新規 と同じ"
+    save_to: "clinicalDepartment"
+    next_step: "インフル/コロナ/予防接種/皮膚科 → 各終話 / default → 診療科2聴取_変更"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "診療科2聴取_変更"
+    tts_announcement: "同日に変更を希望される診療科があればお話しください。ない場合は、『ないです』、とお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["皮膚科", "default"]
+      mapping:
+        - input: "ないです／ありません"
+          output: ""
+        - input: "皮膚科／皮膚／肌"
+          output: "皮膚科"
+        - input: "【診療科一覧】の正式名称 / 不明な診療科"
+          output: "default（格納値は発話原文から正式名称を抽出、または「不明」）"
+      no_result_condition: "該当なし → default 扱いで「不明」格納"
+    save_to: "clinicalDepartment2"
+    next_step: "皮膚科 → END_皮膚科案内 / それ以外 → 現在の予約日聴取_変更"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "現在の予約日聴取_変更"
+    tts_announcement: "次に現在の予約日を、『4月1日』、のように日付でお話ください。どうぞ。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["YYYY-MM-DD HH:MM"]
+      mapping:
+        - input: "4月1日／令和7年4月1日／2026年4月1日 等"
+          output: "YYYY-MM-DD 00:00 形式に正規化（年補完ルール適用）"
+      no_result_condition: "日付が特定できない → 空文字"
+    save_to: "reservationDate"
+    next_step: "過去日判定_変更"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "過去受付不可_変更"
+    tts_announcement: "ご指定の予約日は過去の日付のため、予約の変更をお受けすることができません。申し訳ございませんが、予約日は本日の翌日以降のお日にちでお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: ""
+    next_step: "予約希望日聴取_変更"
+    retry_failure: "skip"
+
+  - step_name: "予約希望日聴取_変更"
+    tts_announcement: "次に、予約希望日をお伺いいたします。ご都合の良い日付や曜日をお話ください。なお、このお電話では確定いたしませんので、ご注意ください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["自由テキスト"]
+      mapping:
+        - input: "日付／曜日／時期表現"
+          output: "発話をそのまま格納"
+      no_result_condition: "無音・無関係発話"
+    save_to: "desiredreservationDate"
+    next_step: "分岐_変更終話"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "診療科_キャンセル"
+    tts_announcement: "診療科をお話ください。わからない場合は、『わからない』、とお話ください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "内科"
+        - "消化器外科"
+        - "小児外科"
+        - "乳腺外科"
+        - "脳神経外科"
+        - "麻酔科"
+        - "甲状腺内分泌"
+        - "整形外科"
+        - "泌尿器科"
+        - "形成外科"
+        - "耳鼻咽喉科"
+        - "皮膚科"
+        - "眼科"
+        - "婦人科"
+        - "禁煙外来"
+        - "リハビリテーション科"
+        - "小児科"
+        - "インフルエンザワクチン"
+        - "コロナウイルスワクチン"
+        - "予防接種"
+      mapping:
+        - input: "診療科_新規 と同じ"
+          output: "該当正式名称"
+      no_result_condition: "診療科_新規 と同じ"
+    save_to: "clinicalDepartment"
+    next_step: "皮膚科 → END_皮膚科案内 / default → 診療科2聴取_キャンセル"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "診療科2聴取_キャンセル"
+    tts_announcement: "同日にキャンセルを希望される診療科があればお話しください。ない場合は、『ないです』、とお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["皮膚科", "default"]
+      mapping:
+        - input: "ないです／ありません"
+          output: ""
+        - input: "皮膚科／皮膚／肌"
+          output: "皮膚科"
+        - input: "【診療科一覧】の正式名称 / 不明な診療科"
+          output: "default（格納値は正式名称 or 「不明」）"
+      no_result_condition: "該当なし → default 扱いで「不明」"
+    save_to: "clinicalDepartment2"
+    next_step: "皮膚科 → END_皮膚科案内 / それ以外 → 現在の予約日聴取_キャンセル"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "現在の予約日聴取_キャンセル"
+    tts_announcement: "次に現在の予約日を、『4月1日』、のように日付でお話ください。どうぞ。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["YYYY-MM-DD HH:MM"]
+      mapping:
+        - input: "4月1日／令和7年4月1日／2026年4月1日 等"
+          output: "YYYY-MM-DD 00:00 形式に正規化"
+      no_result_condition: "日付が特定できない → 空文字"
+    save_to: "reservationDate"
+    next_step: "過去日判定_キャンセル"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "過去受付不可_キャンセル"
+    tts_announcement: "ご指定の予約日は過去の日付のため、予約キャンセルをお受けすることができません。申し訳ございませんが、予約日は本日の翌日以降のお日にちでお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: ""
+    next_step: "理由聴取"
+    retry_failure: "skip"
+
+  - step_name: "理由聴取"
+    tts_announcement: "キャンセルの理由をお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["名詞句（例: 本人体調不良, 仕事の都合, 予定重複, 他院受診）"]
+      mapping:
+        - input: "任意のキャンセル理由発話"
+          output: "[理由の主体]+[事象] の簡潔名詞句に要約"
+      no_result_condition: "無音・無関係発話 → 空文字"
+    save_to: "reason"
+    next_step: "分岐_キャンセル終話"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "確認内容聴取"
+    tts_announcement: "お問い合わせの内容を簡潔にお話ください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["名詞句（例: 予約日時の確認, 検査前日の注意事項の確認, 持ち物の確認）"]
+      mapping:
+        - input: "任意の問い合わせ発話"
+          output: "[対象]+[アクション] の簡潔名詞句に要約"
+      no_result_condition: "無音・無関係発話 → 空文字"
+    save_to: "details"
+    next_step: "END_確認完了"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須 — 削除禁止）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "神栖済生会病院の予約専用AI電話です。お手数をおかけしますが、発信者番号を通知して再度お電話ください。電話番号の先頭に「1 8 6」を追加いただくことで発信者番号を通知していただくことができます。お電話ありがとうございました。それでは失礼いたします。"
+    status: "9"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外（use_acceptance_times=false のため到達しないが template 必須項目として保持）"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達（customer_doc では空文字格納で次ステップへ進む仕様のため実質到達しない）"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系 ---
+  - name: "END_予約完了_単一"
+    condition: "新規/再診 予約完了、または 変更で clinicalDepartment2 が空文字"
+    tts_announcement: "申し込みを受付いたしました。ご予約は当院からの折り返し連絡のうえ確定となります。2診療日以内に担当者から折り返し電話、もしくは、SMSにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約完了_単一"
+  - name: "END_予約完了_複数"
+    condition: "変更で clinicalDepartment2 に正式名称 or 不明（複数診療科あり）"
+    tts_announcement: "申し込みを受付いたしました。ご予約は当院からの折り返し連絡のうえ確定となります。2診療日以内に担当者から折り返し電話、もしくは、SMSにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "8"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約完了_複数"
+  - name: "END_キャンセル完了_単一"
+    condition: "キャンセルで clinicalDepartment2 が空文字"
+    tts_announcement: "キャンセルを承りました。内容の確認が必要な場合のみ、当院からお電話またはショートメールにてご連絡をさせていただくことがございます。あらかじめご了承ください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_キャンセル完了_単一"
+  - name: "END_キャンセル完了_複数"
+    condition: "キャンセルで clinicalDepartment2 に正式名称 or 不明"
+    tts_announcement: "キャンセルを承りました。内容の確認が必要な場合のみ、当院からお電話またはショートメールにてご連絡をさせていただくことがございます。あらかじめご了承ください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "8"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_キャンセル完了_複数"
+  - name: "END_確認完了"
+    condition: "その他問い合わせ（details 格納後）"
+    tts_announcement: "当院でお問い合わせ内容を確認の上、2診療日以内に折り返し電話、もしくは、ショートメールにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_確認完了"
+  - name: "END_インフルエンザ"
+    condition: "診療科＝インフルエンザワクチン"
+    tts_announcement: "インフルエンザ予防接種のご予約ですね。インフルエンザ予防接種の受付は現在終了しております。お電話ありがとうございました。それでは失礼いたします。"
+    status: "7"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_インフルエンザ"
+  - name: "END_コロナ"
+    condition: "診療科＝コロナウイルスワクチン"
+    tts_announcement: "コロナウイルス予防接種のご予約ですね。コロナウイルス予防接種の予約受付は現在終了しております。お電話ありがとうございました。それでは失礼いたします。"
+    status: "7"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_コロナ"
+  - name: "END_予防接種"
+    condition: "診療科＝予防接種（インフル/コロナ以外）"
+    tts_announcement: "予防接種のご予約ですね。受付は現在終了しております。お電話ありがとうございました。それでは失礼いたします。"
+    status: "7"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_予防接種"
+  - name: "END_皮膚科案内"
+    condition: "診療科＝皮膚科 or 診療科2＝皮膚科"
+    tts_announcement: "2026年3月末をもちまして当院皮膚科の診療は終了となりました。お近くの病院・クリニックへの受診をお願いいたします。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_皮膚科案内"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: true
+  routing_keys: ["classification", "clinicalDepartment", "clinicalDepartment2"]
+  patterns:
+    - condition: "classification ∈ {新規,再診,変更,キャンセル,確認} かつ clinicalDepartment ∉ {インフル,コロナ,予防接種,皮膚科}"
+      sms_flag: "1"
+      notes: "受付完了ルート（SMS 送信あり）"
+    - condition: "clinicalDepartment ∈ {インフル,コロナ,予防接種,皮膚科}"
+      sms_flag: "-1"
+      notes: "受付終了案内ルート（SMS なし）"
+    - condition: "非通知"
+      sms_flag: "-1"
+      notes: "非通知切断"
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。神栖済生会病院の予約専用、AI電話です。健診・リハビリに関するお問い合わせは代表電話へおかけ直しください。"
+  - module_name: "用件聴取"
+    purpose: "用件聴取の発話"
+    announcement: "ご用件を、『予約』、『予約変更』、『キャンセル』、『その他問い合わせ』の中からお話しください。どうぞ。"
+  - module_name: "受診歴聴取"
+    purpose: "受診歴の発話"
+    announcement: "今回の症状でのご受診は初めてですか？『はい、そうです』、または、『いいえ違います』、のようにお答えください。どうぞ。"
+  - module_name: "紹介状確認聴取"
+    purpose: "紹介状有無の発話"
+    announcement: "他の医療機関からの紹介状はお持ちですか？『はい、持ってます』、または、『いいえ、持っていません』、のようにお答えください。どうぞ。"
+  - module_name: "診療科_新規"
+    purpose: "診療科聴取（新規/再診）"
+    announcement: "診療科をお話ください。わからない場合は、『わからない』、とお話ください。どうぞ。"
+  - module_name: "予約希望日聴取_新規"
+    purpose: "予約希望日（新規）"
+    announcement: "次に、予約希望日をお伺いいたします。ご都合の良い日付や曜日をお話ください。なお、このお電話では確定いたしませんので、ご注意ください。どうぞ。"
+  - module_name: "診療科_変更"
+    purpose: "診療科聴取（変更）"
+    announcement: "診療科をお話ください。わからない場合は、『わからない』、とお話ください。どうぞ。"
+  - module_name: "診療科2聴取_変更"
+    purpose: "同日変更希望診療科の聴取"
+    announcement: "同日に変更を希望される診療科があればお話しください。ない場合は、『ないです』、とお話しください。どうぞ。"
+  - module_name: "現在の予約日聴取_変更"
+    purpose: "現在の予約日（変更）"
+    announcement: "次に現在の予約日を、『4月1日』、のように日付でお話ください。どうぞ。"
+  - module_name: "過去受付不可_変更"
+    purpose: "過去日受付不可アナウンス（変更）"
+    announcement: "ご指定の予約日は過去の日付のため、予約の変更をお受けすることができません。申し訳ございませんが、予約日は本日の翌日以降のお日にちでお話しください。"
+  - module_name: "予約希望日聴取_変更"
+    purpose: "予約希望日（変更）"
+    announcement: "次に、予約希望日をお伺いいたします。ご都合の良い日付や曜日をお話ください。なお、このお電話では確定いたしませんので、ご注意ください。どうぞ。"
+  - module_name: "診療科_キャンセル"
+    purpose: "診療科聴取（キャンセル）"
+    announcement: "診療科をお話ください。わからない場合は、『わからない』、とお話ください。どうぞ。"
+  - module_name: "診療科2聴取_キャンセル"
+    purpose: "同日キャンセル希望診療科"
+    announcement: "同日にキャンセルを希望される診療科があればお話しください。ない場合は、『ないです』、とお話しください。どうぞ。"
+  - module_name: "現在の予約日聴取_キャンセル"
+    purpose: "現在の予約日（キャンセル）"
+    announcement: "次に現在の予約日を、『4月1日』、のように日付でお話ください。どうぞ。"
+  - module_name: "過去受付不可_キャンセル"
+    purpose: "過去日受付不可アナウンス（キャンセル）"
+    announcement: "ご指定の予約日は過去の日付のため、予約キャンセルをお受けすることができません。申し訳ございませんが、予約日は本日の翌日以降のお日にちでお話しください。"
+  - module_name: "理由聴取"
+    purpose: "キャンセル理由の聴取"
+    announcement: "キャンセルの理由をお話しください。どうぞ。"
+  - module_name: "確認内容聴取"
+    purpose: "確認内容の聴取"
+    announcement: "お問い合わせの内容を簡潔にお話ください。どうぞ。"
+
+  # --- 終話TTS（customer_doc より転記。施設固有の「2診療日以内」等を含む）---
+  - module_name: "END_予約完了_単一"
+    purpose: "新規・再診・変更 予約完了の終話アナウンス"
+    announcement: "申し込みを受付いたしました。ご予約は当院からの折り返し連絡のうえ確定となります。2診療日以内に担当者から折り返し電話、もしくは、SMSにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_予約完了_複数"
+    purpose: "複数診療科の予約受付完了の終話アナウンス"
+    announcement: "申し込みを受付いたしました。ご予約は当院からの折り返し連絡のうえ確定となります。2診療日以内に担当者から折り返し電話、もしくは、SMSにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_キャンセル完了_単一"
+    purpose: "単一診療科キャンセル完了の終話アナウンス"
+    announcement: "キャンセルを承りました。内容の確認が必要な場合のみ、当院からお電話またはショートメールにてご連絡をさせていただくことがございます。あらかじめご了承ください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_キャンセル完了_複数"
+    purpose: "複数診療科キャンセル完了の終話アナウンス"
+    announcement: "キャンセルを承りました。内容の確認が必要な場合のみ、当院からお電話またはショートメールにてご連絡をさせていただくことがございます。あらかじめご了承ください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_確認完了"
+    purpose: "問い合わせ確認完了の終話アナウンス"
+    announcement: "当院でお問い合わせ内容を確認の上、2診療日以内に折り返し電話、もしくは、ショートメールにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_インフルエンザ"
+    purpose: "インフルエンザワクチン受付終了の案内終話"
+    announcement: "インフルエンザ予防接種のご予約ですね。インフルエンザ予防接種の受付は現在終了しております。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_コロナ"
+    purpose: "コロナワクチン受付終了の案内終話"
+    announcement: "コロナウイルス予防接種のご予約ですね。コロナウイルス予防接種の予約受付は現在終了しております。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_予防接種"
+    purpose: "その他予防接種受付終了の案内終話"
+    announcement: "予防接種のご予約ですね。受付は現在終了しております。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_皮膚科案内"
+    purpose: "皮膚科診療終了の案内終話（2026年3月末で終了）"
+    announcement: "2026年3月末を持ちまして当院皮膚科の診療は終了となりました。お近くの病院・クリニックへの受診をお願い致します。それでは失礼いたします。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "用件聴取"
+    words: |
+      予約 よやく
+      予約変更 よやくへんこう
+      キャンセル きゃんせる
+      その他問い合わせ そのたといあわせ
+      取り直し とりなおし
+      やめる やめる
+      取り消し とりけし
+      確認 かくにん
+      問い合わせ といあわせ
+
+  - step_name: "受診歴聴取"
+    words: |
+      初めて はじめて
+      再診 さいしん
+      再受診 さいじゅしん
+
+  - step_name: "紹介状確認聴取"
+    words: |
+      紹介状 しょうかいじょう
+      持っています もっています
+      持っていません もっていません
+
+  - step_name: "診療科_新規"
+    words: |
+      内科 ないか
+      消化器内科 しょうかきないか
+      肝臓内科 かんぞうないか
+      呼吸器内科 こきゅうきないか
+      循環器内科 じゅんかんきないか
+      総合診療科 そうごうしんりょうか
+      神経内科 しんけいないか
+      腎臓内科 じんぞうないか
+      消化器外科 しょうかきげか
+      外科 げか
+      胃カメラ いかめら
+      大腸 だいちょう
+      化学療法 かがくりょうほう
+      ストーマ すとーま
+      小児外科 しょうにげか
+      乳腺外科 にゅうせんげか
+      乳腺 にゅうせん
+      脳神経外科 のうしんけいげか
+      脳外科 のうげか
+      脳神経 のうしんけい
+      麻酔科 ますいか
+      麻酔 ますい
+      ペインクリニック ぺいんくりにっく
+      甲状腺 こうじょうせん
+      甲状腺内分泌 こうじょうせんないぶんぴつ
+      整形外科 せいけいげか
+      整形 せいけい
+      装具診 そうぐしん
+      手外科 てげか
+      骨粗鬆症 こつそしょうしょう
+      泌尿器科 ひにょうきか
+      おしっこ おしっこ
+      ウロ うろ
+      形成外科 けいせいげか
+      形成 けいせい
+      耳鼻咽喉科 じびいんこうか
+      耳鼻科 じびか
+      補聴器 ほちょうき
+      皮膚科 ひふか
+      皮膚 ひふ
+      肌 はだ
+      眼科 がんか
+      白内障 はくないしょう
+      緑内障 りょくないしょう
+      婦人科 ふじんか
+      ギネ ぎね
+      禁煙外来 きんえんがいらい
+      禁煙 きんえん
+      リハビリテーション科 りはびりてーしょんか
+      リハビリ りはびり
+      リハ りは
+      小児科 しょうにか
+      小児科内分泌 しょうにかないぶんぴつ
+      小児科循環器 しょうにかじゅんかんき
+      小児循環器 しょうにじゅんかんき
+      小児神経 しょうにしんけい
+      小児腎臓 しょうにじんぞう
+      夜尿 やにょう
+      尿検査 にょうけんさ
+      頻尿 ひんにょう
+      蛋白尿 たんぱくにょう
+      乳児検診 にゅうじけんしん
+      幼児健診 ようじけんしん
+      インフルエンザ いんふるえんざ
+      インフル いんふる
+      インフルエンザワクチン いんふるえんざわくちん
+      インフルワクチン いんふるわくちん
+      インフルエンザ予防接種 いんふるえんざよぼうせっしゅ
+      コロナ ころな
+      コロナウイルス ころなういるす
+      コロナワクチン ころなわくちん
+      コロナウイルスワクチン ころなういるすわくちん
+      コロナ予防接種 ころなよぼうせっしゅ
+      ワクチン わくちん
+      予防接種 よぼうせっしゅ
+      接種 せっしゅ
+
+  - step_name: "診療科_変更"
+    words: |
+      同上
+
+  - step_name: "診療科_キャンセル"
+    words: |
+      同上
+
+  - step_name: "診療科2聴取_変更"
+    words: |
+      ないです ないです
+      ありません ありません
+      皮膚科 ひふか
+      皮膚 ひふ
+      肌 はだ
+
+  - step_name: "診療科2聴取_キャンセル"
+    words: |
+      ないです ないです
+      ありません ありません
+      皮膚科 ひふか
+      皮膚 ひふ
+      肌 はだ
+
+  - step_name: "現在の予約日聴取_変更"
+    words: |
+      月 がつ
+      日 にち
+      令和 れいわ
+      令和 れーわ
+
+  - step_name: "現在の予約日聴取_キャンセル"
+    words: |
+      月 がつ
+      日 にち
+      令和 れいわ
+      令和 れーわ
+
+  - step_name: "予約希望日聴取_新規"
+    words: |
+      連休明け れんきゅうあけ
+      夏休み明け なつやすみあけ
+      来月 らいげつ
+      再来月 さらいげつ
+
+  - step_name: "予約希望日聴取_変更"
+    words: |
+      連休明け れんきゅうあけ
+      夏休み明け なつやすみあけ
+      来月 らいげつ
+      再来月 さらいげつ
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "【サブフロー完全コピー】氏名・生年月日・診察券番号・電話番号の 4 サブフローは docs/reference/bivr/samples/個人情報サブフロー.bivr を完全コピーし、プレフィックスのみ「神栖済生会病院」に置換する（CLAUDE.md Rule 9 準拠）。サブフロー内部の構造改変は禁止"
+  - "【status コード】customer 固有の enum `[\"0\",\"9\",\"1\",\"7\",\"8\"]` を保持する（Dr.JOY 連携側の登録値と合わせるため）。Gen3 の `0` 禁止ルールに従い Gen2 の 0 は 2 に置換（皮膚科案内 / 冒頭切断相当）。director.md の Gen3 標準体系（9=転送失敗/7=非通知）とは意味が異なる点に注意"
+  - "【複数診療科 status=8 強化（2026/04/12）】変更 / キャンセルで clinicalDepartment2 に正式名称 or \"不明\" が入った場合、後段の desiredreservationDate/reason 格納で status=1 に降格させない。本設計では終話直前の ContextMatchRouter で clinicalDepartment2 の値で END_xxx_単一／END_xxx_複数 に分岐することで実現"
+  - "【肺＝はい救済（2026/04/12）】すべての Yes/No 判定ブロック（生年月日確認 / 診察券番号確認 / 電話番号携帯確認 / 電話番号固定確認 / 用件確認 / 受診歴 / 紹介状確認 / 予約日過去確認）で「肺」を肯定同義語として扱う。肯定同義語: はい／そう／そうです／そうですね／あっています／せいかい／肺／はい持っています。否定同義語: いいえ／いえ／いや／ちがう／ちゃう／ちがいます／ふせいかい／いいえ持っていません。prompter は SKILL_A〜E_*.md の Yes/No テンプレに同義語として埋め込む"
+  - "【SSML 完全削除】customer_doc の `<dtmf/>` `<dtmf digit=\"8\"/>` `<break time=\"...\"/>` `<speak type=\"telephone\">` `<speak type=\"digits\">` 等は Gen3 では全削除。TTS は `{tts_g:...}`（全小文字）形式。電話番号/診察券番号の桁区切り読み上げは tts_g の読み方調整（半角スペース挿入等）で代替"
+  - "【聞き直し回数 最大1回】customer_doc 1.1 準拠。有効回答が得られない場合は1回だけ再聴取→空文字格納→「かしこまりました。」と発話して次ステップへ。空文字格納も「データ格納成功」として扱う。retry_count: 1 を全 hearing に設定"
+  - "【再確認必須 4 項目】生年月日 / 診察券番号 / 電話番号（固定）/ 用件 は echo_back=true。復唱専用フォーマットは customer_doc 2.2 に準拠（生年月日は YYYY年M月D日、診察券番号は 1桁ずつ読み上げ、電話番号は 1桁ずつ読み上げ、用件は reservation_name 変換後の表示名）"
+  - "【再確認厳禁 10 項目】患者名 / 電話番号（携帯）/ 受診歴 / 紹介状確認 / 診療科 / 予約希望日 / 診療科2 / 現在の予約日 / 理由 / 確認内容 は echo_back=false。「〜ですね」「〜を承りました」等の復唱を prompter のプロンプトで明示禁止"
+  - "【reason / details の発話厳禁】ユーザーに対して reason・details の内容を読み上げたり、同情（「お大事に」等）や意見・質問を一切行わない。終話挨拶の中でも内容に言及しない。prompter の SKILL_E_*.md 自由テキスト抽出テンプレに明示"
+  - "【診療科 no_result デフォルト】診療科_新規 / 診療科_変更 / 診療科_キャンセル は NO_RESULT 時に \"登録なし\" を clinicalDepartment に保存してリトライ（モジュール選定ガイド 2.5）"
+  - "【数字認識ルール】「よん」「し」→ 4、「ご」「ごお」「ごー」→ 5。「for」「C」「号」「go」等の誤変換禁止。prompter の数値正規化テンプレに明示"
+  - "【診察券番号 8桁バリデーション】サブフロー内で対応（個人情報サブフロー.bivr の実装を踏襲）。「わからない／持っていない」時は桁数チェック免除・復唱スキップ"
+  - "【電話番号 桁数バリデーション】mobile/ip050=11桁、landline=10桁。不一致は1回再聴取→空文字格納。サブフロー内で対応"
+  - "【未聴取フィールドの初期値】customer function required に含まれるが本フローで聴取しない項目（institution / disease / symptoms / question / history）は saveContextModel2DB で空文字 \"\" を初期値として埋める。OpenAI プロンプトで強制聴取させない"
+  - "【Dr.JOY 側設定事項】SMS 送信文面 / status マスター / 診療科マスター / office_id は Dr.JOY 管理画面で別途設定。設計書・フローJSON には含めない"
+
+# --- セクション12: 要確認事項 ---
+confirmation_items:
+  - item: "status コード体系を Dr.JOY 側 function enum と整合確認（9=非通知 / 7=予防接種 / 8=複数診療科 / 1=受付完了 / 2=案内 の customer 運用で問題ないか）"
+    resolved: false
+  - item: "皮膚科案内 / 冒頭切断相当の status=2 置換が Dr.JOY 側 function enum `[\"0\",\"9\",\"1\",\"7\",\"8\"]` と衝突しないか確認（2 が enum に含まれない場合は Dr.JOY 側 enum 拡張が必要）"
+    resolved: false
+  - item: "smsFlag の値を -1（Gen3 template 慣例）または 0（Gen2 運用）のどちらで送信するか確認"
+    resolved: false
+  - item: "現在の予約日の過去日時アナウンス後、予約希望日へ無条件で戻す設計で問題ないか確認（Gen2 では復唱→肯定で過去日エラー、復唱→否定で予約日再聴取を分岐）"
+    resolved: false
+  - item: "診療科 OpenAI の出力値に enum 外の「予防接種」「登録なし」を含める実装で Dr.JOY 側の表示・集計に影響が出ないか確認"
+    resolved: false
+  - item: "office_id（Dr.JOY 管理画面）"
+    resolved: false
+  - item: "本番 050 番号（IVR 着信番号）"
+    resolved: false

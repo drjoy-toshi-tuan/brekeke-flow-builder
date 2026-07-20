@@ -1,0 +1,1469 @@
+# 設計書 — 中東遠総合医療センター 健診
+# 生成元: @director エージェント
+# 生成日: 2026-04-20
+# 作業種別: Gen2→Gen3 移管
+# 元資料: docs/reference/customer_docs/【健診1】：中東遠総合医療センター (1).md
+# 移管ノート: docs/migration/gen2_中東遠総合医療センター_健診.md
+# 確認レポート: docs/designs/確認レポート_中東遠総合医療センター_健診_2026-04-20.md
+
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "中東遠総合医療センター"
+  group_name: "中東遠総合医療センター"
+  flow_name: "中東遠総合医療センター$健診"
+  target_facility: "本院のみ（健診センター）"
+  office_id: "TODO_要確認"          # NON-BLOCKER: Dr.JOY管理画面で確認
+  phone_number: ""                  # NON-BLOCKER: IVR側で設定
+  business_hours: "なし（acceptance_times 不使用）"
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "prod"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "中東遠総合医療センター$健診"
+      role: "main"
+      description: "健診センター（人間ドック/健康診断/その他の検診/精密検査/問い合わせ）のAI電話応対メインフロー"
+  subflows:
+    - name: "中東遠総合医療センター$受診者名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "カタカナ変換。復唱禁止（1-8）。リトライ上限2回、超過時は END_エラー終話（親フロー側で処理）"
+    - name: "中東遠総合医療センター$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "唯一復唱が許可される項目（DOB Re-confirmation）。元号誤認識の補正ルール（1-9）はサブフロー内 OpenAI プロンプトに埋め込む。dtmf digit=\"8\" の SSML タグは TTS 文言から除去し IVR プロパティ側で設定。リトライ上限2回"
+    - name: "中東遠総合医療センター$連絡先電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: |
+        incoming-classifier で 携帯(090/080/070) / それ以外（非通知は opening 側で既に弾き済みのため、ここには到達しない） を判別。
+        携帯：「今おかけいただいている ○○ でよろしいですか？」確認文（1-10 ③）。
+        050/固定/不明：「ショートメールを受信できる携帯電話番号をお話しください」文言（1-10 ①②④⑤）。
+        リトライ上限3回（他項目の2回より多い）。リトライ超過時の挙動は2分岐（anonymous→END_連絡先エラー終話 / それ以外→END_折返案内）、この分岐は Brekeke IVR UI 側で手動配線（confirmation_items 参照）。
+        `<speak type="telephone">` SSML タグは TTS 文言から除去し IVR プロパティ側で digit 読み上げ設定。
+        additionalPhoneNumber は聴取完了まで絶対に着信番号をセットしない（1-10, 原則4）。
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  中東遠総合医療センター健診センター宛の AI 電話。
+  受診者から用件（人間ドック/健康診断/その他の検診/精密検査/問い合わせ）・受診者名・生年月日・連絡先電話番号・用件詳細を聴取し、
+  予約/変更/キャンセル/問い合わせを折り返し対応するための情報を Dr.JOY に記録する。
+  精密検査の場合は用件②に関係なく連絡先電話番号種別のみで終話文を決定する特殊ルールを持つ。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "中東遠総合医療センター$健診"
+    diagram: |
+      冒頭(wait 2000ms)
+        → コンテキスト設定(saveContextModel2DB)
+          → 着信電話番号分類(incoming-classifier)
+              ├─ 非通知 → END_非通知即時切断(TTS:186案内) → 完了フラグ(status=7) → 切断
+              └─ 通常 → 冒頭_アナウンス(TTS:施設名案内)
+                          → 3日以内確認(enum: はい/いいえ)
+                              ├─ はい → END_予約代表案内(TTS:0537-28-8133 3回) → 完了フラグ(status=2,smsFlag=0) → 切断
+                              └─ いいえ → jump_受診者名聴取(subflow)
+                                          → jump_生年月日聴取(subflow)
+                                            → jump_連絡先電話番号聴取(subflow,phonetype確定)
+                                              → 用件①(enum:人間ドック/健康診断/その他の検診/精密検査/問い合わせ)
+                                                  ├─ 問い合わせ → 問い合わせ内容聴取(text)
+                                                  │                 → 追加の質問聴取(text)
+                                                  │                   → 終話判定(script)
+                                                  └─ 人間ドック/健康診断/その他の検診/精密検査
+                                                       → 人数聴取(enum:1or2/3以上)
+                                                           ├─ 3以上 → END_折返案内(status=2,smsFlag=0) → 切断
+                                                           └─ 1or2 → 用件②(enum:予約/変更/キャンセル/問い合わせ)
+                                                                        ├─ 予約 → 受診希望コース分岐(context_match_router: clinicalDepartment)
+                                                                        │           ├─ 人間ドック  → 希望オプション聴取
+                                                                        │           ├─ 健康診断   → コース聴取_健康診断 → 希望オプション聴取
+                                                                        │           ├─ その他検診 → コース聴取_その他 → 希望オプション聴取
+                                                                        │           └─ 精密検査   → コース聴取_精密検査 → 希望オプション聴取
+                                                                        │              → 希望オプション聴取(text,retry=1,skip)
+                                                                        │                → 受診希望時期聴取(enum+default)
+                                                                        │                    ├─ 当日_翌日 → END_当日代表案内 → 切断
+                                                                        │                    └─ 通常       → 追加の質問聴取 → 終話判定
+                                                                        ├─ 変更 → 現在の予約日聴取_変更(datetime)
+                                                                        │           → 現在の予約日_当日判定_変更(script:future_date)
+                                                                        │             ├─ FAIL(当日) → END_当日代表案内 → 切断
+                                                                        │             └─ SUCCESS(未来) → 変更内容聴取(text) → 追加の質問聴取 → 終話判定
+                                                                        ├─ キャンセル → 現在の予約日聴取_キャンセル(datetime)
+                                                                        │                 → 現在の予約日_当日判定_キャンセル(script:future_date)
+                                                                        │                   ├─ FAIL(当日) → END_当日代表案内 → 切断
+                                                                        │                   └─ SUCCESS → 追加の質問聴取 → 終話判定
+                                                                        └─ 問い合わせ → 問い合わせ内容聴取(text) → 追加の質問聴取 → 終話判定
+
+                                                終話判定_内部(script:clinicalDepartment×classification×phonetype)
+                                                    ├─ 精密_携帯 → END_精密_携帯(status=1,smsFlag=1) → 切断
+                                                    ├─ 精密_固定 → END_精密_固定(status=1,smsFlag=1) → 切断
+                                                    ├─ キャンセル(精密以外) → END_キャンセル(status=1,smsFlag=2) → 切断
+                                                    ├─ 予約変更問合せ_携帯 → END_予約変更問合せ_携帯(status=1,smsFlag=1) → 切断
+                                                    └─ 予約変更問合せ_固定 → END_予約変更問合せ_固定(status=1,smsFlag=1) → 切断
+    notes: |
+      - acceptance_times 不使用（Gen2 yaml に時間外分岐なし）。営業時間制御は運用側で管理。
+      - 非通知は opening 直後に即時切断（施設固有の「186案内」TTS）。
+      - 各 hearing の無回答リトライ超過は基本 END_エラー終話（フェールセーフ）。連絡先電話番号サブフローのみ anonymous/それ以外で2分岐（subflow内で処理）。
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭 ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: false
+    next: 3日以内確認
+
+  # --- 1. 3営業日以内確認 ---
+  - step: 3日以内確認
+    type: hearing
+    output_format: enum
+    output_labels:
+      - "はい"
+      - "いいえ"
+    save_to: ""
+    retry_failure: end_failure
+    conditions:
+      - match: "はい"
+        next: END_予約代表案内
+      - match: "いいえ"
+        next: jump_受診者名聴取
+      - match: "default"
+        next: jump_受診者名聴取
+
+  # --- 2. 受診者名（サブフロー）---
+  - step: jump_受診者名聴取
+    type: subflow
+    flowname: "中東遠総合医療センター$受診者名聴取"
+    next: jump_生年月日聴取
+
+  # --- 3. 生年月日（サブフロー）---
+  - step: jump_生年月日聴取
+    type: subflow
+    flowname: "中東遠総合医療センター$生年月日聴取"
+    next: jump_連絡先電話番号聴取
+
+  # --- 4. 連絡先電話番号（サブフロー）---
+  - step: jump_連絡先電話番号聴取
+    type: subflow
+    flowname: "中東遠総合医療センター$連絡先電話番号聴取"
+    next: 用件1聴取
+
+  # --- 5. 用件① ---
+  - step: 用件1聴取
+    type: hearing
+    output_format: enum
+    output_labels:
+      - "人間ドック"
+      - "健康診断"
+      - "その他の検診"
+      - "精密検査"
+      - "問い合わせ"
+    save_to: clinicalDepartment
+    retry_failure: end_failure
+    conditions:
+      - match: "問い合わせ"
+        next: 問い合わせ内容聴取
+      - match: "人間ドック"
+        next: 人数聴取
+      - match: "健康診断"
+        next: 人数聴取
+      - match: "その他の検診"
+        next: 人数聴取
+      - match: "精密検査"
+        next: 人数聴取
+
+  # --- 6. 人数 ---
+  - step: 人数聴取
+    type: hearing
+    output_format: enum
+    output_labels:
+      - "1or2"
+      - "3以上"
+    save_to: numberOfReservations
+    retry_failure: end_failure
+    conditions:
+      - match: "3以上"
+        next: END_折返案内
+      - match: "1or2"
+        next: 用件2聴取
+      - match: "default"
+        next: 用件2聴取
+
+  # --- 7. 用件② ---
+  - step: 用件2聴取
+    type: hearing
+    output_format: enum
+    output_labels:
+      - "予約"
+      - "変更"
+      - "キャンセル"
+      - "問い合わせ"
+    save_to: classification
+    retry_failure: end_failure
+    conditions:
+      - match: "予約"
+        next: 受診希望コース分岐
+      - match: "変更"
+        next: 現在の予約日聴取_変更
+      - match: "キャンセル"
+        next: 現在の予約日聴取_キャンセル
+      - match: "問い合わせ"
+        next: 問い合わせ内容聴取
+
+  # --- 8. 受診希望コース分岐（用件①で分岐）---
+  - step: 受診希望コース分岐
+    type: context_match_router
+    reference_module: "clinicalDepartment"
+    conditions:
+      - match: "人間ドック"
+        next: 希望オプション聴取
+      - match: "健康診断"
+        next: コース聴取_健康診断
+      - match: "その他の検診"
+        next: コース聴取_その他
+      - match: "精密検査"
+        next: コース聴取_精密検査
+      - match: "default"
+        next: コース聴取_健康診断
+
+  # --- 9. コース聴取（健康診断）---
+  - step: コース聴取_健康診断
+    type: hearing
+    output_format: text
+    save_to: course
+    retry_failure: end_failure
+    next: 希望オプション聴取
+
+  # --- 10. コース聴取（精密検査）---
+  - step: コース聴取_精密検査
+    type: hearing
+    output_format: text
+    save_to: course
+    retry_failure: end_failure
+    next: 希望オプション聴取
+
+  # --- 11. コース聴取（その他の検診）---
+  - step: コース聴取_その他
+    type: hearing
+    output_format: text
+    save_to: course
+    retry_failure: end_failure
+    next: 希望オプション聴取
+
+  # --- 12. 希望オプション（1-5-1 例外: retry=1, skip）---
+  - step: 希望オプション聴取
+    type: hearing
+    output_format: text
+    save_to: option
+    retry_failure: skip
+    retry_failure_announcement: ""
+    next: 受診希望時期聴取
+
+  # --- 13. 受診希望時期（当日/翌日検出つき）---
+  - step: 受診希望時期聴取
+    type: hearing
+    output_format: enum
+    output_labels:
+      - "当日_翌日"
+    save_to: desiredConsultation
+    retry_failure: end_failure
+    conditions:
+      - match: "当日_翌日"
+        next: END_当日代表案内
+      - match: "default"
+        next: 追加の質問聴取
+
+  # --- 14. 現在の予約日（変更）---
+  - step: 現在の予約日聴取_変更
+    type: hearing
+    output_format: datetime
+    save_to: reservationDate
+    retry_failure: end_failure
+    next: 現在の予約日_当日判定_変更
+
+  - step: 現在の予約日_当日判定_変更
+    type: script
+    script_template: future_date
+    reference_module: "OpenAI_現在の予約日聴取_変更"
+    template_params: {}
+    conditions:
+      - match: "SUCCESS"
+        next: 変更内容聴取
+      - match: "FAIL"
+        next: END_当日代表案内
+
+  # --- 15. 変更内容 ---
+  - step: 変更内容聴取
+    type: hearing
+    output_format: text
+    save_to: reason
+    retry_failure: end_failure
+    next: 追加の質問聴取
+
+  # --- 16. 現在の予約日（キャンセル）---
+  - step: 現在の予約日聴取_キャンセル
+    type: hearing
+    output_format: datetime
+    save_to: reservationDate
+    retry_failure: end_failure
+    next: 現在の予約日_当日判定_キャンセル
+
+  - step: 現在の予約日_当日判定_キャンセル
+    type: script
+    script_template: future_date
+    reference_module: "OpenAI_現在の予約日聴取_キャンセル"
+    template_params: {}
+    conditions:
+      - match: "SUCCESS"
+        next: 追加の質問聴取
+      - match: "FAIL"
+        next: END_当日代表案内
+
+  # --- 17. 問い合わせ内容 ---
+  - step: 問い合わせ内容聴取
+    type: hearing
+    output_format: text
+    save_to: question
+    retry_failure: end_failure
+    next: 追加の質問聴取
+
+  # --- 18. 追加の質問 ---
+  - step: 追加の質問聴取
+    type: hearing
+    output_format: text
+    save_to: nextQuestion
+    retry_failure: end_failure
+    next: 終話判定_内部
+
+  # --- 19. 終話判定（3変数組み合わせ: clinicalDepartment × classification × phonetype）---
+  - step: 終話判定_内部
+    type: script
+    script_template: custom
+    reference_module: "clinicalDepartment"
+    template_params:
+      logic: |
+        // clinicalDepartment × classification × phonetype の3変数分岐
+        // 精密検査の場合は classification を無視して phonetype のみで分岐（最優先ルール）
+        // 優先順位（上から順に評価）:
+        //   1. clinicalDepartment=精密検査 AND phonetype=携帯 → "精密_携帯"
+        //   2. clinicalDepartment=精密検査 AND phonetype!=携帯 → "精密_固定"
+        //   3. classification=キャンセル → "キャンセル"
+        //   4. classification in {予約,変更,問い合わせ} AND phonetype=携帯 → "予約変更問合せ_携帯"
+        //   5. classification in {予約,変更,問い合わせ} AND phonetype!=携帯 → "予約変更問合せ_固定"
+    conditions:
+      - match: "精密_携帯"
+        next: END_精密_携帯
+      - match: "精密_固定"
+        next: END_精密_固定
+      - match: "キャンセル"
+        next: END_キャンセル
+      - match: "予約変更問合せ_携帯"
+        next: END_予約変更問合せ_携帯
+      - match: "予約変更問合せ_固定"
+        next: END_予約変更問合せ_固定
+
+  # --- 終話ブロック ---
+  - step: END_予約代表案内
+    type: termination
+    termination_ref: "END_予約代表案内"
+
+  - step: END_当日代表案内
+    type: termination
+    termination_ref: "END_当日代表案内"
+
+  - step: END_折返案内
+    type: termination
+    termination_ref: "END_折返案内"
+
+  - step: END_精密_携帯
+    type: termination
+    termination_ref: "END_精密_携帯"
+
+  - step: END_精密_固定
+    type: termination
+    termination_ref: "END_精密_固定"
+
+  - step: END_予約変更問合せ_携帯
+    type: termination
+    termination_ref: "END_予約変更問合せ_携帯"
+
+  - step: END_予約変更問合せ_固定
+    type: termination
+    termination_ref: "END_予約変更問合せ_固定"
+
+  - step: END_キャンセル
+    type: termination
+    termination_ref: "END_キャンセル"
+
+# --- セクション5: コンテキストフィールド一覧 ---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "予約"
+      - id: "2"
+        order: "2"
+        value: "変更"
+      - id: "3"
+        order: "3"
+        value: "キャンセル"
+      - id: "4"
+        order: "4"
+        value: "問い合わせ"
+      - id: "5"
+        order: "5"
+        value: "無回答"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "Gen2 function enum 準拠（無回答含む）"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "用件①"
+    display_type: "DEPARTMENT"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "人間ドック"
+      - id: "2"
+        order: "2"
+        value: "健康診断"
+      - id: "3"
+        order: "3"
+        value: "その他の検診"
+      - id: "4"
+        order: "4"
+        value: "精密検査"
+      - id: "5"
+        order: "5"
+        value: "問い合わせ"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "Gen2 function enum (4値) に加えて「問い合わせ」を追加（フロー上 clinicalDepartment に保存するため）"
+
+  - context_name: "patientName"
+    context_name_jp: "受診者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "カタカナ変換。復唱禁止"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "DOB Re-confirmation で復唱あり。1-9 の元号補正ルールを OpenAI プロンプトに埋め込み"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "聴取完了まで絶対に着信番号をセットしない（原則4）"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "フローでは聴取しない。display_type 用の定義のみ（Gen2 function required 対応）"
+
+  - context_name: "healthInsuranceAssociation"
+    context_name_jp: "健保組合等名称"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "フローでは聴取しない。display_type 用の定義のみ"
+
+  - context_name: "reservationDate"
+    context_name_jp: "現在の予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "変更/キャンセル用件でのみ聴取"
+
+  - context_name: "numberOfReservations"
+    context_name_jp: "予約人数"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "enum (1or2 / 3以上) 判定結果を保存"
+
+  - context_name: "course"
+    context_name_jp: "受診希望コース"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "人間ドックは聴取スキップ（空欄）"
+
+  - context_name: "option"
+    context_name_jp: "希望オプション"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "1-5-1 例外: retry=1, リトライ超過時は空欄で次へ"
+
+  - context_name: "desiredConsultation"
+    context_name_jp: "受診希望時期"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "フリーテキスト。当日/翌日発話時は「当日_翌日」タグが保存される（END_当日代表案内へ分岐）"
+
+  - context_name: "reason"
+    context_name_jp: "変更内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "変更用件のみ"
+
+  - context_name: "question"
+    context_name_jp: "問い合わせ内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "用件①=問い合わせ or 用件②=問い合わせ のときに発話内容を保存"
+
+  - context_name: "nextQuestion"
+    context_name_jp: "追加の質問"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約/変更/キャンセル/問い合わせフロー中の追加質問を保存"
+
+  - context_name: "phonetype"
+    context_name_jp: "電話番号種別"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "携帯/その他。連絡先電話番号サブフロー内で設定される。終話判定に使用"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "着信番号自動格納（標準）"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "聴取失敗"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+      - id: "7"
+        order: "7"
+        value: "非通知"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "Gen3 許可値のみ使用（Gen2 checkpoint=0/5 は status=2 に置換）"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "3日以内確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: ""
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "3営業日以内の予約問い合わせ確認。肯定→END_予約代表案内、否定→受診者名聴取"
+
+  - order: 2
+    name: "用件1聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "人間ドック"
+      - "健康診断"
+      - "その他の検診"
+      - "精密検査"
+      - "問い合わせ"
+    notes: "用件① (5択)。「検針/返信/天候診断」→「健診」、「人間ロック/ドック/ロック/人間独」→「人間ドック」、「検診」の前に「乳がん/子宮がん/子宮頸がん」がある場合は除外"
+
+  - order: 3
+    name: "人数聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "numberOfReservations"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "1or2"
+      - "3以上"
+    notes: "numberOfReservations>=3 で即 END_折返案内。「1名/1人/2名/2人」→1or2、「3名以上/3人以上/複数名」→3以上"
+
+  - order: 4
+    name: "用件2聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "予約"
+      - "変更"
+      - "キャンセル"
+      - "問い合わせ"
+    notes: "用件② (4択)。「薬/お薬」→「予約」、「取り直したい/取り直す/別の/変えたい/変える/変えて」→「変更」、「やめる/取り消し/取り消す/取消/やめたい」→「キャンセル」"
+
+  - order: 5
+    name: "コース聴取_健康診断"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "course"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "受診希望コースリスト（16コース）。キーワード→コース名のレコメンド（クーポン/市の検診/受診票が来た/乳がん/子宮がん/休日検診/協会けんぽ）。「はい/いいえ/わからない/どちらでもいい/すみません」等の曖昧返答時は次のフローへ"
+
+  - order: 6
+    name: "コース聴取_精密検査"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "course"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "精密検査用：「受診を希望される内容をお話ください。」"
+
+  - order: 7
+    name: "コース聴取_その他"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "course"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "その他の検診用：「婦人科検診」のような例示アナウンス"
+
+  - order: 8
+    name: "希望オプション聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "option"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "1-5-1 例外: retry=1、リトライ超過時は空欄でセットし次へ（終話しない）。オプションリスト（19項目）から選択"
+
+  - order: 9
+    name: "受診希望時期聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "desiredConsultation"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "当日_翌日"
+      - "<発話内容そのまま>"
+    notes: "OpenAI: 当日/翌日発話→「当日_翌日」タグ出力、それ以外→発話内容をそのまま出力（フリーテキストとして保存）。1-12 ルール適用。再ヒアリング時に生年月日系の定型文を絶対に使わない（【重要】受診希望時期の再ヒアリング制御）"
+
+  - order: 10
+    name: "現在の予約日聴取_変更"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 8
+    retry_count: 2
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: "YYYY-MM-DD HH:MM 形式。言われた日程に当日年度を足して登録。10月以降で1〜9月発話は翌年扱い（例: 2025/11/1入電+5/1発話→2026-05-01）。過去日付は未来化。当日判定は後続 script で実施。DTMF対応表: 月2桁+日2桁（MMDD）形式で入力。例: 0401→4月1日、0510→5月10日、1225→12月25日。最大8桁入力受付（MMDDHHMM 時刻まで指定可、時刻省略時は00:00固定）"
+
+  - order: 11
+    name: "変更内容聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "「予約日/日時/日付/日程/時間/スケジュール」→日時変更と判断。「内容/コース/オプション」→受診内容変更と判断"
+
+  - order: 12
+    name: "現在の予約日聴取_キャンセル"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 8
+    retry_count: 2
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: "現在の予約日聴取_変更 と同じ正規化ルール。DTMF対応表: 月2桁+日2桁（MMDD）形式で入力。例: 0401→4月1日、0510→5月10日、1225→12月25日。最大8桁入力受付（MMDDHHMM 時刻まで指定可、時刻省略時は00:00固定）"
+
+  - order: 13
+    name: "問い合わせ内容聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "question"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "復唱禁止。発話内容をそのまま question にセット"
+
+  - order: 14
+    name: "追加の質問聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "nextQuestion"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "復唱禁止。発話内容をそのまま nextQuestion にセット"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "3日以内確認"
+    tts_announcement: "はじめに、3営業日以内の予約に関するお問い合わせでしょうか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+      mapping:
+        - input: "はい / そうです / はいそうです / お願いします"
+          output: "はい"
+        - input: "いいえ / 違います / ちがいます / 違う / 別件"
+          output: "いいえ"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: ""
+    next_step: "hearing条件分岐"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "用件1聴取"
+    tts_announcement: "次に、お問合せ内容を次の5つのうちの、いずれかでお話しください。「人間ドック」、「健康診断」、「その他の検診」、「精密検査」、「問い合わせ」。それではお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "人間ドック"
+        - "健康診断"
+        - "その他の検診"
+        - "精密検査"
+        - "問い合わせ"
+      mapping:
+        - input: "人間ドック / 人間ロック / ドック / ロック / 人間独"
+          output: "人間ドック"
+        - input: "健康診断 / 健診（ただし『乳がん検診』『子宮がん検診』『子宮頸がん検診』は除外）/ 検針 / 返信 / 天候診断"
+          output: "健康診断"
+        - input: "その他の検診 / 乳がん検診 / 子宮がん検診 / 婦人科検診 / がん検診 / 各種検診"
+          output: "その他の検診"
+        - input: "精密検査 / 精密 / 二次検査 / 再検査"
+          output: "精密検査"
+        - input: "問い合わせ / 質問 / 教えてほしい / 確認したい"
+          output: "問い合わせ"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "clinicalDepartment"
+    next_step: "hearing条件分岐"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "人数聴取"
+    tts_announcement: "ご予約の人数は何名様でしょうか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "1or2"
+        - "3以上"
+      mapping:
+        - input: "1名 / 1人 / ひとり / 一人 / 2名 / 2人 / ふたり / 二人"
+          output: "1or2"
+        - input: "3名 / 3人 / 3名以上 / 複数名 / 家族全員 / みんな"
+          output: "3以上"
+      no_result_condition: "数値が特定できない場合"
+    save_to: "numberOfReservations"
+    next_step: "hearing条件分岐"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "用件2聴取"
+    tts_announcement: "続きまして、ご用件を、次の4つのうち、いずれかでお話しください。「予約」「変更」「キャンセル」「問い合わせ」。それではお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "予約"
+        - "変更"
+        - "キャンセル"
+        - "問い合わせ"
+      mapping:
+        - input: "予約 / 薬 / お薬 / 申し込み / 申込"
+          output: "予約"
+        - input: "変更 / 取り直したい / 取り直す / 別の / 変えたい / 変える / 変えて / 日程変更"
+          output: "変更"
+        - input: "キャンセル / やめる / 取り消し / 取り消す / 取消 / やめたい"
+          output: "キャンセル"
+        - input: "問い合わせ / 質問 / 確認したい / 教えてほしい"
+          output: "問い合わせ"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "classification"
+    next_step: "hearing条件分岐"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "コース聴取_健康診断"
+    tts_announcement: "受診希望コースを、「健康診断」「生活習慣病予防健診」のようにお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "コースリストに一致"
+          output: "<コース名>"
+        - input: "リストに無い/不明/わからない/はい/いいえ/どちらでもいい"
+          output: "<発話内容をそのまま>（折り返しで対応）"
+        - input: "レコメンド対象キーワード（クーポン/市の検診/受診票が来た/乳がん/子宮がん/休日検診/協会けんぽ）"
+          output: "『{キーワード}で該当するコースは{N}コースございます。{候補}でしょうか？ご希望のコース名をお話しください。』（レコメンド形式）"
+      no_result_condition: "STT が無音・ノイズのみ"
+    save_to: "course"
+    next_step: "希望オプション聴取"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "コース聴取_精密検査"
+    tts_announcement: "受診を希望される内容をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "発話内容"
+          output: "<発話内容そのまま>"
+      no_result_condition: "STT が無音・ノイズのみ"
+    save_to: "course"
+    next_step: "希望オプション聴取"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "コース聴取_その他"
+    tts_announcement: "受診希望コースを、「婦人科検診」のようにお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "発話内容"
+          output: "<発話内容そのまま>（レコメンド対象キーワードはコース聴取_健康診断と同じ）"
+      no_result_condition: "STT が無音・ノイズのみ"
+    save_to: "course"
+    next_step: "希望オプション聴取"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "希望オプション聴取"
+    tts_announcement: "オプション検査の追加希望がございましたら「胃カメラ」のようにお話ください。ない場合は「なし」とお答えください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "オプションリスト（脳ドック/胃カメラ検査/ABC検診/ピロリ抗体検査/マンモグラフィ/乳腺エコー/子宮頸がん検査/経腟エコー/レディースセット/腫瘍マーカー/膵セット/胸部CT検査/喀痰検査/頸動脈検査/動脈検査/内臓脂肪測定CT検査/睡眠時無呼吸症候群簡易検査/心臓・睡眠検査セット/骨密度検査）"
+          output: "<オプション名>"
+        - input: "なし / ありません / 無し"
+          output: "なし"
+      no_result_condition: "STT が無音・ノイズのみ"
+    save_to: "option"
+    next_step: "受診希望時期聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "受診希望時期聴取"
+    tts_announcement: "受診を希望される日程や、曜日、時期をお話ください。最短での受診をご希望の場合は「最短」とお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "当日_翌日"
+        - "<発話内容そのまま>"
+      mapping:
+        - input: "当日 / 今日 / 本日 / 翌日 / 明日 / あした"
+          output: "当日_翌日"
+        - input: "来週 / 来月 / 再来月 / 最短 / 5月ごろ / GW明け など"
+          output: "<発話内容そのまま>"
+      no_result_condition: "STT が無音・ノイズのみ"
+    save_to: "desiredConsultation"
+    next_step: "hearing条件分岐"
+    retry_failure: "end_failure"
+    retry_failure_announcement: "受診希望時期の再ヒアリング時は『生まれた年』等の生年月日系定型文は絶対に使わない。『受診希望時期をお話ください』のみ"
+
+  - step_name: "現在の予約日聴取_変更"
+    tts_announcement: "現在の予約日を「4月1日」のように日付でお話ください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "4月1日 / 来週の火曜日 / 5月10日 など"
+          output: "YYYY-MM-DD HH:MM（00:00 固定）"
+      no_result_condition: "日付が特定できない"
+    save_to: "reservationDate"
+    next_step: "現在の予約日_当日判定_変更"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "変更内容聴取"
+    tts_announcement: "オプション追加や日程変更など、変更を希望される内容をお話ください。最短での受診に変更したい場合は「最短」とお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "予約日/日時/日付/日程/時間/スケジュール"
+          output: "<発話内容>（日時変更と分類）"
+        - input: "内容/コース/オプション"
+          output: "<発話内容>（受診内容変更と分類）"
+      no_result_condition: "STT が無音・ノイズのみ"
+    save_to: "reason"
+    next_step: "追加の質問聴取"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "現在の予約日聴取_キャンセル"
+    tts_announcement: "現在の予約日を「4月1日」のように日付でお話ください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "4月1日 / 来週の火曜日 / 5月10日 など"
+          output: "YYYY-MM-DD HH:MM（00:00 固定）"
+      no_result_condition: "日付が特定できない"
+    save_to: "reservationDate"
+    next_step: "現在の予約日_当日判定_キャンセル"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "問い合わせ内容聴取"
+    tts_announcement: "お問合せの内容をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "発話内容"
+          output: "<発話内容そのまま>"
+      no_result_condition: "STT が無音・ノイズのみ"
+    save_to: "question"
+    next_step: "追加の質問聴取"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "追加の質問聴取"
+    tts_announcement: "他にオペレーターへお伝えしたいことやご質問がございましたら、お話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "発話内容"
+          output: "<発話内容そのまま>"
+      no_result_condition: "STT が無音・ノイズのみ（無ければ空文字）"
+    save_to: "nextQuestion"
+    next_step: "終話判定_内部"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系 ---
+  - name: "END_非通知"
+    condition: "非通知着信（opening incoming-classifier）"
+    tts_announcement: "お手数をおかけしますが、発信者番号を通知して再度お電話ください。電話番号の前に 186 を追加いただくことで発信者番号を通知していただくことができます。それでは失礼いたします。"
+    status: "7"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外（本フローでは acceptance_times 不使用のため発火しないが、デフォルト必須のため保持）"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達（各 hearing の end_failure 統一先）"
+    tts_announcement: "申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、再度おかけなおしください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系（施設固有）---
+  - name: "END_予約代表案内"
+    condition: "3営業日以内確認で「はい」"
+    tts_announcement: "申し訳ございません。AI電話ではお受けできません。祝日を除く、月曜から金曜の、9時00分から16時30分に、次の番号へおかけ直しください。電話番号は、0537-28-8133です。繰り返します。0537-28-8133です。繰り返します。0537-28-8133です。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_予約代表案内"
+
+  - name: "END_当日代表案内"
+    condition: "受診希望時期または現在の予約日で当日/翌日発話"
+    tts_announcement: "当日のご予約についてはAI電話ではご対応できませんので、代表電話の『0537-28-8133』におかけ直しください。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_当日代表案内"
+
+  - name: "END_折返案内"
+    condition: "人数3名以上"
+    tts_announcement: "複数名でのご予約はお電話でのご案内が必要となります。後ほど、担当者より、折り返しご連絡いたします。なお、営業時間外のお問い合わせは翌営業日にご連絡いたします。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_折返案内"
+
+  - name: "END_精密_携帯"
+    condition: "clinicalDepartment=精密検査 AND phonetype=携帯"
+    tts_announcement: "終話後、中東遠総合医療センターよりショートメールが届きますので内容をご確認ください。後程ショートメールまたは折り返しご連絡をいたします。なお、精密検査の予約、変更は14時30分から16時30分にご連絡いたします。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_精密_携帯"
+
+  - name: "END_精密_固定"
+    condition: "clinicalDepartment=精密検査 AND phonetype=その他"
+    tts_announcement: "担当者より折り返しご連絡いたします。なお、精密検査の予約、変更は14時30分から16時30分にご連絡いたします。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_精密_固定"
+
+  - name: "END_予約変更問合せ_携帯"
+    condition: "clinicalDepartment≠精密検査 AND classification∈{予約,変更,問い合わせ} AND phonetype=携帯"
+    tts_announcement: "終話後、中東遠総合医療センターよりショートメールが届きますので内容をご確認ください。後程ショートメールまたは折り返しご連絡をいたします。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約変更問合せ_携帯"
+
+  - name: "END_予約変更問合せ_固定"
+    condition: "clinicalDepartment≠精密検査 AND classification∈{予約,変更,問い合わせ} AND phonetype=その他"
+    tts_announcement: "担当者より折り返しご連絡いたします。なお、精密検査の予約、変更は14時30分から16時30分にご連絡いたします。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約変更問合せ_固定"
+
+  - name: "END_キャンセル"
+    condition: "clinicalDepartment≠精密検査 AND classification=キャンセル"
+    tts_announcement: "ご予約のキャンセルを承りました。何かございましたら担当よりご連絡いたします。またのご利用をお待ちしております。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "2"
+    completion_flag_name: "完了フラグ_キャンセル"
+
+# smsFlag 分岐（status×classification で3パターン: 0/1/2）
+sms_flag_routing:
+  enabled: true
+  routing_keys:
+    - "status"
+    - "classification"
+  patterns:
+    - condition: "status=1 AND classification=キャンセル"
+      sms_flag: "2"
+      notes: "END_キャンセル 専用"
+    - condition: "status=1 AND classification∈{予約,変更,問い合わせ}"
+      sms_flag: "1"
+      notes: "END_精密_携帯/END_精密_固定/END_予約変更問合せ_携帯/END_予約変更問合せ_固定 に適用"
+    - condition: "status≠1（代表案内/折返案内/非通知/聴取失敗等）"
+      sms_flag: "0"
+      notes: "END_予約代表案内/END_当日代表案内/END_折返案内/END_非通知/END_聴取失敗"
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+  # Gen2 yaml に RAG/FAQ 利用記述なし（移管ノート明記）
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。中東遠総合医療センター、健診専用AI電話です。"
+
+  - module_name: "3日以内確認"
+    purpose: "3営業日以内の予約問い合わせ確認"
+    announcement: "はじめに、3営業日以内の予約に関するお問い合わせでしょうか？"
+
+  - module_name: "用件1聴取"
+    purpose: "用件①聴取（5択）"
+    announcement: "次に、お問合せ内容を次の5つのうちの、いずれかでお話しください。「人間ドック」、「健康診断」、「その他の検診」、「精密検査」、「問い合わせ」。それではお話しください。"
+
+  - module_name: "人数聴取"
+    purpose: "予約人数聴取"
+    announcement: "ご予約の人数は何名様でしょうか？"
+
+  - module_name: "用件2聴取"
+    purpose: "用件②聴取（4択）"
+    announcement: "続きまして、ご用件を、次の4つのうち、いずれかでお話しください。「予約」「変更」「キャンセル」「問い合わせ」。それではお話しください。"
+
+  - module_name: "コース聴取_健康診断"
+    purpose: "健康診断用 受診希望コース聴取"
+    announcement: "受診希望コースを、「健康診断」「生活習慣病予防健診」のようにお話ください。"
+
+  - module_name: "コース聴取_精密検査"
+    purpose: "精密検査用 受診内容聴取"
+    announcement: "受診を希望される内容をお話ください。"
+
+  - module_name: "コース聴取_その他"
+    purpose: "その他の検診用 受診希望コース聴取"
+    announcement: "受診希望コースを、「婦人科検診」のようにお話ください。"
+
+  - module_name: "希望オプション聴取"
+    purpose: "希望オプション聴取"
+    announcement: "オプション検査の追加希望がございましたら「胃カメラ」のようにお話ください。ない場合は「なし」とお答えください。"
+
+  - module_name: "受診希望時期聴取"
+    purpose: "受診希望時期聴取（当日/翌日検出）"
+    announcement: "受診を希望される日程や、曜日、時期をお話ください。最短での受診をご希望の場合は「最短」とお話ください。"
+
+  - module_name: "現在の予約日聴取_変更"
+    purpose: "変更用件の現在の予約日聴取"
+    announcement: "現在の予約日を「4月1日」のように日付でお話ください。"
+
+  - module_name: "変更内容聴取"
+    purpose: "変更内容聴取"
+    announcement: "オプション追加や日程変更など、変更を希望される内容をお話ください。最短での受診に変更したい場合は「最短」とお話ください。"
+
+  - module_name: "現在の予約日聴取_キャンセル"
+    purpose: "キャンセル用件の現在の予約日聴取"
+    announcement: "現在の予約日を「4月1日」のように日付でお話ください。"
+
+  - module_name: "問い合わせ内容聴取"
+    purpose: "問い合わせ内容聴取"
+    announcement: "お問合せの内容をお話ください。"
+
+  - module_name: "追加の質問聴取"
+    purpose: "追加の質問聴取（全用件共通）"
+    announcement: "他にオペレーターへお伝えしたいことやご質問がございましたら、お話ください。"
+
+  # --- 終話系 TTS ---
+  - module_name: "END_非通知"
+    purpose: "非通知着信時の即時切断"
+    announcement: "お手数をおかけしますが、発信者番号を通知して再度お電話ください。電話番号の前に 186 を追加いただくことで発信者番号を通知していただくことができます。それでは失礼いたします。"
+
+  - module_name: "END_時間外"
+    purpose: "時間外着信時（本フローでは未使用だがデフォルト必須）"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ超過時のフェールセーフ終話"
+    announcement: "申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、再度おかけなおしください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_予約代表案内"
+    purpose: "3営業日以内予約案内（0537-28-8133 を3回繰り返し）"
+    announcement: "申し訳ございません。AI電話ではお受けできません。祝日を除く、月曜から金曜の、9時00分から16時30分に、次の番号へおかけ直しください。電話番号は、0537-28-8133です。繰り返します。0537-28-8133です。繰り返します。0537-28-8133です。それでは失礼いたします。"
+
+  - module_name: "END_当日代表案内"
+    purpose: "当日/翌日予約希望時の代表案内"
+    announcement: "当日のご予約についてはAI電話ではご対応できませんので、代表電話の『0537-28-8133』におかけ直しください。それでは失礼いたします。"
+
+  - module_name: "END_折返案内"
+    purpose: "3名以上予約時の折り返し案内"
+    announcement: "複数名でのご予約はお電話でのご案内が必要となります。後ほど、担当者より、折り返しご連絡いたします。なお、営業時間外のお問い合わせは翌営業日にご連絡いたします。それでは失礼いたします。"
+
+  - module_name: "END_精密_携帯"
+    purpose: "精密検査×携帯 終話（SMS送信あり）"
+    announcement: "終話後、中東遠総合医療センターよりショートメールが届きますので内容をご確認ください。後程ショートメールまたは折り返しご連絡をいたします。なお、精密検査の予約、変更は14時30分から16時30分にご連絡いたします。それでは失礼いたします。"
+
+  - module_name: "END_精密_固定"
+    purpose: "精密検査×固定/その他 終話"
+    announcement: "担当者より折り返しご連絡いたします。なお、精密検査の予約、変更は14時30分から16時30分にご連絡いたします。それでは失礼いたします。"
+
+  - module_name: "END_予約変更問合せ_携帯"
+    purpose: "精密以外×予約/変更/問合せ×携帯 終話（SMS送信あり）"
+    announcement: "終話後、中東遠総合医療センターよりショートメールが届きますので内容をご確認ください。後程ショートメールまたは折り返しご連絡をいたします。それでは失礼いたします。"
+
+  - module_name: "END_予約変更問合せ_固定"
+    purpose: "精密以外×予約/変更/問合せ×固定/その他 終話"
+    announcement: "担当者より折り返しご連絡いたします。なお、精密検査の予約、変更は14時30分から16時30分にご連絡いたします。それでは失礼いたします。"
+
+  - module_name: "END_キャンセル"
+    purpose: "精密以外×キャンセル 終話（SMS送信 flag=2）"
+    announcement: "ご予約のキャンセルを承りました。何かございましたら担当よりご連絡いたします。またのご利用をお待ちしております。それでは失礼いたします。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "用件1聴取"
+    words: |
+      人間ドック にんげんどっく
+      健康診断 けんこうしんだん
+      その他の検診 そのたのけんしん
+      精密検査 せいみつけんさ
+      問い合わせ といあわせ
+      健診 けんしん
+      検診 けんしん
+      ドック どっく
+      ロック ろっく
+      人間ロック にんげんろっく
+      検針 けんしん
+      返信 へんしん
+      天候診断 てんこうしんだん
+      乳がん にゅうがん
+      子宮がん しきゅうがん
+      子宮頸がん しきゅうけいがん
+
+  - step_name: "人数聴取"
+    words: |
+      1名 いちめい
+      1人 ひとり
+      2名 にめい
+      2人 ふたり
+      3名 さんめい
+      3人 さんにん
+      複数名 ふくすうめい
+      家族 かぞく
+
+  - step_name: "用件2聴取"
+    words: |
+      予約 よやく
+      変更 へんこう
+      キャンセル きゃんせる
+      問い合わせ といあわせ
+      薬 くすり
+      お薬 おくすり
+      取り直したい とりなおしたい
+      別の べつの
+      変えたい かえたい
+      やめる やめる
+      取り消し とりけし
+      取消 とりけし
+
+  - step_name: "コース聴取_健康診断"
+    words: |
+      婦人科健診 ふじんかけんしん
+      乳がん検診 にゅうがんけんしん
+      子宮がん検診 しきゅうがんけんしん
+      生活習慣病予防健診 せいかつしゅうかんびょうよぼうけんしん
+      PETがん検診 ぺっとがんけんしん
+      脳動脈硬化ドック のうどうみゃくこうかどっく
+      脳ドック のうどっく
+      日帰りドック ひがえりどっく
+      宿泊ドック しゅくはくどっく
+      ファミリー健診 ふぁみりーけんしん
+      全国健康保険協会 ぜんこくけんこうほけんきょうかい
+      掛川市婦人科検診 かけがわしふじんかけんしん
+      袋井市婦人科検診 ふくろいしふじんかけんしん
+      単独乳がん検診 たんどくにゅうがんけんしん
+      JMS じぇいえむえす
+      土曜日健診 どようびけんしん
+      クーポン くーぽん
+      協会けんぽ きょうかいけんぽ
+      一般健診 いっぱんけんしん
+      付加健診 ふかけんしん
+      マンモグラフィー まんもぐらふぃー
+      エコー えこー
+      休日検診 きゅうじつけんしん
+
+  - step_name: "コース聴取_その他"
+    words: |
+      婦人科検診 ふじんかけんしん
+      乳がん検診 にゅうがんけんしん
+      子宮がん検診 しきゅうがんけんしん
+      PETがん検診 ぺっとがんけんしん
+      脳ドック のうどっく
+      脳動脈硬化ドック のうどうみゃくこうかどっく
+
+  - step_name: "希望オプション聴取"
+    words: |
+      脳ドック のうどっく
+      胃カメラ検査 いかめらけんさ
+      ABC検診 えーびーしーけんしん
+      ピロリ抗体検査 ぴろりこうたいけんさ
+      マンモグラフィ まんもぐらふぃ
+      乳腺エコー にゅうせんえこー
+      子宮頸がん検査 しきゅうけいがんけんさ
+      経腟エコー けいちつえこー
+      レディースセット れでぃーすせっと
+      腫瘍マーカー しゅようまーかー
+      膵セット すいせっと
+      胸部CT検査 きょうぶしーてぃーけんさ
+      喀痰検査 かくたんけんさ
+      頸動脈検査 けいどうみゃくけんさ
+      動脈検査 どうみゃくけんさ
+      内臓脂肪測定CT検査 ないぞうしぼうそくていしーてぃーけんさ
+      睡眠時無呼吸症候群簡易検査 すいみんじむこきゅうしょうこうぐんかんいけんさ
+      心臓・睡眠検査セット しんぞうすいみんけんさせっと
+      骨密度検査 こつみつどけんさ
+      なし なし
+
+  - step_name: "受診希望時期聴取"
+    words: |
+      当日 とうじつ
+      本日 ほんじつ
+      今日 きょう
+      翌日 よくじつ
+      明日 あした
+      最短 さいたん
+      来週 らいしゅう
+      来月 らいげつ
+      再来月 さらいげつ
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "【最優先】clinicalDepartment=精密検査 の場合、classification（予約/変更/キャンセル/問い合わせ）を**無視**して連絡先電話番号種別のみで終話文を決定する。キャンセル文言（『ご予約のキャンセルを承りました』）は絶対に使用しない。終話判定_内部 script の条件順で精密検査を最優先に配置。"
+  - "【復唱禁止】受診者名・問い合わせ内容・追加の質問・受診希望コース・希望オプション・受診希望時期・現在の予約日・変更内容は絶対に復唱しない（1/1-8/1-13/プロンプト先頭の重要指示）。**生年月日のみ「○○ですね」の復唱を許可**（生年月日聴取サブフロー内の DOB Re-confirmation）。"
+  - "【additionalPhoneNumber 初期化ルール】着信時に着信番号を additionalPhoneNumber へ絶対にコピーしない。聴取完了後のみセット。途中切断時もブランクのまま（プロンプト原則4）。"
+  - "【連絡先電話番号の4分岐】非通知/050/固定/不明は「ショートメールを受信できる携帯番号をお話しください」文言を使用。携帯（090/080/070）のみ「今おかけいただいている ○○ でよろしいですか？」確認文を使用。この確認文は携帯以外で絶対に使用禁止。サブフロー内でincoming-classifierで判別する（1-10 ①〜⑤）。"
+  - "【連絡先電話番号リトライ超過】anonymous着信時のみ END_連絡先エラー終話（『こちらからお電話失礼させていただきます』）。それ以外は END_折返案内。リトライ上限3回（他項目の2回より多い）。サブフロー内リトライ失敗を親フローへシグナルできないため、Brekeke IVR UI で手動配線（confirmation_items 参照）。"
+  - "【3名以上折返】numberOfReservations>=3 で即 END_折返案内（status=2,smsFlag=0）、以降のヒアリングに進まない。"
+  - "【3営業日以内確認】冒頭で肯定→ END_予約代表案内（0537-28-8133 を3回繰り返し、status=2,smsFlag=0）。否定→受診者名聴取へ進む。"
+  - "【当日/翌日拒否】受診希望時期／現在の予約日で「当日」「翌日」発話→ END_当日代表案内（0537-28-8133、status=2,smsFlag=0）。過去日付は未来化して受付、10月以降に1〜9月発話は翌年扱い（プロンプト予約関連フロー）。"
+  - "【受診希望時期の再ヒアリング制御】desiredConsultation の再質問では、生年月日系定型文（『生まれた年』『生まれた月』等）を絶対に使用しない（【重要】受診希望時期の再ヒアリング制御）。prompter はこのルールをリトライ文言に反映すること。"
+  - "【希望オプション例外】希望オプション聴取のみ retry_count=1、リトライ超過時は option を空欄でセットして次へ（終話しない）。他項目は retry=2、リトライ超過で END_聴取失敗（1-5-1）。"
+  - "【dtmf/SSML タグ除去】Gen2 yaml 中の <dtmf digit=\"8\" />（生年月日聴取）と <speak type=\"telephone\">（050/携帯確認）は TTS プロンプト禁止。dtmf 設定は IVR プロパティ側、telephone 読み上げは IVR プロパティ側で digit 読み上げ設定を行う。"
+  - "【単語正規化】「検針/返信/天候診断」→『健診』、「人間ロック/ドック/ロック/人間独」→『人間ドック』、「薬/お薬」→『予約』、「取り直したい/別の/変えたい」→『変更』、「やめる/取り消し」→『キャンセル』。「検診」の前に「乳がん/子宮がん/子宮頸がん」がある場合は除外（プロンプト 5. 予約関連の対応フロー冒頭）。"
+  - "【レコメンド対象キーワード】「クーポン」「市の検診」「受診票が来た」「乳がん」「子宮がん」「休日検診」「協会けんぽ」発話時は複数候補を『{キーワード}で該当するコースは{N}コースございます。{候補}でしょうか？』フォーマットで返答（1-3）。prompter はコース聴取の OpenAI プロンプトに埋め込む。"
+  - "【プロンプト非掲載質問】1-2 に基づき、プロンプトに記載のない質問には「うまく聞き取りができませんでした。再度ご用件をお話しください」を1回、2回目以降は「ご質問いただいた内容はAI電話ではご対応できませんので、代表電話の『0537-21-5555』におかけ直しください」と案内。**代表電話番号は 0537-21-5555（予約代表 0537-28-8133 と区別）**。"
+  - "【function required の扱い】Gen2 function の required に medicalCardNumber / healthInsuranceAssociation が含まれるが、フローでは聴取しない。display_type 用の項目定義のみとしてコンテキストに含め、常に空欄で保存する（saveContextModel2DB の rangeValues なし）。"
+  - "【status 値】Gen2 の checkpoint 0/1/2/7 + 必須項目充足で status 決定。Gen3 では saveCompletionFlag2db の status 直接指定で表現。Gen2 に出てくる status=0（途中切断）/5 は Gen3 では使用せず status=2（代表案内相当）または status=3（聴取失敗）に置換。"
+  - "【用件①=問い合わせ】人数聴取をスキップして直接 問い合わせ内容聴取 → 追加の質問聴取 → 終話判定。用件②は聴取しないため classification は空欄になる。終話判定では classification 空の場合は精密判定のみ参照し、精密でなければ予約変更問合せルートに流す（実装時に要注意）。"
+  - "【『もしもし』処理】単独発話時は「お声は届いております。」とアナウンスし再度質問アナウンス。他の発話がある場合は「もしもし」は判断対象から除外（1-14）。prompter の OpenAI プロンプトに組み込む。"
+
+# --- セクション12: 要確認事項 ---
+confirmation_items:
+  - item: "office_id（Dr.JOY 施設 ID）"
+    status: "TODO"
+    assignee: "人間（Dr.JOY 管理画面で確認）"
+    notes: "NON-BLOCKER。設計書生成は仮値のまま進める"
+    resolved: false
+
+  - item: "IVR着信電話番号（ARS番号）"
+    status: "TODO"
+    assignee: "人間（Brekeke IVR 設定時）"
+    notes: "NON-BLOCKER。設計書・フローJSONには含めない"
+    resolved: false
+
+  - item: "[連絡先電話番号聴取] サブフロー内のリトライ上限到達時の2分岐（anonymous→END_連絡先エラー終話 / それ以外→END_折返案内）を Brekeke IVR UI で手動配線"
+    status: "TODO"
+    assignee: "人間（Brekeke IVR UI）"
+    notes: "Custom Jump to Flow からは親フローの END モジュールへ接続不可のため、サブフロー内で終話チェーン（saveCompletionFlag2db + TTS + Disconnect）を完結させる必要がある。サブフロー内で incoming_number=anonymous を参照するスクリプト分岐を配置し、anonymous なら『ご回答の確認ができませんでしたのでこちらからお電話失礼させていただきます』で終話、それ以外は『後ほど、担当者より、折り返しご連絡いたします』で終話する。"
+    resolved: false
+
+  - item: "[連絡先電話番号聴取] サブフロー内の050/非通知/固定/不明 vs 携帯の4分岐アナウンス差分"
+    status: "TODO"
+    assignee: "人間（Brekeke IVR UI または個人情報サブフロー template 拡張）"
+    notes: |
+      標準個人情報サブフローは「携帯着信→自動格納+復唱」「固定/その他→手入力」の2分岐構成。
+      本施設は050着信時に「050番号はショートメールを受信できません」文言を追加する差分あり（1-10 ②）。
+      実装オプション:
+        (a) 標準サブフローを使用し、050 でも手入力パスに流す（文言は固定/その他と共通）→ プロパティで 050 専用文言に上書き不可
+        (b) サブフローをコピーして incoming-classifier の分岐に050専用 TTS を追加
+      推奨: (a) で標準サブフローを使い、050 文言差分は受容する（非通知は opening で既に弾き済み）。厳密差分が必要な場合は (b)。人間が判断。
+    resolved: false
+
+  - item: "【Dr.JOY 側】SMS送信文面の設定（smsFlag=1 / smsFlag=2 のそれぞれで異なるテンプレート）"
+    status: "TODO"
+    assignee: "人間（Dr.JOY 管理画面）"
+    notes: "フローJSON側では smsFlag 値のみ設定。実際の送信文面は Dr.JOY 側で登録。smsFlag=1（予約/変更/問い合わせ）と smsFlag=2（キャンセル）で別文面。"
+    resolved: false
+
+  - item: "【Dr.JOY 側】Dr.JOY 画面の表示設定（各コンテキストフィールドの画面表示 ○/×）"
+    status: "TODO"
+    assignee: "人間（Dr.JOY 管理画面）"
+    notes: "フローJSON側では itemDefault/editable/deletable のみ。画面表示設定は Dr.JOY 側で行う。"
+    resolved: false
+
+  - item: "【運用】営業時間外の扱い（本フローでは acceptance_times 未使用）"
+    status: "TODO"
+    assignee: "人間（運用方針確認）"
+    notes: "Gen2 yaml に時間外分岐なし。endpoint enum に『時間外』が定義されているが該当箱はなし（移管ノート記載）。24時間受付で運用するか、運用側で着信時間帯制御するか確認。"
+    resolved: false
+
+  - item: "受診希望時期の「当日_翌日」タグ保存に関する確認"
+    status: "TODO"
+    assignee: "人間（仕様確認）"
+    notes: |
+      Gen2 では desiredConsultation はフリーテキスト。Gen3 実装では当日/翌日発話時に「当日_翌日」タグが desiredConsultation に保存される（END_当日代表案内に分岐するため）。
+      この挙動は Dr.JOY 上のレポートで許容範囲か確認。許容できない場合は script ブロックを別立てして分岐とテキスト保存を分離する設計に変更。
+    resolved: false
+
+  - item: "【Dr.JOY 側】認証設定（予約/変更/キャンセルで患者認証が必要か）"
+    status: "TODO"
+    assignee: "人間（Dr.JOY 管理画面）"
+    notes: "本フローでは認証聴取なし（受診者名+生年月日+連絡先電話番号のみ）。認証要否は Dr.JOY 側で設定。"
+    resolved: false

@@ -1,0 +1,419 @@
+# 設計書 -- DrJOY病院 BCP（災害時AI電話 第一弾／分岐ゼロ・自由発話・全件SMS）
+# 生成元: Downloads/20260421_BCP AI電話/uploads/災害時BCP対応AI電話_第一弾_designコンテキスト_v1.0.md
+# 議事録ベース: Downloads/##_AI電話のBCP_議事録.md（石松社長想定／2026-05-14）
+# テンプレ原本: voicebot-flow-builder/未来の構想アイデア/設計書_BCP第一弾_分岐ゼロ_テンプレート.yaml
+# 想定スコープ: 「最強にヤバい時」専用代表電話。分岐ゼロ・用件/氏名/連絡先の3つを自由発話で受け、全件 SMS で返す。
+# 本ファイルはデモ施設 DrJOY病院 のインスタンス。テンプレ起点で {{施設名}} は DrJOY病院 に置換済み。
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "DrJOY病院"                # 例: Dr.JOY病院
+  scenario_name: "BCP"                       # フロー識別子。orchestrator state.flow / ブランチ名 / 成果物名に使用
+  group_name: "DrJOY病院"                   # Brekeke 上のグループ名
+  flow_name: "DrJOY病院$BCP"                # 「グループ名$シナリオ名」（$ 以降は scenario_name と一致）
+  target_facility: "DrJOY病院（災害時BCP対応専用回線）"
+  office_id: "TODO_要確認"
+  phone_number: "TODO_要確認"                # 災害時専用に別途払い出された 050 番号（着信は IVR プロパティで設定）
+  business_hours: "24時間 365日"             # 災害発動時は受付時間設定を 24h 化（管理画面1操作）。平常時は受付時間外設定で死蔵
+  flow_type: "1flow"                         # 個人情報サブフロー（DOB/診察券）等は使わない
+  work_type: "new"
+  environment: "demo"                        # 本番払い出し時は prod に切替
+
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+# 第一弾は分岐ゼロ。サブフロー（PatientName / DOB / Phone / MedicalCard / RAG）は全て不使用。
+# 議事録の「分岐を何も作らず、要件・連絡先・名前を聞いて終話」をそのまま実装する。
+flow_structure:
+  type: "1flow"
+  flows:
+    - name: "DrJOY病院$BCP"
+      role: "main"
+      description: "災害時専用代表電話。冒頭で災害モード/119案内を告知 → 用件・氏名・連絡先電話番号を自由発話で順に聴取 → 終話と同時に SMS（通話レコード詳細 URL）を自動送信。"
+  subflows: []
+
+# --- セクション3: フローの目的 ---
+purpose: "大震災・火山噴火・広域災害発生直後にパンクする病院代表電話を AI で完全代行する。プッシュ分岐ゼロ、自由発話で用件・氏名・連絡先の3つだけを順に聴取し、終話と同時に SMS で受付確認＋通話レコード詳細 URL を返す。入電者本人が URL から内容を確認・修正できる導線を持つことで、AI 聞き取りの不完全さを許容しつつ取りこぼしを最小化する。コールバックは前提に置かない（衛星電話 1〜2 台想定）。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "DrJOY病院$BCP"
+    diagram: |
+      wait(1500ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → END_非通知_アナウンス(TTS) → 完了フラグ_非通知(status=2) → 切断
+            └─ 通常/携帯/固定 → acceptance_times（受付時間設定の開閉で災害モード ON/OFF を表現）
+                                  ├─ 時間外（平常時） → END_時間外_アナウンス(TTS) → 完了フラグ_平常時(status=6) → 切断
+                                  └─ 受付可（災害モード） → 冒頭_アナウンス(TTS)
+                                                              └─ 用件聴取(TTS+AmiVoice STT, output_format=text, 自由発話)
+                                                                    └─ 氏名聴取(TTS+AmiVoice STT, output_format=text, 自由発話)
+                                                                          └─ 連絡先電話番号聴取(TTS+STT, output_format=text, echo_back=true 番号のみ復唱)
+                                                                                └─ END_BCP受付完了(status=1, sms_flag=1) → 切断 → SMS自動送信
+    notes: |
+      - 分岐ゼロが第一弾の絶対要件。Yes/No・カテゴリ分類などの分岐モジュールは一切配置しない。
+      - 用件・氏名は OpenAI 正規化を入れず、自由発話のまま text 保存（後段で人間 or 別バッチで処理）。
+      - 連絡先電話番号は復唱（echo_back）で番号のみ確認。用件・氏名の復唱は通話時間を伸ばすので入れない。
+      - 「命に関わる症状の場合は 119」は冒頭アナウンス内に 1 文だけ圧縮挿入。専用分岐は作らない。
+      - 平常時の誤発信には acceptance_times の「時間外」枠で「この番号は災害時専用です」と明示して切断（時間外設定が ON のまま死蔵される運用）。
+      - SMS には通話レコード詳細 URL（入電者本人が編集できるリンク）を必ず添える。URL 発行は別バックエンド側責務。
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭（災害モード告知＋119案内圧縮挿入）---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true               # 受付時間設定の開閉で災害モード ON/OFF を実現（独立した「災害モード切替」は持たない）
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 用件聴取
+
+  # --- 用件聴取（自由発話・1分以内・OpenAI 正規化なし）---
+  - step: 用件聴取
+    type: hearing
+    output_format: text                      # text = OpenAI 不要、自由テキストをそのまま保存
+    save_to: reason
+    retry_failure: skip                      # 取れなくても次へ。SMS URL で本人が補完できる
+    next: 氏名聴取
+
+  # --- 氏名聴取（自由発話・フルネーム）---
+  # save_to は patientName ではなく patientNameFree を使う:
+  #   通常フローでは氏名はサブフロー（{group_name}$氏名聴取_{date}）経由で OpenAI 正規化込みで聴取するが、
+  #   BCP 第一弾はサブフロー一切なし＋自由発話 STT そのまま保存という設計哲学のため、
+  #   別コンテキストフィールド patientNameFree（自由発話専用 TEXT）に分離して保存する。
+  - step: 氏名聴取
+    type: hearing
+    output_format: text
+    save_to: patientNameFree
+    retry_failure: skip                      # 取れなくても次へ。1〜2項目だけでも電カル照合で連絡可能（設計哲学）
+    next: 連絡先電話番号聴取
+
+  # --- 連絡先電話番号聴取（番号のみ復唱 echo_back=true）---
+  - step: 連絡先電話番号聴取
+    type: hearing
+    output_format: text                      # 携帯/固定の自由聴取＋STT。OpenAI 正規化は通さない
+    save_to: additionalPhoneNumber
+    retry_failure: skip                      # SMS は telephoneNumber（着信元）にもフォールバック送信可能
+    next: END_BCP受付完了
+
+  # --- 終話（SMS自動送信トリガ）---
+  - step: END_BCP受付完了
+    type: termination
+    termination_ref: END_BCP受付完了
+
+# --- セクション5: コンテキストフィールド一覧 ---
+# DOB/診察券/診療科/予約日 は使用しない（第一弾スコープ外）。Dr.JOY 画面の表示も簡素化する。
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "BCP受付"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本フローは BCP 受付専用のため固定値"
+
+  - context_name: "patientNameFree"
+    context_name_jp: "氏名（自由発話・BCP専用）"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "BCP 第一弾の自由発話氏名専用フィールド。通常フローの patientName（サブフロー＋OpenAI 正規化）とは別系統。OpenAI 正規化なしの自由発話 STT 結果。SMS URL から本人編集可能"
+
+  - context_name: "reason"
+    context_name_jp: "用件（自由発話・1分以内）"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "OpenAI 正規化なしの自由発話 STT 結果。後段で人間 or 別バッチ処理"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納。additionalPhoneNumber 未取得時の SMS 送信先フォールバック"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号（聴取）"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "携帯番号推奨。SMS 送信先優先順位 1。echo_back で番号のみ復唱"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "BCP受付完了"
+      - id: "2"
+        order: "2"
+        value: "非通知"
+      - id: "6"
+        order: "6"
+        value: "平常時誤発信"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=BCP受付完了 2=非通知 6=平常時誤発信（受付時間設定 OFF 中）"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: ""
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "SMS の通話レコード詳細 URL に埋め込む識別子"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "用件聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false                         # 用件の復唱は通話時間を伸ばすので入れない
+    save_to: "reason"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "1分以内の自由発話で受ける。OpenAI を通さず原文 STT 結果をそのまま保存。"
+
+  - order: 2
+    name: "氏名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false                         # 氏名の復唱も入れない（設計哲学：取れなくても 1〜2 項目で電カル照合可能）
+    save_to: "patientNameFree"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "フルネーム自由発話。OpenAI 正規化なし。"
+
+  - order: 3
+    name: "連絡先電話番号聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: true                          # 番号のみは復唱で確認する（設計哲学：電話番号のみ復唱）
+    save_to: "additionalPhoneNumber"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "携帯番号推奨。SMS は本番 AI 電話払い出し番号から送信（審査要・追加2週間）。"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "冒頭_アナウンス"
+    tts_announcement: "お電話ありがとうございます。DrJOY病院です。ただいま災害対応のため、AIがお電話を承っております。命に関わるご症状の場合は、いったんお電話を切って 119番 へおかけください。これからご用件・お名前・ご連絡先を順にお伺いし、終わりましたら担当者から改めてショートメッセージでご連絡いたします。"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "用件聴取"
+    retry_failure: "none"                    # announcement は再試行概念なし。聴取モジュールではないため失敗ルートも存在しない
+    retry_failure_announcement: ""
+
+  - step_name: "用件聴取"
+    tts_announcement: "ご用件を 1分以内 で自由にお話しください。準備ができましたら、そのままお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "発話なし／STT 失敗。skip して次のステップへ進む"
+    save_to: "reason"
+    next_step: "氏名聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "氏名聴取"
+    tts_announcement: "ありがとうございました。続いて、お名前を フルネーム でお願いいたします。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "発話なし／STT 失敗。skip して次のステップへ進む"
+    save_to: "patientNameFree"
+    next_step: "連絡先電話番号聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "連絡先電話番号聴取"
+    tts_announcement: "ご連絡先のお電話番号をお願いいたします。ショートメッセージをお送りしますので、携帯電話番号 を推奨いたします。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "発話なし／STT 失敗。skip し、着信元電話番号にショートメッセージをフォールバック送信"
+    save_to: "additionalPhoneNumber"
+    next_step: "END_BCP受付完了"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須 - 削除禁止）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外（=平常時：災害モード未発動）"
+    tts_announcement: "お電話ありがとうございます。こちらは DrJOY病院 の災害時専用回線です。平常時はご利用いただけません。診療等のお問い合わせは通常の代表電話までおかけ直しください。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_平常時誤発信"
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達（第一弾は retry_failure=skip 運用で原則発生しない。安全装置として残す）"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。担当者から改めてショートメッセージでご連絡いたします。お電話ありがとうございました。"
+    status: "1"                              # 取れた範囲で SMS を送るため status は 1 にする
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_聴取失敗_部分受付"
+
+  # --- 正常系（BCP 受付完了）---
+  - name: "END_BCP受付完了"
+    condition: "用件／氏名／連絡先のいずれか1つ以上が取得済み"
+    tts_announcement: "ありがとうございました。担当者から改めてショートメッセージでご連絡いたします。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_BCP受付完了"
+
+# smsFlag 分岐は不要（全件 SMS 送信）
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+# 第一弾スコープ外（「あえて削った設計」§6 参照）。災害時 FAQ は HP 誘導 URL に集約。
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション8c: Dr.JOY 電話帳エントリ ---
+# incoming-category-classifier は使わない（発信者属性で分岐しない方針＝分岐ゼロ）。
+phonebook:
+  enabled: false
+  list_labels:
+    list1: ""
+    list2: ""
+    list3: ""
+    list4: ""
+    list5: ""
+  entries: []
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "災害モード告知＋119案内＋これから聞く3項目の予告"
+    announcement: "お電話ありがとうございます。DrJOY病院です。ただいま災害対応のため、AIがお電話を承っております。命に関わるご症状の場合は、いったんお電話を切って 119番 へおかけください。これからご用件・お名前・ご連絡先を順にお伺いし、終わりましたら担当者から改めてショートメッセージでご連絡いたします。"
+
+  - module_name: "用件聴取_アナウンス"
+    purpose: "用件自由発話の促し"
+    announcement: "ご用件を 1分以内 で自由にお話しください。準備ができましたら、そのままお話しください。"
+
+  - module_name: "氏名聴取_アナウンス"
+    purpose: "氏名フルネーム聴取の促し"
+    announcement: "ありがとうございました。続いて、お名前を フルネーム でお願いいたします。"
+
+  - module_name: "連絡先電話番号聴取_アナウンス"
+    purpose: "携帯番号推奨で連絡先聴取"
+    announcement: "ご連絡先のお電話番号をお願いいたします。ショートメッセージをお送りしますので、携帯電話番号 を推奨いたします。"
+
+  - module_name: "END_BCP受付完了_アナウンス"
+    purpose: "受付完了＋SMS送信予告で終話"
+    announcement: "ありがとうございました。担当者から改めてショートメッセージでご連絡いたします。それでは失礼いたします。"
+
+  - module_name: "END_非通知_アナウンス"
+    purpose: "非通知着信は番号通知でかけ直し依頼"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_時間外_アナウンス"
+    purpose: "平常時誤発信に災害時専用回線である旨を明示"
+    announcement: "お電話ありがとうございます。こちらは DrJOY病院 の災害時専用回線です。平常時はご利用いただけません。診療等のお問い合わせは通常の代表電話までおかけ直しください。"
+
+# --- セクション10: AmiVoice辞書 ---
+# 自由発話受けのため、施設個別のキーワードは additional_words で必要に応じて追加。
+# 標準テンプレ（hearing_free_text 系）があれば use_template 参照に切り替え可。
+amivoice_dictionary:
+  - step_name: "用件聴取"
+    words: |
+      災害 さいがい
+      避難 ひなん
+      薬 くすり
+      透析 とうせき
+      入院 にゅういん
+      面会 めんかい
+      安否 あんぴ
+      予約 よやく
+  - step_name: "氏名聴取"
+    words: |
+  - step_name: "連絡先電話番号聴取"
+    words: |
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "第一弾スコープ：『最強にヤバい時』の代表電話代行のみ。お薬／入院／オペ／面会／会計 などの個別シナリオ分岐は意図的に入れない（競合差別化／哲学）。"
+  - "災害モード ON/OFF は acceptance_times（受付時間設定）の開閉で表現する。独立した『災害モード切替』フラグは持たない。"
+  - "平常時は受付時間外設定で死蔵。災害発生時は管理画面1操作で 24時間化。不慣れな病院は Dr.JOY へ連絡 → 代行。"
+  - "コールバック機能は実装しない（衛星電話 1〜2 台想定で破綻するため）。全件 SMS で非同期に返す。"
+  - "5回線まで（無償スコープ）。超過分は Brekeke 仕様でビジー返し（HP で運用カバー）。"
+  - "通話終了後の SMS には、入電者本人が編集できる通話レコード詳細 URL を必ず添える。URL 発行は別バックエンド側責務（本設計書のスコープ外）。"
+  - "電話番号のみ復唱（用件・氏名は録音と文字起こしで担保）。AI 聞き取りの不完全さは SMS URL の本人編集導線で吸収。"
+  - "プレスリリース／学会セミナーでの無償提供前提（ボランティア提供）。番号維持費（1本300円台）は最低限申し受ける可能性あり。"
+  - "全病院共通テンプレ。中身カスタマイズは別物（第二弾／有償）として切り出す。"
+
+# --- セクション12: 要確認事項 ---
+confirmation_items:
+  - item: "施設名（DrJOY病院 の確定）"
+    resolved: false
+  - item: "office_id"
+    resolved: false
+  - item: "災害時専用 050 番号の払い出し（本番）"
+    resolved: false
+  - item: "SMS 送信番号の審査（本番 AI 電話払い出し番号、追加2週間）"
+    resolved: false
+  - item: "SMS 文言（通話レコード詳細 URL の発行スキーム／URL テンプレ）"
+    resolved: false
+  - item: "通話レコード詳細 URL の本人編集 UI（別 PJ・別バックエンド側責務の整合確認）"
+    resolved: false
+  - item: "災害モード発動条件（管理者手動切替を基本／オプション：震度トリガによる自動切替）"
+    resolved: false
+  - item: "平常時の死蔵運用（受付時間外設定 OFF）と平常時誤発信時のアナウンス文言確定"
+    resolved: false
+  - item: "回線数（5回線：無償スコープ／追加は2万円・10回線等の有償オプション運用）"
+    resolved: false
+  - item: "法的・倫理的レビュー（救急案件の取りこぼし責任／119 案内の表現）"
+    resolved: false

@@ -1,0 +1,726 @@
+# 設計書 — 岡山中央病院 診療
+# 生成元: @director エージェント
+# 生成日: 2026-05-01
+# 確認レポート: output/scenarios/岡山中央病院_診療/確認レポート_岡山中央病院_診療_20260501.md
+# 作業種別: Gen1→Gen3 移管
+# 元資料: commubo抽出/【023】セントラル・クリニック 伊島/【0018岡山中央病院】診療1_M_本番/
+version: "1.0"
+
+# =====================================================
+# セクション1: 基本情報
+# =====================================================
+basic_info:
+  facility_name: "岡山中央病院"
+  scenario_name: "診療"
+  group_name: "岡山中央病院"
+  flow_name: "岡山中央病院$診療"
+  target_facility: "本院のみ"
+  office_id: "TODO_要確認"
+  phone_number: "TODO_要確認"
+  business_hours: "平日 8:30〜16:45 / 土曜 8:30〜12:00 / 日祝・12/28〜1/4 休止（年末年始）"
+  flow_type: "subflow"
+  work_type: "gen1_migration"
+  environment: "prod"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# =====================================================
+# セクション2: フロー構成
+# =====================================================
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "岡山中央病院$診療"
+      role: "main"
+      description: "岡山中央病院（系列クリニック「セントラルクリニック・伊島」名義で受電）の診療予約受付フロー。3 用件分類（診察の予約について / 人間ドックについて / その他ご相談）の軽量版。診察予約は診療科 + 希望日 + 連絡事項を聴取して受付完了。人間ドックは健康増進センター（086-252-3222）案内のみで終話。その他ご相談はフリーテキスト相談 + 連絡事項を聴取して受付完了。個人情報聴取（氏名→電話番号→生年月日→診察券番号）は用件聴取の前段に共通配置（Gen1 順序を踏襲）。"
+  subflows:
+    - name: "岡山中央病院$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "サブフロー標準コピー。patientName を返却。"
+    - name: "岡山中央病院$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "サブフロー標準コピー（incoming-classifier + Phone Normalization + 復唱あり）。additionalPhoneNumber と phonetype（1=携帯/ip050、2=その他/landline/withheld）を返却。"
+    - name: "岡山中央病院$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "サブフロー標準コピー（DOB Re-confirmation 復唱あり）。patientDateOfBirth を返却。"
+    - name: "岡山中央病院$診察券番号聴取"
+      target: "診察券番号聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "サブフロー標準コピー。medicalCardNumber を返却。Gen1 では 8 桁制限+持ってない時の END_診察券無し 分岐があるが、Gen3 では標準サブフロー仕様に合わせる。"
+
+# =====================================================
+# セクション3: フローの目的
+# =====================================================
+purpose: >
+  岡山中央病院（受電時の名乗りは系列「セントラルクリニック・伊島」）の外来予約に関する電話を受け、
+  個人情報（氏名・連絡先電話番号・生年月日・診察券番号）を聴取した上で、
+  3 用件（診察の予約について / 人間ドックについて / その他ご相談）を分類し、
+  診察予約は診療科・希望日・連絡事項を聴取して受付を完了し（折返し電話 / SMS）、
+  人間ドックは健康増進センター（086-252-3222）への掛け直し案内のみで終話し、
+  その他ご相談は自由テキストで内容を聴取して受付を完了する。
+
+# =====================================================
+# セクション4: シナリオフロー図
+# =====================================================
+flow_diagrams:
+  - flow_name: "岡山中央病院$診療"
+    diagram: |
+      冒頭(wait)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → 非通知_アナウンス → 完了フラグ_非通知 → 切断
+            └─ 通常 → 営業時間チェック(acceptance_times)
+                          ├─ 時間外 → 時間外_アナウンス → 完了フラグ_時間外 → 切断
+                          └─ 受付可 → 冒頭_アナウンス
+                                        → jump_氏名聴取
+                                        → jump_電話番号聴取
+                                        → jump_生年月日聴取
+                                        → jump_診察券番号聴取
+                                        → 用件聴取 (enum: 診察の予約について / 人間ドックについて / その他ご相談)
+                                              ├─ 診察の予約について → 診療科聴取 (enum, 8 科 + 登録なし)
+                                              │                          → 希望日聴取 (text)
+                                              │                          → 連絡事項_診察予約 (text)
+                                              │                          → END_受付完了
+                                              ├─ 人間ドックについて → END_人間ドック案内（健康増進センター 086-252-3222 を 3 回案内して終話）
+                                              └─ その他ご相談 → 相談内容聴取 (text)
+                                                                  → 連絡事項_相談 (text)
+                                                                  → END_受付完了
+    notes: |
+      - 個人情報聴取は用件聴取の前段に配置（Gen1 順序を踏襲。他施設は用件→個人情報の順で逆）。
+      - 用件分岐は Pattern A（OpenAI 直後の hearing.conditions で直接 next を切替）。
+      - 終話は phonetype 分岐なしの単線（Gen1 main.yaml の完了フラグも単一のため）。
+      - 人間ドック案内 TTS には「電話番号復唱を 3 回繰り返す」内容をインライン化（Gen1 の `3回ループ` 箱を Gen3 では単一終話文言に集約）。
+
+# =====================================================
+# セクション4b: シナリオフロー定義（ブロック構成）
+# =====================================================
+scenario_flow:
+  # ---------- 冒頭 ----------
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: jump_氏名聴取
+
+  # ---------- 個人情報聴取（用件聴取の前段に共通配置）----------
+  - step: jump_氏名聴取
+    type: subflow
+    flowname: "岡山中央病院$氏名聴取"
+    next: jump_電話番号聴取
+
+  - step: jump_電話番号聴取
+    type: subflow
+    flowname: "岡山中央病院$電話番号聴取"
+    next: jump_生年月日聴取
+
+  - step: jump_生年月日聴取
+    type: subflow
+    flowname: "岡山中央病院$生年月日聴取"
+    next: jump_診察券番号聴取
+
+  - step: jump_診察券番号聴取
+    type: subflow
+    flowname: "岡山中央病院$診察券番号聴取"
+    next: 用件聴取
+
+  # ---------- 用件聴取（Pattern A）----------
+  - step: 用件聴取
+    type: hearing
+    output_format: enum
+    retry_failure: end_failure
+    conditions:
+      - match: "診察の予約について"
+        next: 診療科聴取
+      - match: "人間ドックについて"
+        next: END_人間ドック案内
+      - match: "その他ご相談"
+        next: 相談内容聴取
+      - match: "other"
+        next: END_聴取失敗
+
+  # ---------- 診察予約ルート ----------
+  - step: 診療科聴取
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    retry_failure: skip
+    conditions:
+      - match: "other"
+        next: 希望日聴取
+
+  - step: 希望日聴取
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 連絡事項_診察予約
+
+  - step: 連絡事項_診察予約
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: END_受付完了
+
+  # ---------- その他ご相談ルート ----------
+  - step: 相談内容聴取
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 連絡事項_相談
+
+  - step: 連絡事項_相談
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: END_受付完了
+
+  # ---------- 終話ブロック ----------
+  - step: END_受付完了
+    type: termination
+    termination_ref: "END_受付完了"
+
+  - step: END_人間ドック案内
+    type: termination
+    termination_ref: "END_人間ドック案内"
+
+  - step: END_聴取失敗
+    type: termination
+    termination_ref: "END_聴取失敗"
+
+# =====================================================
+# セクション5: コンテキストフィールド一覧
+# =====================================================
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - { id: "1", order: "1", value: "診察の予約について" }
+      - { id: "2", order: "2", value: "人間ドックについて" }
+      - { id: "3", order: "3", value: "その他ご相談" }
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "Gen1 用件聴取.yaml「セットした用件の分岐」の 3 値と完全一致。診察の予約 = 新規予約 + 予約変更 + 予約キャンセル + 予約確認 + 薬関連が統合（Gen1 entity_classification の同 canonical 配下）。"
+
+  - context_name: "patientName"
+    context_name_jp: "患者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "氏名聴取サブフローで取得（フルネーム）。"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "電話番号聴取サブフローで取得。"
+
+  - context_name: "phonetype"
+    context_name_jp: "電話種別"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "電話番号聴取サブフローが 1=携帯/ip050、2=その他/landline/withheld を設定（本フローでは終話分岐に使わないが、Dr.JOY 側の参照用に保存）。"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日(和暦)"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "生年月日聴取サブフローで取得（DOB Re-confirmation 復唱あり）。"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "診察券番号聴取サブフローで取得。Gen1 では 8 桁制限あり。"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values:
+      - { order: "1", value: "眼科" }
+      - { order: "2", value: "形成外科" }
+      - { order: "3", value: "思春期カウンセリング" }
+      - { order: "4", value: "消化器内科" }
+      - { order: "5", value: "心療内科" }
+      - { order: "6", value: "内科" }
+      - { order: "7", value: "乳腺外科" }
+      - { order: "8", value: "婦人科" }
+      - { order: "9", value: "登録なし" }
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "Gen1 診療科聞き取り.yaml の診療科エンティティ 8 値 + no_result_default の『登録なし』。"
+
+  - context_name: "reason"
+    context_name_jp: "理由"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "診察予約ルートでは希望日聴取の内容を、その他ご相談ルートでは相談内容を、それぞれ自由テキストで保存（Gen1 では希望日聞き取り（フリー聴収）/問い合わせ内容 サブフローが個別 context に保存していたが、Gen3 ではメイン context に集約。連絡事項聴取は別 context contactNote へ保存）。"
+
+  - context_name: "contactNote"
+    context_name_jp: "連絡事項"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "連絡事項確認サブフロー（Gen1）由来。「他にご連絡事項はございますか？」の自由テキスト回答を保存。"
+
+  - context_name: "reservationDate"
+    context_name_jp: "予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本フローでは利用しないが、Dr.JOY 標準項目として保持。"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納。"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - { id: "1", order: "1", value: "未処理" }
+      - { id: "2", order: "2", value: "代表案内" }
+      - { id: "3", order: "3", value: "聴取失敗" }
+      - { id: "6", order: "6", value: "時間外" }
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=受付完了 / 2=代表案内（人間ドック・非通知）/ 3=聴取失敗 / 6=時間外。Gen1 status=0/5 は使用禁止。"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: ""
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値。"
+
+# =====================================================
+# セクション6: 聴取項目一覧
+# =====================================================
+hearing_items:
+  - order: 1
+    name: "用件聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "診察の予約について"
+      - "人間ドックについて"
+      - "その他ご相談"
+    notes: |
+      Gen1 用件聴取.yaml の用件エンティティ 3 値と完全一致。
+      - 「診察の予約について」: 新規予約・予約変更・予約キャンセル・予約日時確認・薬関連を統合（Gen1 の同 canonical 配下に「予約変更/予約キャンセル/再診/初診/取り消し/薬の変更/薬をキャンセル」等が混在）。
+      - 「人間ドックについて」: ドック・健康診断・健診・検診・人間ドック を統合。
+      - 「その他ご相談」: その他・確認・相談・問い合わせ・聞きたい・知りたい・教えてほしい を統合。
+      OpenAI 正規化プロンプトで「位置/一/印刷/インサツ/平行/並行」等の同音異義語誤認識補正を明示すること（Gen1 entity_openai_synonyms.md 参照）。
+
+  - order: 2
+    name: "診療科聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "眼科"
+      - "形成外科"
+      - "思春期カウンセリング"
+      - "消化器内科"
+      - "心療内科"
+      - "内科"
+      - "乳腺外科"
+      - "婦人科"
+    notes: "Gen1 診療科聞き取り.yaml の診療科エンティティ 8 値。判定不能時は no_result_default で『登録なし』を保存して希望日聴取へ進む。Gen1 では『先生名』エンティティとの併存判定があったが、Gen3 では診療科のみに簡略化（先生名は希望日聴取の自由テキストに含めて伝える運用）。"
+
+  - order: 3
+    name: "希望日聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "Gen1 希望日聞き取り（フリー聴収）.yaml と一致。「ご希望の日時や、内容をお話ください。折り返し、電話で詳しく確認させていただきます。」自由テキスト保存。希望先生名もここで一緒に発話してもらう運用。"
+
+  - order: 4
+    name: "連絡事項_診察予約"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "contactNote"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "Gen1 連絡事項確認.yaml と一致。「他にご連絡事項はございますか？なければ特になしとお答えください。」自由テキスト保存。"
+
+  - order: 5
+    name: "相談内容聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "Gen1 問い合わせ内容.yaml と一致。「お問い合わせ内容をお話ください。」自由テキスト保存。"
+
+  - order: 6
+    name: "連絡事項_相談"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "contactNote"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "その他ご相談ルート用の連絡事項確認。Gen1 では 連絡事項確認.yaml サブフローを 2 回参照しているため Gen3 でもステップを分けて 2 つ用意（context は共通の contactNote に上書き保存）。"
+
+# =====================================================
+# セクション7: ステップ詳細
+# =====================================================
+step_details:
+  - step_name: "用件聴取"
+    tts_announcement: "ご用件を、次の3つのうちのいずれかでお話ください。「診察の予約について」、「人間ドックについて」、「その他ご相談」。それでは、お話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "診察の予約について"
+        - "人間ドックについて"
+        - "その他ご相談"
+      mapping:
+        - input: "予約をしたい / 診察予約 / 予約変更 / 予約キャンセル / 予約確認 / 再診 / 初診 / 薬を変更 / 薬をキャンセル / 取り消し / 取り直す"
+          output: "診察の予約について"
+        - input: "人間ドック / ドック / 健康診断 / 健診 / 検診"
+          output: "人間ドックについて"
+        - input: "その他 / 相談 / 問い合わせ / 聞きたい / 知りたい / 確認したい / 教えてほしい"
+          output: "その他ご相談"
+      no_result_condition: "上記いずれにも該当せず、用件が判定不能"
+    save_to: "classification"
+    next_step: "用件分岐に従う"
+    retry_failure: "end_failure"
+    retry_failure_announcement: "お電話が遠いようで、回答が確認できませんでした。恐れ入りますが、おかけなおしください。"
+
+  - step_name: "診療科聴取"
+    tts_announcement: "それでは、ご希望の診療科名をお答えください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "眼科"
+        - "形成外科"
+        - "思春期カウンセリング"
+        - "消化器内科"
+        - "心療内科"
+        - "内科"
+        - "乳腺外科"
+        - "婦人科"
+      mapping:
+        - input: "眼科 / がんか / 視力検査"
+          output: "眼科"
+        - input: "形成外科 / 美容外科 / 美容形成 / 形成"
+          output: "形成外科"
+        - input: "思春期カウンセリング / カウンセリング / 思春期"
+          output: "思春期カウンセリング"
+        - input: "消化器内科 / 消化器 / 消内"
+          output: "消化器内科"
+        - input: "心療内科 / しんない"
+          output: "心療内科"
+        - input: "内科 / ないか"
+          output: "内科"
+        - input: "乳腺外科 / 乳腺 / 乳がん検診 / マンモグラフィー / エコー"
+          output: "乳腺外科"
+        - input: "婦人科 / 産婦人科 / 産科 / 子宮がん検診"
+          output: "婦人科"
+      no_result_condition: "上記いずれの診療科にも該当しない（Gen1 では判定不能で再質問していたが、Gen3 では no_result_default = 登録なし を保存して希望日聴取へ進む）"
+    save_to: "clinicalDepartment"
+    next_step: "希望日聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "希望日聴取"
+    tts_announcement: "ご希望の日時や、内容をお話ください。折り返し、電話で詳しく確認させていただきます。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "（自由テキスト保存のため OpenAI 処理なし）"
+    save_to: "reason"
+    next_step: "連絡事項_診察予約"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "連絡事項_診察予約"
+    tts_announcement: "他にご連絡事項はございますか？なければ、特になし、とお答えください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "（自由テキスト保存のため OpenAI 処理なし）"
+    save_to: "contactNote"
+    next_step: "END_受付完了"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "相談内容聴取"
+    tts_announcement: "それでは、お問い合わせ内容をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "（自由テキスト保存のため OpenAI 処理なし）"
+    save_to: "reason"
+    next_step: "連絡事項_相談"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "連絡事項_相談"
+    tts_announcement: "他にご連絡事項はございますか？なければ、特になし、とお答えください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "（自由テキスト保存のため OpenAI 処理なし）"
+    save_to: "contactNote"
+    next_step: "END_受付完了"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+# =====================================================
+# セクション8: 終話パターン
+# =====================================================
+termination_patterns:
+  # --- 異常系（デフォルト必須）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "ただいまの時間帯は、AI電話の対応時間外です。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達 / 用件判定不能"
+    tts_announcement: "お電話が遠いようで、回答が確認できませんでした。恐れ入りますが、おかけなおしください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系（受付完了）---
+  - name: "END_受付完了"
+    condition: "診察予約 or その他ご相談 ルートで全聴取完了"
+    tts_announcement: "申し込みを受付いたしました。担当者から電話、もしくは、ショートメッセージにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了"
+
+  # --- 人間ドック案内（代表案内）---
+  - name: "END_人間ドック案内"
+    condition: "用件 = 人間ドックについて"
+    tts_announcement: "申し訳ございませんが、人間ドックのご予約に関するお問い合わせは、健康増進センターにて承ります。電話番号を申し上げますので、そちらへお掛けなおし下さい。健康増進センターの電話番号は、086-252-3222です。繰り返します。健康増進センターの電話番号は、086-252-3222です。繰り返します。健康増進センターの電話番号は、086-252-3222です。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_人間ドック案内"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# =====================================================
+# セクション8b: RAG/FAQ検索サブフロー
+# =====================================================
+# Gen1 元資料には RAG/FAQ 検索サブフローなし。Gen3 移管でも追加しない。
+# 「その他ご相談」ルートは Gen1 と同じく自由テキストで担当者折返し対応。
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# =====================================================
+# セクション9: TTSモジュール一覧
+# =====================================================
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "施設名乗り + 自動応答案内 + 個人情報聴取への導入"
+    announcement: "セントラルクリニック・伊島です。AI電話にてご用件を承り、担当者よりお電話いたしますので、予めご了承ください。それでは、最初に、"
+
+  - module_name: "用件聴取"
+    purpose: "3 用件分類のメインプロンプト"
+    announcement: "ご用件を、次の3つのうちのいずれかでお話ください。「診察の予約について」、「人間ドックについて」、「その他ご相談」。それでは、お話ください。"
+
+  - module_name: "診療科聴取"
+    purpose: "診療科名聴取（診察予約ルート）"
+    announcement: "それでは、ご希望の診療科名をお答えください。"
+
+  - module_name: "希望日聴取"
+    purpose: "希望日時・内容の自由テキスト聴取（診察予約ルート）"
+    announcement: "ご希望の日時や、内容をお話ください。折り返し、電話で詳しく確認させていただきます。"
+
+  - module_name: "連絡事項_診察予約"
+    purpose: "他連絡事項の自由テキスト聴取（診察予約ルート）"
+    announcement: "他にご連絡事項はございますか？なければ、特になし、とお答えください。"
+
+  - module_name: "相談内容聴取"
+    purpose: "問い合わせ内容の自由テキスト聴取（その他ご相談ルート）"
+    announcement: "それでは、お問い合わせ内容をお話ください。"
+
+  - module_name: "連絡事項_相談"
+    purpose: "他連絡事項の自由テキスト聴取（その他ご相談ルート）"
+    announcement: "他にご連絡事項はございますか？なければ、特になし、とお答えください。"
+
+  - module_name: "END_受付完了"
+    purpose: "受付完了終話アナウンス（診察予約・その他ご相談共通）"
+    announcement: "申し込みを受付いたしました。担当者から電話、もしくは、ショートメッセージにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_人間ドック案内"
+    purpose: "健康増進センター案内（電話番号 3 回繰り返し）"
+    announcement: "申し訳ございませんが、人間ドックのご予約に関するお問い合わせは、健康増進センターにて承ります。電話番号を申し上げますので、そちらへお掛けなおし下さい。健康増進センターの電話番号は、086-252-3222です。繰り返します。健康増進センターの電話番号は、086-252-3222です。繰り返します。健康増進センターの電話番号は、086-252-3222です。お電話ありがとうございました。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ上限・用件判定不能時の終話アナウンス（Gen1 聞き取れず終話 と一致）"
+    announcement: "お電話が遠いようで、回答が確認できませんでした。恐れ入りますが、おかけなおしください。お電話ありがとうございました。"
+
+  - module_name: "END_時間外"
+    purpose: "営業時間外終話アナウンス（Gen1 時間外 と一致）"
+    announcement: "ただいまの時間帯は、AI電話の対応時間外です。お電話ありがとうございました。"
+
+  - module_name: "END_非通知"
+    purpose: "非通知着信終話アナウンス"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+# =====================================================
+# セクション10: AmiVoice辞書（profile_words）
+# =====================================================
+# entity_stt_patch.json の use_templates / additional_words_candidates が
+# scaffold/properties で自動取り込みされる前提。
+# ここでは固有名詞（診療科名）の主要表記のみを明記する。
+amivoice_dictionary:
+  - step_name: "用件聴取"
+    words: |
+      診察の予約について しんさつのよやくについて
+      人間ドックについて にんげんどっくについて
+      その他ご相談 そのたごそうだん
+      予約変更 よやくへんこう
+      予約キャンセル よやくきゃんせる
+      薬の変更 くすりのへんこう
+      初診 しょしん
+      再診 さいしん
+
+  - step_name: "診療科聴取"
+    words: |
+      眼科 がんか
+      形成外科 けいせいげか
+      思春期カウンセリング ししゅんきかうんせりんぐ
+      消化器内科 しょうかきないか
+      心療内科 しんりょうないか
+      内科 ないか
+      乳腺外科 にゅうせんげか
+      婦人科 ふじんか
+
+# =====================================================
+# セクション11: 特記事項・制約
+# =====================================================
+special_notes:
+  - "【法人内クリニック名義での受電】岡山中央病院本体ではなく、系列「セントラルクリニック・伊島」名義で電話に出る運用（Gen1 main.yaml 行 22）。冒頭_アナウンス文言を岡山中央病院本体名に差し替えるかどうか、顧客に確認する必要あり（confirmation_items 参照）。"
+  - "【3 用件のみ受付】予約変更・キャンセル・確認といった派生用件は「診察の予約について」 1 系統に統合（Gen1 entity_classification.md 用件エンティティの同 canonical 配下に統合済み）。後段の希望日聴取・連絡事項自由テキストで担当者に詳細を伝える運用。"
+  - "【個人情報聴取が用件聴取の前段】Gen1 の順序を踏襲。他施設（西宮渡辺・医誠会・中部徳洲会等）は用件→個人情報の順だが、本フローは個人情報→用件の順。人間ドック判定でも先に個人情報を取得してから案内終話する点に注意（Gen1 仕様維持）。"
+  - "【人間ドック案内 3 回繰り返し】Gen1 では 健康センター番号案内 → 3回ループ → 繰り返します → 健康センター番号案内 のループ箱で実現していたが、Gen3 では END_人間ドック案内 終話 TTS にインライン化（電話番号 086-252-3222 を 3 回読み上げる文字列として）。"
+  - "【先生名聴取は希望日聴取に統合】Gen1 では 診療科聞き取り.yaml 内で 先生名 entity が並列に検出され、先生名ヒアリング.yaml サブフローへ分岐していたが、Gen3 では希望日聴取の自由テキスト発話に含めて伝える運用に簡略化。先生名固有名詞は OpenAI 正規化の同義語ヒントに残す。"
+  - "【タイトル_2 は dead code として除外】Gen1 main.yaml の タイトル_2「只今電話が混み合っております」は到達経路が yaml 上に存在しない（参照元なし）→ Gen3 では実装しない。"
+  - "【テストルート は除外】Gen1 main.yaml の テストルート（テスト用入口）は Gen3 では削除。"
+  - "【業務時間】Gen1 時間外切断.yaml の判定: 平日 8:30〜16:45 / 土曜 8:30〜12:00 / 日祝・12/28〜1/4 休止。Gen3 では acceptance_times モジュールに集約（具体スケジュールは Dr.JOY 側で設定）。"
+  - "【SMS 送信】受付完了 (END_受付完了) のみ smsFlag=1。文面は Dr.JOY 側で設定（設計書では送信フラグのみ管理）。"
+  - "【Gen1 entity 自動取込】entity_classification.md / entity_stt_patch.json / entity_openai_synonyms.md は scaffold/properties が自動参照。本設計書では転記しない。"
+
+# =====================================================
+# セクション12: 要確認事項（人間に確認が必要）
+# =====================================================
+confirmation_items:
+  - item: "office_id（施設ID）"
+    resolved: false
+  - item: "代表電話番号（IVR 着信用）"
+    resolved: false
+  - item: "冒頭アナウンスの名乗り文言: 元資料は『セントラルクリニック・伊島です』だが、岡山中央病院本体の名乗りに差し替えるべきか確認"
+    resolved: false
+  - item: "人間ドック案内の電話番号: 元資料 main.yaml は 086-252-3222、移管ノートには 0570-001789 の記載あり（箱名のみで実体なし）。本設計書は 086-252-3222 を採用しているが、現在の正しい番号を確認"
+    resolved: false
+  - item: "営業時間スケジュール（Dr.JOY 側設定）: 平日 8:30〜16:45、土曜 8:30〜12:00、日祝休、12/28〜1/4 休止 で問題ないか確認"
+    resolved: false
+  - item: "SMS 送信文面（Dr.JOY 側設定）: 受付完了時の SMS テキスト内容を確認"
+    resolved: false
+  - item: "Dr.JOY 認証設定（生年月日 / 診察券番号 / 電話番号 の優先順位）"
+    resolved: false
+  - item: "Gen1 の 先生名聴取（希望先生のフォローアップ）を Gen3 でも明示ステップとして残すか、希望日聴取の自由テキストに統合するかを最終確認（本設計書は統合方式）"
+    resolved: false
+  - item: "診療科聴取で no_result_default = 登録なし のままでよいか（Gen1 では判定不能でリトライしていたが、Gen3 推奨は登録なし保存で進行）"
+    resolved: false

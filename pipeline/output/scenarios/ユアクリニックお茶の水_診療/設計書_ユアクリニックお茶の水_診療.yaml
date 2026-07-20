@@ -1,0 +1,579 @@
+# 設計書 — ユアクリニックお茶の水 診療
+# 生成元: @director エージェント
+# 生成日: 2026/05/07
+# 確認レポート: output/scenarios/ユアクリニックお茶の水_診療/確認レポート_ユアクリニックお茶の水_診療_20260507.md
+# ベース: docs/migration/gen1_ユアクリニックお茶の水_診療.md (Gen1→Gen3 移管) + commubo抽出 yaml 7 本
+#
+# 構造概要:
+#   - 用件分類なしの単一トラック「3 質問問い合わせ受付」（ユアクリニック秋葉原と双子だが移転告知 TTS なし）
+#   - 複雑な時間帯判定（祝日 + 2026 GW 特別日付 + 平日/土曜/祝日の時間帯ルール）を script (custom) ブロックに集約
+#   - Q1=問い合わせ内容（hearing text）/ Q2=患者名（PatientName subflow）/ Q3=連絡先電話番号（電話番号 subflow）
+#   - 時間外でも 3 質問受付を継続（時間外プレフィックス TTS → Q1）
+#   - 一部時間帯は AI 受付ではなく代表電話に Blind Transfer
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "ユアクリニックお茶の水"
+  scenario_name: "診療"
+  group_name: "ユアクリニックお茶の水"
+  flow_name: "ユアクリニックお茶の水$診療"
+  target_facility: "ユアクリニックお茶の水（小児科継承先・本院のみ）"
+  office_id: "TODO_要確認"
+  phone_number: "TODO_要確認"
+  business_hours: "平日 8:30-19:00 / 土曜 8:30-17:00（時間帯別に AI 受付/代表転送/時間外を切替。詳細は scenario_flow.時間帯判定 の notes 参照）"
+  flow_type: "subflow"
+  work_type: "gen1_migration"
+  environment: "prod"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "ユアクリニックお茶の水$診療"
+      role: "main"
+      description: "冒頭挨拶 → 時間帯判定（script: 祝日+GW+曜日+時間帯）→ 3 ルート（AI 時間内 / AI 時間外プレフィックス付き / 代表転送）→ Q1 問い合わせ内容（フリーテキスト）→ Q2 患者名（subflow）→ Q3 連絡先電話番号（subflow）→ 終話"
+
+  subflows:
+    - name: "ユアクリニックお茶の水$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。静的 JSON コピー。Gen1 仕様: 復唱なし（元 yaml は「ありがとうございます」と短い完了 TTS のみ）。**小児科継承先のため、PatientName エンティティ説明文に「お子様の場合は保護者からお子様のお名前を」を補足**（移管ノート director ノート対応）"
+
+    - name: "ユアクリニックお茶の水$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9/10 準拠。静的 JSON コピー。incoming-classifier→携帯確認/連絡先聴取→Phone Normalization→復唱確認→携帯判別→結果返却。元 yaml の `連絡先聴取.yaml` + `電話番号区切り.yaml`（携帯3-4-4 / IP3-4-4 / 固定5-1-4 / 固定4-2-4 / 固定3-3-4 / 固定2-4-4）の桁数別区切りロジックはサブフロー内部の Phone Normalization に集約"
+
+# --- セクション3: フローの目的 ---
+purpose: "ユアクリニックお茶の水（小児科継承先）への問い合わせダイヤル。患者または保護者からの電話を受け、3 つの質問（問い合わせ内容・患者名・連絡先電話番号）を聴取して、内容確認後に院内スタッフが土日祝を除く 2 日以内に折り返し連絡する非同期受付フロー。複雑な時間帯ルールに基づき、AI 受付（時間内/時間外）または代表電話への Blind Transfer に振り分ける。新規予約・予約変更・診療科分岐は行わない（用件分類なし）。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "ユアクリニックお茶の水$診療"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → 完了フラグ_非通知(saveCompletionFlag2db, status=2, smsFlag=-1)
+            │            → 非通知_アナウンス(TTS) → 切断
+            └─ 通常/携帯/固定/その他 → 冒頭_アナウンス(TTS, 「お電話ありがとうございます。ユアクリニックお茶の水のAI電話です。」)
+                          → 時間帯判定(script, custom: 祝日+2026GW+曜日+時間帯)
+                              ├─ AI_時間内 → Q1_問い合わせ内容
+                              ├─ AI_時間外 → 時間外_アナウンス(TTS) → Q1_問い合わせ内容
+                              └─ 代表転送 → 代表転送_ガイダンス(TTS) → 代表転送(call_transfer Blind Transfer)
+
+      ─── AI 受付ルート（3 質問）───
+      Q1_問い合わせ内容(hearing, text, save_to=reason)
+          TTS: 「全部で3つ質問をさせていただきます。まずは1つ目の質問です。本日のお問合せ内容をお話ください。それではどうぞ。」
+        → Q2_アナウンス(announcement, 「かしこまりました。続いて、二つ目の質問です。」)
+        → 氏名聴取(subflow PatientName)
+        → Q3_アナウンス(announcement, 「それでは、最後の質問です。ご連絡先のお電話番号をお伺いします。」)
+        → 電話番号聴取(subflow)
+        → 完了フラグ_受付完了(saveCompletionFlag2db, status=1, smsFlag=1) → END_受付完了(TTS) → 切断
+
+      ─── 代表電話転送ルート ───
+      代表転送_ガイダンス(TTS, 「只今のお時間は、スタッフへお繋ぎいたします。代表電話に転送いたしますのでそのままお待ちください。」)
+        → 代表転送(call_transfer, Blind Transfer)
+            ├─ 成功 → 完了フラグ_転送成功(status=3) → END_転送成功 → 切断（scaffold 自動）
+            └─ 失敗 → 転送失敗_アナウンス → 完了フラグ_転送失敗(status=9) → END_転送失敗 → 切断（scaffold 自動）
+
+      ─── 異常系 ───
+      Q1 retry 失敗 → END_聴取失敗(saveCompletionFlag2db, status=2, smsFlag=-1)
+                       → 聴取失敗_アナウンス(TTS) → 切断
+                       (Q2/Q3 サブフロー内 retry 失敗 → 代表転送 は IVR UI 手動追加。confirmation_items 参照)
+    notes: |
+      Gen1 commubo 構造を Gen3 9 ブロック型にマッピング:
+        - 冒頭 3 箱（API_DRJOY_CONTEXT_SETTINGS / API_DRJOY / 挨拶）→ opening + 冒頭_アナウンス（2 ブロック 1 セット）
+        - 時間判断.yaml + 3 回聞き取り失敗救済 時間判別.yaml → 単一 script ブロック（custom）に集約
+        - 主流れ「AI ※時間外アナ有 announcement → 冒頭発話」は Q1 TTS 冒頭にマージして短縮
+        - 用件分類なし（ユアクリニック秋葉原と同じ 3 質問構造、entity_classification.md の「予約キャンセル/予約以外」等は本フローでは未使用）
+        - 代表電話転送先番号は properties マネージャー入力枠（confirmation_items N-1 参照）
+        - 2026 年 GW 特別日付（4/29-5/6）は year-specific のため 2027 年以降は properties で更新運用（confirmation_items N-3 参照）
+
+# --- セクション4c: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # === 冒頭ブロック（2 ブロック 1 セット必須）===
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: false   # 標準 acceptance_times は単純すぎるため、後段の script ブロックで全判定を実施
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 時間帯判定
+
+  # === 時間帯判定（祝日 + 2026 GW 特別日付 + 平日/土曜/祝日の時間帯ルール）===
+  - step: 時間帯判定
+    type: script
+    script_template: custom
+    template_params:
+      logic: |
+        // 祝日カレンダー必須 + 2026 年 GW 特別日付 case 化 + 平日/土曜/祝日の 5 段階時間帯ブラケット判定。
+        // 入力: addCurrentDate=Yes が現在の日付・曜日・時刻を Script に提供する想定。
+        // 出力: "AI_時間内" / "AI_時間外" / "代表転送" のいずれか。
+        //
+        // ルール優先順位（上から順に評価）:
+        //
+        // 【1】2026 GW 特別日付（year-specific、2027 年以降は properties で更新運用）
+        //   1-a) today == 2026-04-29 (水・祝): 8:30 <= time < 16:00 → "代表転送" / それ以外 → "AI_時間外"
+        //   1-b) today == 2026-05-01 (金):     通常曜日扱い（=平日ルール【3】へ fallthrough）
+        //   1-c) today == 2026-05-02 (土):     通常曜日扱い（=土曜ルール【4】へ fallthrough）
+        //   1-d) today == 2026-05-03 (日・祝): 全日 "AI_時間外"
+        //   1-e) today == 2026-05-04 (月・祝): 8:30 <= time < 13:00 → "代表転送" / それ以外 → "AI_時間外"
+        //   1-f) today == 2026-05-05 (火・祝): 8:30 <= time < 16:00 → "代表転送" / それ以外 → "AI_時間外"
+        //   1-g) today == 2026-05-06 (水・祝): 8:30 <= time < 13:00 → "代表転送" / それ以外 → "AI_時間外"
+        //
+        // 【2】祝日（祝日カレンダー、2026 GW 以外の祝日）
+        //   - time < 8:30  → "AI_時間外"
+        //   - 8:30 <= time < 11:00 → "AI_時間内"
+        //   - 11:00 <= time < 13:00 → "代表転送"
+        //   - 13:00 <= time → "AI_時間外"
+        //
+        // 【3】平日（月-金、祝日でない）
+        //   - time < 8:30  → "AI_時間外"
+        //   - 8:30 <= time < 11:00 → "代表転送"
+        //   - 11:00 <= time < 15:00 → "AI_時間内"
+        //   - 15:00 <= time < 17:00 → "代表転送"
+        //   - 17:00 <= time < 19:00 → "AI_時間内"
+        //   - 19:00 <= time → "AI_時間外"
+        //
+        // 【4】土曜（祝日でない）
+        //   - time < 8:30  → "AI_時間外"
+        //   - 8:30 <= time < 11:00 → "AI_時間内"
+        //   - 11:00 <= time < 13:30 → "代表転送"
+        //   - 13:30 <= time < 15:00 → "AI_時間内"
+        //   - 15:00 <= time < 17:00 → "代表転送"
+        //   - 17:00 <= time → "AI_時間外"
+        //
+        // 【5】日曜（祝日でない）
+        //   - 全日 "AI_時間外"
+    conditions:
+      - match: "AI_時間内"
+        next: Q1_問い合わせ内容
+      - match: "AI_時間外"
+        next: 時間外_アナウンス
+      - match: "代表転送"
+        next: 代表転送_ガイダンス
+      - match: "other"
+        next: 時間外_アナウンス
+    notes: |
+      カレンダー計算必須（祝日カレンダー＋施設固有の 2026 GW 特別日付 case 化）のため script_template: custom 採用。
+      モジュール選定ガイド §3.8 の許容理由「祝日」「休館日」に該当。
+      addCurrentDate=Yes により Brekeke が現在日時・曜日・祝日フラグを Script に注入する前提。
+      2026 GW 特別日付（4/29 / 5/1 / 5/2 / 5/3 / 5/4 / 5/5 / 5/6）は year-specific のため、
+      2027 年以降は properties マネージャーで logic ブロックの GW 特別日付セクションを年次更新する運用。
+      動作未検証要素のため本番投入前に音声テストで全 3 ルートの分岐動作を確認すること。
+
+  # === 時間外プレフィックスアナウンス（時間外でも 3 質問受付を継続）===
+  - step: 時間外_アナウンス
+    type: announcement
+    next: Q1_問い合わせ内容
+
+  # === Q1: 問い合わせ内容（フリーテキスト 1 本）===
+  - step: Q1_問い合わせ内容
+    type: hearing
+    output_format: text
+    save_to: reason
+    next: Q2_アナウンス
+    retry_failure: end_failure
+    retry_failure_announcement: "{tts_g:申し訳ございません。うまく聞き取りができなかったため、後ほど担当者にて確認をいたします。}"
+
+  # === Q2: 患者名（PatientName subflow + 前段アナウンス）===
+  - step: Q2_アナウンス
+    type: announcement
+    next: 氏名聴取
+
+  - step: 氏名聴取
+    type: subflow
+    flowname: "ユアクリニックお茶の水$氏名聴取"
+    next: Q3_アナウンス
+
+  # === Q3: 連絡先電話番号（電話番号 subflow + 前段アナウンス）===
+  - step: Q3_アナウンス
+    type: announcement
+    next: 電話番号聴取
+
+  - step: 電話番号聴取
+    type: subflow
+    flowname: "ユアクリニックお茶の水$電話番号聴取"
+    next: END_受付完了
+
+  # === 代表電話転送ルート ===
+  - step: 代表転送_ガイダンス
+    type: announcement
+    next: 代表転送
+
+  - step: 代表転送
+    type: call_transfer
+    transfer_type: "Blind Transfer"
+    on_failure_announcement: "{tts_g:只今お電話が込み合っております。恐れ入りますが、お時間を空けて再度おかけなおしください。}"
+
+  # === 終話ブロック群 ===
+  - step: END_受付完了
+    type: termination
+    termination_ref: "END_受付完了"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本フローでは用件分類なし（単一トラックの 3 質問問い合わせ受付）。Dr.JOY デフォルト項目として空 rangeValues で保持"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "Q2 で聴取。氏名聴取サブフローで PatientName 取得（カタカナ変換済み）。小児科継承先のため subflow 内 OpenAI prompt に「お子様の場合は保護者からお子様のお名前を」のガイダンス補足"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本フローでは未聴取。Dr.JOY デフォルト項目として保持"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本フローでは診療科聴取なし。Dr.JOY デフォルト項目として保持"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日(和暦)"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本フローでは未聴取。Dr.JOY デフォルト項目として保持"
+
+  - context_name: "reason"
+    context_name_jp: "理由"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "Q1（問い合わせ内容）の保存先。フリーテキスト要約。OpenAI summarize による正規化"
+
+  - context_name: "reservationDate"
+    context_name_jp: "予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本フローでは未聴取。Dr.JOY デフォルト項目として保持"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "Q3（連絡先電話番号）の保存先。電話番号聴取サブフローで聴取。入電番号取得済みなら着信番号を自動採用、それ以外は手入力 → Phone Normalization → 復唱確認"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "転送成功"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+      - id: "9"
+        order: "9"
+        value: "転送失敗"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=AI 受付完了 2=非通知/聴取失敗（代表案内） 3=代表転送成功 6=（本フローでは未使用、END_時間外 を分離する場合に使用） 9=代表転送失敗"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "入電日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値。displayType/itemDefault/deletable は変更不可"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "Q1_問い合わせ内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: "Q1 = 問い合わせ内容のフリーテキスト 1 本聴取（DTMF なし、音声のみ）。元 Gen1 yaml `問合せ内容聴取.yaml` の「発話あり/なし」「ご用件あり/なし」「5 秒無音」3 種チェックは Gen3 standard hearing block の no_speech / no_result で吸収。OpenAI は要約・正規化のみ（分岐なし）。retry 失敗時は END_聴取失敗 へ（confirmation_items N-5 参照）"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "冒頭_アナウンス"
+    tts_announcement: "{tts_g:お電話ありがとうございます。ユアクリニックお茶の水のAI電話です。}"
+    input_method: "voice_only"
+    next_step: "時間帯判定"
+    retry_failure: "skip"
+
+  - step_name: "時間外_アナウンス"
+    tts_announcement: "{tts_g:ただいまのお時間は診療時間外です。救急の方は東京都医療機関案内サービス、ひまわり03-5272-0303におかけください。当院へお問い合わせの方は、この後にご用件をお伺いいたします。内容確認後、院内スタッフから翌営業日終了までにショートメッセージもしくはお電話にてご連絡いたします。}"
+    input_method: "voice_only"
+    next_step: "Q1_問い合わせ内容"
+    retry_failure: "skip"
+
+  - step_name: "Q1_問い合わせ内容"
+    tts_announcement: "{tts_g:全部で3つ質問をさせていただきます。まずは1つ目の質問です。本日のお問合せ内容をお話ください。それではどうぞ。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "<フリーテキスト要約>"
+      mapping:
+        - input: "患者または保護者の自由発話（症状・診断書依頼・予約変更希望・処方薬問い合わせ 等）"
+          output: "発話内容を 30〜60 字程度の要約テキストで保存"
+      no_result_condition: "5 秒無音 / 認識不能"
+    save_to: "reason"
+    next_step: "Q2_アナウンス"
+    retry_failure: "end_failure"
+    retry_failure_announcement: "{tts_g:申し訳ございません。うまく聞き取りができなかったため、後ほど担当者にて確認をいたします。}"
+
+  - step_name: "Q2_アナウンス"
+    tts_announcement: "{tts_g:かしこまりました。続いて、二つ目の質問です。}"
+    input_method: "voice_only"
+    next_step: "氏名聴取"
+    retry_failure: "skip"
+
+  - step_name: "Q3_アナウンス"
+    tts_announcement: "{tts_g:それでは、最後の質問です。ご連絡先のお電話番号をお伺いします。}"
+    input_method: "voice_only"
+    next_step: "電話番号聴取"
+    retry_failure: "skip"
+
+  - step_name: "代表転送_ガイダンス"
+    tts_announcement: "{tts_g:只今のお時間は、スタッフへお繋ぎいたします。代表電話に転送いたしますのでそのままお待ちください。}"
+    input_method: "voice_only"
+    next_step: "代表転送"
+    retry_failure: "skip"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # === 異常系（デフォルト必須）===
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "{tts_g:恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。}"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外（本フローでは時間外も AI 受付を継続するため、デフォルトとして配置のみ。実際の到達経路なし）"
+    tts_announcement: "{tts_g:お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。}"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "Q1 retry 上限到達"
+    tts_announcement: "{tts_g:申し訳ございません。うまく聞き取りができなかったため、後ほど担当者にて確認をいたします。お電話ありがとうございました。}"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # === 正常系 ===
+  - name: "END_受付完了"
+    condition: "Q1/Q2/Q3 全聴取完了（AI 時間内 / AI 時間外 共通）"
+    tts_announcement: "{tts_g:ありがとうございます。質問は以上です。内容確認後、院内スタッフから土・日、祝日を除く二日以内にショートメッセージもしくはお電話にてご連絡いたします。お電話ありがとうございました。}"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+  # 本フローは AI 受付完了で常に SMS 送信（smsFlag=1）。代表転送ルートは status=3 で完了（SMS なし、saveCompletionFlag2db は scaffold が自動配置）。
+  # SMS 送信あり/なしの分岐ロジックは不要。
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "施設名 + AI 電話案内（移転告知なし、ユアクリニック秋葉原版とは異なる）"
+    announcement: "{tts_g:お電話ありがとうございます。ユアクリニックお茶の水のAI電話です。}"
+
+  - module_name: "時間外_アナウンス"
+    purpose: "時間外プレフィックス（時間外でも 3 質問受付を継続）"
+    announcement: "{tts_g:ただいまのお時間は診療時間外です。救急の方は東京都医療機関案内サービス、ひまわり03-5272-0303におかけください。当院へお問い合わせの方は、この後にご用件をお伺いいたします。内容確認後、院内スタッフから翌営業日終了までにショートメッセージもしくはお電話にてご連絡いたします。}"
+
+  - module_name: "Q1_問い合わせ内容"
+    purpose: "Q1 = 冒頭発話マージ + 問い合わせ内容聴取（Gen1 「冒頭発話」+「問合せ内容確認」を統合）"
+    announcement: "{tts_g:全部で3つ質問をさせていただきます。まずは1つ目の質問です。本日のお問合せ内容をお話ください。それではどうぞ。}"
+
+  - module_name: "Q2_アナウンス"
+    purpose: "Q2（患者名サブフロー）への前段アナウンス"
+    announcement: "{tts_g:かしこまりました。続いて、二つ目の質問です。}"
+
+  - module_name: "Q3_アナウンス"
+    purpose: "Q3（電話番号サブフロー）への前段アナウンス"
+    announcement: "{tts_g:それでは、最後の質問です。ご連絡先のお電話番号をお伺いします。}"
+
+  - module_name: "代表転送_ガイダンス"
+    purpose: "代表電話 Blind Transfer 前のアナウンス"
+    announcement: "{tts_g:只今のお時間は、スタッフへお繋ぎいたします。代表電話に転送いたしますのでそのままお待ちください。}"
+
+  # --- 終話 TTS ---
+  - module_name: "END_受付完了"
+    purpose: "AI 受付完了（土日祝除く 2 日以内に SMS または電話で折り返し連絡）"
+    announcement: "{tts_g:ありがとうございます。質問は以上です。内容確認後、院内スタッフから土・日、祝日を除く二日以内にショートメッセージもしくはお電話にてご連絡いたします。お電話ありがとうございました。}"
+
+  - module_name: "END_非通知"
+    purpose: "非通知終話"
+    announcement: "{tts_g:恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。}"
+
+  - module_name: "END_時間外"
+    purpose: "時間外終話（本フローでは未使用。デフォルト配置のみ）"
+    announcement: "{tts_g:お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。}"
+
+  - module_name: "END_聴取失敗"
+    purpose: "Q1 retry 上限到達時の聴取失敗終話（Gen1 「END_戻る：聞取りできず」セリフ流用）"
+    announcement: "{tts_g:申し訳ございません。うまく聞き取りができなかったため、後ほど担当者にて確認をいたします。お電話ありがとうございました。}"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "Q1_問い合わせ内容"
+    words: |
+      予約 ヨヤク
+      変更 ヘンコウ
+      キャンセル キャンセル
+      確認 カクニン
+      診察 シンサツ
+      診療 シンリョウ
+      予防接種 ヨボウセッシュ
+      処方箋 ショホウセン
+      薬 クスリ
+      診断書 シンダンショ
+      症状 ショウジョウ
+      質問 シツモン
+      問い合わせ トイアワセ
+      子供 コドモ
+      保護者 ホゴシャ
+      小児科 ショウニカ
+      内科 ナイカ
+      循環器 ジュンカンキ
+      初診 ショシン
+      紹介状 ショウカイジョウ
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "ユアクリニック秋葉原（移転元）の小児科継承先。フロー構造は秋葉原診療と双子（3 質問問い合わせ受付）だが、**移転告知 TTS なし** + **時間判断が 2026 年 GW 特別日付込みの最新版**"
+  - "用件分類なし（全件＝問い合わせ預かりのみ）。OpenAI 用件分類 / 診療科聴取 / 予約日聴取 / 診察券聴取 / 生年月日聴取は使用しない"
+  - "**時間外でも 3 質問受付を継続**: 時間外プレフィックス TTS（救急案内＋翌営業日終了までに連絡）→ Q1 進行。標準 acceptance_times モジュールは未使用、script ブロック「時間帯判定」で全判定"
+  - "**2026 GW 特別日付（4/29-5/6）は year-specific**: 2027 年以降は properties マネージャーで logic ブロックの GW 特別日付セクションを年次更新する運用ルールを別途文書化（confirmation_items N-3）"
+  - "**代表電話番号は properties マネージャー入力枠**: 元 yaml に番号の記載がないため、call_transfer.params.number は properties で別途設定（confirmation_items N-1）"
+  - "**Q2/Q3 サブフロー内 retry 失敗時の代表転送は IVR UI 手動追加**: Custom Jump to Flow からは親フローの END / call_transfer に接続不可のため、サブフロー内で完結させる必要がある（confirmation_items N-4）"
+  - "**Q1 retry 失敗時は切断扱い**: Gen1 元では call_transfer だが、Gen3 hearing block の retry_failure は skip / end_failure / disconnect のみ。end_failure → END_聴取失敗 で「うまく聞き取りができなかったため、後ほど担当者にて確認をいたします」と案内して切断する形に丸めた（confirmation_items N-5）"
+  - "**小児科継承先の特殊事情**: 「患者 = 入電者の子」のケースが多いため、PatientName サブフロー内の OpenAI prompt に「お子様の場合は保護者からお子様のお名前を」のガイダンスを補足する"
+  - "DTMF 入力なし（全 hearing は音声のみ）"
+  - "RAG / FAQ サブフロー未使用"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "[N-1] 代表電話転送先電話番号 — properties マネージャー入力枠で設定（call_transfer.params.number）"
+    resolved: false
+    status: "TODO"
+    assignee: "施設運用担当 / マネージャー"
+    notes: "元 Gen1 yaml には番号の記載がない（`院内代表転送` サブシナリオが Blind Transfer 呼び出し前提）。施設に確認して properties に設定"
+
+  - item: "[N-2] office_id（施設 ID）の確定"
+    resolved: false
+    status: "TODO"
+    assignee: "Dr.JOY 管理者"
+    notes: "Dr.JOY 管理画面で確認"
+
+  - item: "[N-3] 2026 GW 特別日付 logic の 2027 年以降の年次更新運用ルール文書化"
+    resolved: false
+    status: "TODO"
+    assignee: "運用チーム"
+    notes: "script ブロック「時間帯判定」の template_params.logic 内 GW 特別日付セクションを毎年 4 月までに properties マネージャーで更新。祝日法改正にも対応"
+
+  - item: "[N-4] サブフロー内 retry 上限到達時の代表転送 → Brekeke IVR UI で手動追加（氏名聴取 / 電話番号聴取 共通）"
+    resolved: false
+    status: "TODO"
+    assignee: "人間（Brekeke IVR UI）"
+    notes: "Custom Jump to Flow から親フローの call_transfer に接続不可。サブフロー内 retry_false パスに 聞取り失敗_転送ガイダンス TTS（「申し訳ございません、うまく認識ができませんでした。代表電話に転送いたしますのでそのままお待ちください。」）+ Blind Transfer モジュールを手動追加"
+
+  - item: "[N-5] Q1 retry 上限到達時の挙動 — 代表転送に切り替えるか確認"
+    resolved: false
+    status: "TODO"
+    assignee: "施設運用担当"
+    notes: "現設計は END_聴取失敗（saveCompletionFlag2db status=2 → TTS → Disconnect）。Gen1 元仕様の代表転送に揃えたい場合は IVR UI 上で hearing の retry_false → call_transfer に手動配線する"
+
+  - item: "[N-6] reason context の「理由」流用是非（Q1 問い合わせ内容のフリーテキスト保存先）"
+    resolved: false
+    status: "TODO"
+    assignee: "施設運用担当"
+    notes: "現設計は Dr.JOY デフォルト「reason」（理由）を流用。施設要件で「inquiryContent」等のカスタム context が必要なら context_fields を再構成"
+
+  - item: "[N-7] 通話テストでの全 3 ルート（AI 時間内 / AI 時間外 / 代表転送）動作確認"
+    resolved: false
+    status: "TODO"
+    assignee: "QA / 施設運用担当"
+    notes: "script ブロック custom logic は実機検証が必須。本番投入前に時間帯ごとの分岐動作を実コールで確認"

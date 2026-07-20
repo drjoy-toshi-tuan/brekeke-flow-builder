@@ -1,0 +1,176 @@
+# Pattern 6 (テストフロー) - DOB Re-confirmation (生年月日復唱) 受入テスト [拡張版 ~100ケース / tts_ai版]
+#
+# 期待値は全ケース dob_oracle (実機とバイト一致確認済みの解析ロジック) で算出。
+# 汚いデータ(欠落/桁不足/範囲外/誤認識/全角漢数字)を中心に網羅。
+# 1 ケース=2〜3 モジュール: prime→dob(→OKのみ chk CMR)。全PASSで結果_全PASS到達。
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$生年月日復唱AI"
+  flow_name: "テスト$生年月日復唱AI"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$生年月日復唱AI"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("=================================================");
+      $runner.getLogger().info("[TEST START] DOB Re-confirmation 受入 (119 cases)");
+      $runner.getLogger().info("=================================================");
+      $runner.setResult("ok");
+    next: DOB_TEST
+
+  - step: DOB_TEST
+    type: dob_reconfirmation_test_matrix
+    prompt: "{tts_ai:#data# でよろしいでしょうか。}"
+    date_reading_mode: "自動"
+    save_dob2db: "no"
+    pass_terminal: 結果_全PASS
+    fail_terminal: 結果_FAIL
+    cases:
+      - {id: R1, raw: "", node: "19790312", expect: "1979年3月12日"}
+      - {id: R2, raw: "昭和54年3月12日", node: "", expect: "昭和54年3月12日"}
+      - {id: R3, raw: "令和元年5月1日", node: "", expect: "令和元年5月1日"}
+      - {id: R4, raw: "平成2年1月1日", node: "", expect: "平成2年1月1日"}
+      - {id: R5, raw: "唱和54年3月12日", node: "", expect: "昭和54年3月12日"}
+      - {id: R6, raw: "", node: "19950312", expect: "1995年3月12日"}
+      - {id: R7, raw: "", node: "19790230", expect: "INVALID"}
+      - {id: R8, raw: "昭和70年1月1日", node: "", expect: "INVALID"}
+      - {id: R9, raw: "令和10年3月12日", node: "", expect: "INVALID"}
+      - {id: R10, raw: "わからない", node: "", expect: "INVALID"}
+      - {id: R11, raw: "うーん", node: "1979-03-12 00:00", cache: '{"dbValue": "1979-03-12 00:00", "readingValue": "昭和54年3月12日", "sourceBaseDate": "1979-03-12 00:00"}', expect: "昭和54年3月12日"}
+      - {id: R12, raw: "平成2年1月1日", node: "1979-03-12 00:00", cache: '{"dbValue": "1979-03-12 00:00", "readingValue": "昭和54年3月12日", "sourceBaseDate": "1979-03-12 00:00"}', expect: "平成2年1月1日"}
+      - {id: S1, raw: "明治5年1月1日", node: "", expect: "INVALID"}
+      - {id: S2, raw: "平成元年1月7日", node: "", expect: "昭和64年1月7日"}
+      - {id: S3, raw: "", node: "790312", expect: "INVALID"}
+      - {id: S4, raw: "", node: "1995", expect: "INVALID"}
+      - {id: T1, raw: "", node: "20000229", expect: "2000年2月29日"}
+      - {id: T2, raw: "昭和58の3月の12日", node: "", expect: "昭和58年3月12日"}
+      - {id: T3, raw: "昭和64年1月7日", node: "", expect: "昭和64年1月7日"}
+      - {id: M1, raw: "1979年3月12日", node: "", reading_mode: "和暦", expect: "昭和54年3月12日"}
+      - {id: M2, raw: "昭和54年3月12日", node: "", reading_mode: "西暦", expect: "1979年3月12日"}
+      - {id: D01, raw: "1979年3月", node: "", expect: "INVALID"}
+      - {id: D02, raw: "昭和54年3月", node: "", expect: "INVALID"}
+      - {id: D03, raw: "1979年12日", node: "", expect: "INVALID"}
+      - {id: D04, raw: "昭和54年12日", node: "", expect: "INVALID"}
+      - {id: D05, raw: "3月12日", node: "", expect: "INVALID"}
+      - {id: D06, raw: "1979年", node: "", expect: "INVALID"}
+      - {id: D07, raw: "昭和54年", node: "", expect: "INVALID"}
+      - {id: D08, raw: "3月", node: "", expect: "INVALID"}
+      - {id: D09, raw: "12日", node: "", expect: "INVALID"}
+      - {id: D10, raw: "昭和", node: "", expect: "INVALID"}
+      - {id: D11, raw: "昭和54", node: "", expect: "INVALID"}
+      - {id: D12, raw: "1979", node: "", expect: "INVALID"}
+      - {id: D13, raw: "3 12", node: "", expect: "INVALID"}
+      - {id: D14, raw: "あー", node: "", expect: "INVALID"}
+      - {id: D15, raw: "昭和3月12日", node: "", expect: "INVALID"}
+      - {id: D16, raw: "", node: "19790012", expect: "INVALID"}
+      - {id: D17, raw: "", node: "19790300", expect: "INVALID"}
+      - {id: D18, raw: "", node: "00000101", expect: "INVALID"}
+      - {id: D19, raw: "", node: "1979031", expect: "INVALID"}
+      - {id: D20, raw: "", node: "197903121", expect: "INVALID"}
+      - {id: D21, raw: "もしもし予約したいです", node: "", expect: "INVALID"}
+      - {id: D22, raw: "えーと昭和54年3月12日", node: "", expect: "昭和54年3月12日"}
+      - {id: D23, raw: "昭和54年3月12日です", node: "", expect: "昭和54年3月12日"}
+      - {id: D24, raw: "昭和54年3月32日", node: "", expect: "INVALID"}
+      - {id: V01, raw: "", node: "19790131", expect: "1979年1月31日"}
+      - {id: V02, raw: "", node: "19790132", expect: "INVALID"}
+      - {id: V03, raw: "", node: "19790228", expect: "1979年2月28日"}
+      - {id: V04, raw: "", node: "19790229", expect: "INVALID"}
+      - {id: V05, raw: "", node: "20040229", expect: "2004年2月29日"}
+      - {id: V06, raw: "", node: "19790331", expect: "1979年3月31日"}
+      - {id: V07, raw: "", node: "19790431", expect: "INVALID"}
+      - {id: V08, raw: "", node: "19790430", expect: "1979年4月30日"}
+      - {id: V09, raw: "", node: "19790531", expect: "1979年5月31日"}
+      - {id: V10, raw: "", node: "19790631", expect: "INVALID"}
+      - {id: V11, raw: "", node: "19790630", expect: "1979年6月30日"}
+      - {id: V12, raw: "", node: "19790731", expect: "1979年7月31日"}
+      - {id: V13, raw: "", node: "19790831", expect: "1979年8月31日"}
+      - {id: V14, raw: "", node: "19790931", expect: "INVALID"}
+      - {id: V15, raw: "", node: "19791031", expect: "1979年10月31日"}
+      - {id: V16, raw: "", node: "19791131", expect: "INVALID"}
+      - {id: V17, raw: "", node: "19791231", expect: "1979年12月31日"}
+      - {id: V18, raw: "", node: "19791301", expect: "INVALID"}
+      - {id: V19, raw: "", node: "19790001", expect: "INVALID"}
+      - {id: V20, raw: "", node: "19791100", expect: "INVALID"}
+      - {id: E01, raw: "明治45年12月31日", node: "", expect: "大正元年12月31日"}
+      - {id: E02, raw: "明治39年1月1日", node: "", expect: "明治39年1月1日"}
+      - {id: E03, raw: "明治38年12月31日", node: "", expect: "INVALID"}
+      - {id: E04, raw: "大正15年12月24日", node: "", expect: "大正15年12月24日"}
+      - {id: E05, raw: "大正16年1月1日", node: "", expect: "INVALID"}
+      - {id: E06, raw: "昭和元年12月25日", node: "", expect: "昭和元年12月25日"}
+      - {id: E07, raw: "昭和65年1月1日", node: "", expect: "INVALID"}
+      - {id: E08, raw: "平成元年1月8日", node: "", expect: "平成元年1月8日"}
+      - {id: E09, raw: "平成31年4月30日", node: "", expect: "平成31年4月30日"}
+      - {id: E10, raw: "平成32年1月1日", node: "", expect: "INVALID"}
+      - {id: E11, raw: "令和元年5月1日", node: "", expect: "令和元年5月1日"}
+      - {id: E12, raw: "令和7年12月31日", node: "", expect: "令和7年12月31日"}
+      - {id: E13, raw: "令和8年1月1日", node: "", expect: "令和8年1月1日"}
+      - {id: E14, raw: "__FUTURE_WAREKI__", node: "", expect: "INVALID"}  # 元号表記の未来日→INVALID(固定日付のドリフト防止)
+      - {id: E15, raw: "令和6年6月15日", node: "", expect: "令和6年6月15日"}  # 令和元号マッピング(過去・有効・安定)。未来→INVALIDはE14(__FUTURE_WAREKI__)で担保
+      - {id: F01, raw: "１９７９年３月１２日", node: "", expect: "1979年3月12日"}
+      - {id: F02, raw: "昭和５４年３月１２日", node: "", expect: "昭和54年3月12日"}
+      - {id: F03, raw: "昭和五十四年三月十二日", node: "", expect: "昭和54年3月12日"}
+      - {id: F04, raw: "千九百七十九年三月十二日", node: "", expect: "1979年3月12日"}
+      - {id: F05, raw: "平成二十年十月八日", node: "", expect: "平成20年10月8日"}
+      - {id: F06, raw: "昭和五年五月五日", node: "", expect: "昭和5年5月5日"}
+      - {id: F07, raw: "１９７９０３１２", node: "", expect: "1979年3月12日"}
+      - {id: F08, raw: "昭和54年３月12日", node: "", expect: "昭和54年3月12日"}
+      - {id: F09, raw: "令和元年五月一日", node: "", expect: "令和元年5月1日"}
+      - {id: F10, raw: "二千年一月一日", node: "", expect: "INVALID"}
+      - {id: A01, raw: "社長は54年3月12日", node: "", expect: "昭和54年3月12日"}
+      - {id: A02, raw: "今日は54年3月12日", node: "", expect: "昭和54年3月12日"}
+      - {id: A03, raw: "名所54年3月12日", node: "", expect: "昭和54年3月12日"}
+      - {id: A04, raw: "平静2年1月1日", node: "", expect: "平成2年1月1日"}
+      - {id: A05, raw: "閉成2年1月1日", node: "", expect: "平成2年1月1日"}
+      - {id: A06, raw: "例は元年5月1日", node: "", expect: "令和元年5月1日"}
+      - {id: A07, raw: "冷和元年5月1日", node: "", expect: "令和元年5月1日"}
+      - {id: A08, raw: "対象10年3月3日", node: "", expect: "大正10年3月3日"}
+      - {id: A09, raw: "大将10年3月3日", node: "", expect: "大正10年3月3日"}
+      - {id: A10, raw: "命じ40年1月1日", node: "", expect: "明治40年1月1日"}
+      - {id: A11, raw: "明示40年1月1日", node: "", expect: "明治40年1月1日"}
+      - {id: N01, raw: "昭和58 3月 12日", node: "", expect: "昭和58年3月12日"}
+      - {id: N02, raw: "昭和58年、3月、12日", node: "", expect: "昭和58年3月12日"}
+      - {id: N03, raw: "昭和583月の12日", node: "", expect: "昭和58年3月12日"}
+      - {id: N04, raw: "3月12日昭和54年", node: "", expect: "昭和54年3月12日"}
+      - {id: N05, raw: "3月12日1985年", node: "", expect: "1985年3月12日"}
+      - {id: N06, raw: "昭和じゅうよ年3月12日", node: "", expect: "昭和14年3月12日"}
+      - {id: N07, raw: "昭和54年3月じゅうに日", node: "", expect: "昭和54年3月12日"}
+      - {id: Y01, raw: "79年3月12日", node: "", expect: "1979年3月12日"}
+      - {id: Y02, raw: "079年3月12日", node: "", expect: "1979年3月12日"}
+      - {id: Y03, raw: "23年1月1日", node: "", expect: "1923年1月1日"}
+      - {id: Y04, raw: "00年1月1日", node: "", expect: "INVALID"}
+      - {id: Y05, raw: "1899年1月1日", node: "", expect: "INVALID"}
+      - {id: U01, raw: "", node: "__FUTURE__", expect: "INVALID"}  # 生成日+400日=確実に未来→INVALID(ドリフト防止)
+      - {id: U02, raw: "", node: "__TOMORROW__", expect: "INVALID"}  # 生成日翌日=常に未来→INVALID(固定日付のドリフト防止)
+      - {id: U03, raw: "", node: "20260601", expect: "2026年6月1日"}
+      - {id: U04, raw: "令和20年1月1日", node: "", expect: "INVALID"}
+      - {id: U05, raw: "", node: "19000101", expect: "INVALID"}
+      - {id: U06, raw: "", node: "19060101", expect: "1906年1月1日"}
+
+  - step: 結果_全PASS
+    type: announcement
+    prompt: "{tts_g:全てのテストケースがパスしました。}"
+    next: 切断
+
+  - step: 結果_FAIL
+    type: announcement
+    prompt: "{tts_g:いずれかのテストケースで失敗しました。ログを確認してください。}"
+    next: 切断
+
+  - step: 切断
+    type: termination

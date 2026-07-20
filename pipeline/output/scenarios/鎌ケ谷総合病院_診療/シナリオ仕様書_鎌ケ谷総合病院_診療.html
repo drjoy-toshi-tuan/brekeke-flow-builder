@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>シナリオ仕様書 — 鎌ケ谷総合病院</title>
+<style>
+  :root {
+    --primary: #2563eb; --primary-light: #eff6ff;
+    --success: #16a34a; --success-light: #f0fdf4;
+    --warning: #d97706; --warning-light: #fffbeb;
+    --danger: #dc2626; --danger-light: #fef2f2;
+    --gray-50: #f9fafb; --gray-100: #f3f4f6; --gray-200: #e5e7eb;
+    --gray-300: #d1d5db; --gray-500: #6b7280; --gray-700: #374151; --gray-900: #111827;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI','Hiragino Sans','Yu Gothic UI',sans-serif; background: var(--gray-50); color: var(--gray-900); line-height: 1.7; }
+  .header { background: linear-gradient(135deg, #1e40af, #3b82f6); color: white; padding: 2.5rem 2rem; text-align: center; }
+  .header h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 0.5rem; }
+  .header .meta { opacity: 0.85; font-size: 0.9rem; }
+  .container { max-width: 900px; margin: 0 auto; padding: 1.5rem; }
+  .overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+  .overview-card { background: white; border-radius: 12px; padding: 1.2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); text-align: center; }
+  .overview-card .num { font-size: 2rem; font-weight: 700; color: var(--primary); }
+  .overview-card .label { font-size: 0.85rem; color: var(--gray-500); margin-top: 0.2rem; }
+  .flow-overview { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin: 1.5rem 0; }
+  .flow-chain { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.3rem; padding: 1rem 0; }
+  .flow-node { background: var(--primary-light); border: 2px solid var(--primary); border-radius: 8px; padding: 0.5rem 1rem; font-size: 0.85rem; font-weight: 600; color: var(--primary); white-space: nowrap; }
+  .flow-node.start { background: var(--success-light); border-color: var(--success); color: var(--success); }
+  .flow-node.end { background: var(--danger-light); border-color: var(--danger); color: var(--danger); }
+  .flow-node.branch { background: var(--warning-light); border-color: var(--warning); color: var(--warning); }
+  .flow-arrow { font-size: 1.2rem; color: var(--gray-300); }
+  .section { margin: 1.5rem 0; }
+  .section-title { font-size: 1.3rem; font-weight: 700; color: var(--gray-900); padding-bottom: 0.5rem; border-bottom: 2px solid var(--primary); margin-bottom: 1rem; }
+  .block { background: white; border-radius: 12px; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); overflow: hidden; }
+  .block-header { background: var(--gray-100); padding: 0.8rem 1.2rem; cursor: pointer; display: flex; align-items: center; gap: 0.8rem; user-select: none; transition: background 0.2s; }
+  .block-header:hover { background: var(--gray-200); }
+  .block-header .icon { font-size: 1.3rem; }
+  .block-header .title { font-weight: 600; flex: 1; }
+  .block-header .badge { font-size: 0.75rem; padding: 0.15rem 0.6rem; border-radius: 999px; font-weight: 600; }
+  .badge-blue { background: var(--primary-light); color: var(--primary); }
+  .badge-green { background: var(--success-light); color: var(--success); }
+  .badge-orange { background: var(--warning-light); color: var(--warning); }
+  .badge-red { background: var(--danger-light); color: var(--danger); }
+  .badge-purple { background: #f3e8ff; color: #7c3aed; }
+  .badge-gray { background: var(--gray-100); color: var(--gray-500); }
+  .block-header .chevron { transition: transform 0.3s; font-size: 0.8rem; color: var(--gray-500); }
+  .block.open .block-header .chevron { transform: rotate(90deg); }
+  .block-body { display: none; padding: 1.2rem; }
+  .block.open .block-body { display: block; }
+  .speech { background: var(--primary-light); border-left: 4px solid var(--primary); border-radius: 0 8px 8px 0; padding: 0.8rem 1rem; margin: 0.5rem 0 0.5rem 2rem; font-size: 0.9rem; position: relative; }
+  .speech::before { content: '\1F50A'; position: absolute; left: -2rem; top: 0.7rem; font-size: 1rem; }
+  .speech .label { font-size: 0.75rem; color: var(--gray-500); font-weight: 600; margin-bottom: 0.3rem; }
+  .branch-table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; font-size: 0.9rem; }
+  .branch-table th { background: var(--gray-100); padding: 0.5rem 0.8rem; text-align: left; font-weight: 600; font-size: 0.8rem; color: var(--gray-500); }
+  .branch-table td { padding: 0.5rem 0.8rem; border-bottom: 1px solid var(--gray-200); }
+  .steps { list-style: none; padding: 0; }
+  .steps li { padding: 0.6rem 0 0.6rem 2.5rem; position: relative; border-left: 2px solid var(--gray-200); margin-left: 0.8rem; }
+  .steps li::before { content: attr(data-num); position: absolute; left: -0.85rem; top: 0.5rem; width: 1.5rem; height: 1.5rem; border-radius: 50%; background: var(--primary); color: white; font-size: 0.75rem; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+  .steps li:last-child { border-left-color: transparent; }
+  .step-title { font-weight: 600; }
+  .step-desc { font-size: 0.85rem; color: var(--gray-500); margin-top: 0.2rem; }
+  .info-box { background: var(--warning-light); border-left: 4px solid var(--warning); padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-size: 0.85rem; }
+  .error-box { background: var(--danger-light); border-left: 4px solid var(--danger); padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-size: 0.85rem; }
+  .collect-table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; }
+  .collect-table th { background: var(--gray-100); padding: 0.6rem 1rem; text-align: left; font-size: 0.85rem; }
+  .collect-table td { padding: 0.6rem 1rem; border-bottom: 1px solid var(--gray-200); font-size: 0.9rem; }
+  .footer { text-align: center; color: var(--gray-500); font-size: 0.8rem; padding: 2rem 0; }
+  /* 縦型ツリー図 */
+  .tree-section { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin: 1.5rem 0; overflow-x: auto; }
+  .vtree { display: flex; flex-direction: column; align-items: center; gap: 0; }
+  .vtree-node { background: var(--primary-light); border: 2px solid var(--primary); border-radius: 8px; padding: 0.35rem 1rem; font-size: 0.8rem; font-weight: 600; color: var(--primary); white-space: nowrap; text-align: center; min-width: 100px; }
+  .vtree-node.t-opening { background: var(--success-light); border-color: var(--success); color: var(--success); }
+  .vtree-node.t-announcement { background: #e0f2fe; border-color: #0284c7; color: #0284c7; }
+  .vtree-node.t-hearing { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
+  .vtree-node.t-subflow { background: #f3e8ff; border-color: #7c3aed; color: #7c3aed; }
+  .vtree-node.t-context_match_router, .vtree-node.t-script, .vtree-node.t-date_of_call_classifier { background: var(--warning-light); border-color: var(--warning); color: var(--warning); }
+  .vtree-node.t-call_transfer { background: #fce7f3; border-color: #db2777; color: #db2777; }
+  .vtree-node.t-termination { background: var(--danger-light); border-color: var(--danger); color: var(--danger); }
+  .vtree-arrow { color: var(--gray-300); font-size: 0.9rem; line-height: 1; text-align: center; padding: 2px 0; }
+  .vtree-branches { display: flex; justify-content: center; gap: 0.8rem; margin: 0.3rem 0; }
+  .vtree-branch { display: flex; flex-direction: column; align-items: center; gap: 0; border: 1px solid var(--gray-200); border-radius: 10px; padding: 0.5rem; background: var(--gray-50); }
+  .vtree-branch-label { font-size: 0.7rem; font-weight: 700; color: var(--gray-500); background: white; border-radius: 4px; padding: 0.1rem 0.5rem; margin-bottom: 0.2rem; border: 1px solid var(--gray-200); }
+  .vtree-merge { text-align: center; font-size: 0.75rem; color: var(--gray-500); padding: 0.2rem 0; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>シナリオ仕様書</h1>
+  <div class="meta">鎌ケ谷総合病院 | 作成日: 2026年04月16日</div>
+</div>
+<div class="container">
+
+<div class="overview">
+  <div class="overview-card"><div class="num">32</div><div class="label">総ブロック数</div></div>
+  <div class="overview-card"><div class="num">10</div><div class="label">用件メニュー</div></div>
+  <div class="overview-card"><div class="num">6</div><div class="label">サブフロー</div></div>
+  <div class="overview-card"><div class="num">4</div><div class="label">分岐ブロック</div></div>
+  <div class="overview-card"><div class="num">11</div><div class="label">終話パターン</div></div>
+</div>
+
+<div class="tree-section">
+  <h3 style="margin-bottom:0.8rem;color:var(--gray-700);">通話の全体フロー（樹形図）</h3>
+  <div class="vtree"><div class="vtree-node t-opening">冒頭</div><div class="vtree-arrow">↓</div><div class="vtree-node t-announcement">冒頭_アナウンス</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">用件確認</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">歯科口腔外科</div><div class="vtree-node t-termination">END_歯科口腔外科</div></div><div class="vtree-branch"><div class="vtree-branch-label">健康管理センター</div><div class="vtree-node t-termination">END_健康管理センター</div></div><div class="vtree-branch"><div class="vtree-branch-label">インフルエンザワクチン</div><div class="vtree-node t-termination">END_インフルエンザワクチン</div></div><div class="vtree-branch"><div class="vtree-branch-label">コロナウイルスワクチン</div><div class="vtree-node t-termination">END_コロナワクチン</div></div><div class="vtree-branch"><div class="vtree-branch-label">対応外診療科</div><div class="vtree-node t-termination">END_対応外診療科案内</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約</div><div class="vtree"><div class="vtree-node t-hearing">受診歴確認</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規</div><div class="vtree"><div class="vtree-node t-hearing">紹介状確認</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">なし</div><div class="vtree-node t-announcement">選定療養費案内</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div></div></div><div class="vtree-merge">↓ 合流</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">診療科</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">用件別分岐</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-hearing">予約日_変更</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日_変更</div><div class="vtree-arrow">↓</div><div class="vtree-node t-announcement">予約希望日復唱_変更</div><div class="vtree-arrow">↓</div><div class="vtree-node t-script">当日予約判定_変更</div></div><div class="vtree-branch"><div class="vtree-branch-label">キャンセル</div><div class="vtree-node t-hearing">予約日_キャンセル</div><div class="vtree-arrow">↓</div><div class="vtree-node t-script">当日予約判定_キャンセル</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-subflow">jump_氏名聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_生年月日聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_電話番号聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_RAG検索</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">終話分岐_電話種別</div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-hearing">診療科</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">用件別分岐</div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-hearing">診療科</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">用件別分岐</div></div><div class="vtree-branch"><div class="vtree-branch-label">キャンセル</div><div class="vtree-node t-hearing">診療科</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">用件別分岐</div></div><div class="vtree-branch"><div class="vtree-branch-label">確認</div><div class="vtree-node t-hearing">内容確認</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_RAG検索_確認</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_診察券番号聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_氏名聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_生年月日聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_電話番号聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_RAG検索</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">終話分岐_電話種別</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-hearing">内容確認</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_RAG検索_確認</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_診察券番号聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_氏名聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_生年月日聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_電話番号聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_RAG検索</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">終話分岐_電話種別</div></div></div></div>
+</div>
+
+<div style="background:white;border-radius:12px;padding:1rem 1.5rem;box-shadow:0 1px 3px rgba(0,0,0,0.08);margin:1.5rem 0;display:flex;flex-wrap:wrap;gap:1.5rem;align-items:center;">
+  <span style="font-weight:600;color:var(--gray-700);font-size:0.9rem;">処理方式の凡例:</span>
+  <span style="display:flex;align-items:center;gap:0.4rem;"><span class="badge badge-gray">音声認識のみ</span><span style="font-size:0.8rem;color:var(--gray-500);">患者の発話をそのまま記録</span></span>
+  <span style="display:flex;align-items:center;gap:0.4rem;"><span class="badge badge-purple">AI判定</span><span style="font-size:0.8rem;color:var(--gray-500);">AIが発話内容を分類・変換して分岐</span></span>
+</div>
+<div class="section">
+<div class="section-title">1. 着信～用件選択</div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F4DE;</span><span class="title">冒頭アナウンス</span><span class="badge badge-green">自動</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">AIが話す内容</div>お電話ありがとうございます。鎌ケ谷総合病院の、予約専用、AI電話です。</div>
+<div class="info-box">&#9888;&#65039; <strong>非通知の場合</strong>: 恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</div>
+<div class="info-box">&#x1F553; <strong>時間外の場合</strong>: お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</div>
+</div></div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F500;</span><span class="title">用件確認</span><span class="badge badge-orange">分岐</span><span class="badge badge-purple">AI判定</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">AIが話す内容</div>ご用件をお話しください。予約は1、変更は2、キャンセルは3、その他のお問い合わせは4を押してください。</div>
+<table class="branch-table">
+<tr><th>選択</th><th>遷移先</th></tr>
+<tr><td><strong>1</strong> または「歯科口腔外科」</td><td>&rarr; END_歯科口腔外科</td></tr>
+<tr><td><strong>2</strong> または「健康管理センター」</td><td>&rarr; END_健康管理センター</td></tr>
+<tr><td><strong>3</strong> または「インフルエンザワクチン」</td><td>&rarr; END_インフルエンザワクチン</td></tr>
+<tr><td><strong>4</strong> または「コロナウイルスワクチン」</td><td>&rarr; END_コロナワクチン</td></tr>
+<tr><td><strong>5</strong> または「対応外診療科」</td><td>&rarr; END_対応外診療科案内</td></tr>
+<tr><td><strong>6</strong> または「予約」</td><td>&rarr; 受診歴確認</td></tr>
+<tr><td><strong>7</strong> または「変更」</td><td>&rarr; 診療科</td></tr>
+<tr><td><strong>8</strong> または「キャンセル」</td><td>&rarr; 診療科</td></tr>
+<tr><td><strong>9</strong> または「確認」</td><td>&rarr; 内容確認</td></tr>
+<tr><td><strong>10</strong> または「default」</td><td>&rarr; 内容確認</td></tr>
+</table>
+<div class="error-box">&#x1F504; 聞き取れなかった場合: 最大<strong>2回</strong>再質問</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">2. 歯科口腔外科フロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">歯科口腔外科フロー</span><span class="badge badge-blue">0ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">3. 健康管理センターフロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">健康管理センターフロー</span><span class="badge badge-blue">0ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">4. インフルエンザワクチンフロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">インフルエンザワクチンフロー</span><span class="badge badge-blue">0ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">5. コロナウイルスワクチンフロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">コロナウイルスワクチンフロー</span><span class="badge badge-blue">0ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">6. 対応外診療科フロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">対応外診療科フロー</span><span class="badge badge-blue">0ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">7. 予約フロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">予約フロー</span><span class="badge badge-blue">1ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">受診歴確認 <span class="processing-tag"><span class="badge badge-purple">AI判定</span></span></div></li>
+<li data-num="2"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+<div class="speech"><div class="label">受診歴確認</div>当院でのご受診は初めてですか。初めての方は1、以前受診されたことがある方は2を押してください。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">8. 変更フロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">変更フロー</span><span class="badge badge-blue">1ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">診療科 <span class="processing-tag"><span class="badge badge-purple">AI判定</span></span></div></li>
+<li data-num="2"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+<div class="speech"><div class="label">診療科</div>受診を希望される診療科をお話しください。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">9. キャンセルフロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">キャンセルフロー</span><span class="badge badge-blue">1ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">診療科 <span class="processing-tag"><span class="badge badge-purple">AI判定</span></span></div></li>
+<li data-num="2"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+<div class="speech"><div class="label">診療科</div>受診を希望される診療科をお話しください。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">10. 確認フロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">確認フロー</span><span class="badge badge-blue">1ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">内容確認 <span class="processing-tag"><span class="badge badge-gray">音声認識のみ</span></span></div></li>
+<li data-num="2"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+<div class="speech"><div class="label">内容確認</div>ご確認内容についてお伺いします。次回の予約日時を教えてほしい、など、内容を簡潔にお話しください。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">11. defaultフロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">defaultフロー</span><span class="badge badge-blue">1ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">内容確認 <span class="processing-tag"><span class="badge badge-gray">音声認識のみ</span></span></div></li>
+<li data-num="2"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+<div class="speech"><div class="label">内容確認</div>ご確認内容についてお伺いします。次回の予約日時を教えてほしい、など、内容を簡潔にお話しください。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">12. 個人情報聴取（共通サブフロー）</div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F464;</span><span class="title">聴取する項目</span><span class="badge badge-blue">5項目</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th>順序</th><th>項目</th><th>入力方法</th></tr>
+<tr><td>1</td><td><strong>氏名聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>2</td><td><strong>生年月日聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>3</td><td><strong>電話番号聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>4</td><td><strong>診察券番号聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>5</td><td><strong>RAG検索</strong></td><td>音声 / プッシュ</td></tr>
+</table>
+<div class="info-box">&#x1F4F1; <strong>携帯電話からの着信の場合</strong>: 電話番号は着信番号を復唱確認</div>
+<div class="error-box">&#x1F504; 各項目とも聞き取れなかった場合は最大<strong>2回</strong>再質問</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">13. ブロック構成（技術仕様）</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F9E9;</span><span class="title">全ブロック一覧（32ブロック）</span><span class="badge badge-blue">32件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th style="width:5%">#</th><th style="width:25%">ブロック名</th><th style="width:15%">タイプ</th><th style="width:25%">接続先</th><th style="width:30%">詳細</th></tr>
+<tr><td>1</td><td>&#x1F3E0; <strong>冒頭</strong></td><td><span class="badge badge-green">冒頭</span></td><td style="font-size:0.8rem">冒頭_アナウンス</td><td style="font-size:0.8rem">営業時間チェックあり</td></tr>
+<tr><td>2</td><td>&#x1F50A; <strong>冒頭_アナウンス</strong></td><td><span class="badge badge-blue">発話</span></td><td style="font-size:0.8rem">用件確認</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>3</td><td>&#x1F3A4; <strong>用件確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">END_歯科口腔外科 / END_健康管理センター / END_インフルエンザワクチン / END_コロナワクチン / END_対応外診療科案内 / 受診歴確認 / 診療科 / 診療科 / 内容確認 / 内容確認</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>4</td><td>&#x1F3A4; <strong>受診歴確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">紹介状確認 / 診療科</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>5</td><td>&#x1F3A4; <strong>紹介状確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">選定療養費案内 / 診療科</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>6</td><td>&#x1F50A; <strong>選定療養費案内</strong></td><td><span class="badge badge-blue">発話</span></td><td style="font-size:0.8rem">診療科</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>7</td><td>&#x1F3A4; <strong>診療科</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">用件別分岐</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>8</td><td>&#x1F500; <strong>用件別分岐</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">予約日_変更 / 予約日_キャンセル / jump_氏名聴取</td><td style="font-size:0.8rem">ref: classification</td></tr>
+<tr><td>9</td><td>&#x1F3A4; <strong>予約日_変更</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">予約希望日_変更</td><td style="font-size:0.8rem">format: datetime</td></tr>
+<tr><td>10</td><td>&#x1F3A4; <strong>予約希望日_変更</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">予約希望日復唱_変更</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>11</td><td>&#x1F50A; <strong>予約希望日復唱_変更</strong></td><td><span class="badge badge-blue">発話</span></td><td style="font-size:0.8rem">当日予約判定_変更</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>12</td><td>&#x2699; <strong>当日予約判定_変更</strong></td><td><span class="badge badge-orange">スクリプト</span></td><td style="font-size:0.8rem">END_当日予約案内 / 理由_変更</td><td style="font-size:0.8rem">ref: OpenAI_予約日_変更<br>template: custom</td></tr>
+<tr><td>13</td><td>&#x1F3A4; <strong>理由_変更</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">jump_診察券番号聴取</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>14</td><td>&#x1F3A4; <strong>予約日_キャンセル</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">当日予約判定_キャンセル</td><td style="font-size:0.8rem">format: datetime</td></tr>
+<tr><td>15</td><td>&#x2699; <strong>当日予約判定_キャンセル</strong></td><td><span class="badge badge-orange">スクリプト</span></td><td style="font-size:0.8rem">END_当日予約案内 / 理由_キャンセル</td><td style="font-size:0.8rem">ref: OpenAI_予約日_キャンセル<br>template: custom</td></tr>
+<tr><td>16</td><td>&#x1F3A4; <strong>理由_キャンセル</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">jump_診察券番号聴取</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>17</td><td>&#x1F3A4; <strong>内容確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">jump_RAG検索_確認</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>18</td><td>&#x1F517; <strong>jump_RAG検索_確認</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">jump_診察券番号聴取</td><td style="font-size:0.8rem">flow: 鎌ケ谷総合病院$RAG検索_20260416</td></tr>
+<tr><td>19</td><td>&#x1F517; <strong>jump_診察券番号聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">jump_氏名聴取</td><td style="font-size:0.8rem">flow: 鎌ケ谷総合病院$診察券番号聴取_20260416</td></tr>
+<tr><td>20</td><td>&#x1F517; <strong>jump_氏名聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">jump_生年月日聴取</td><td style="font-size:0.8rem">flow: 鎌ケ谷総合病院$氏名聴取_20260416</td></tr>
+<tr><td>21</td><td>&#x1F517; <strong>jump_生年月日聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">jump_電話番号聴取</td><td style="font-size:0.8rem">flow: 鎌ケ谷総合病院$生年月日聴取_20260416</td></tr>
+<tr><td>22</td><td>&#x1F517; <strong>jump_電話番号聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">jump_RAG検索</td><td style="font-size:0.8rem">flow: 鎌ケ谷総合病院$電話番号聴取_20260416</td></tr>
+<tr><td>23</td><td>&#x1F517; <strong>jump_RAG検索</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">終話分岐_電話種別</td><td style="font-size:0.8rem">flow: 鎌ケ谷総合病院$RAG検索_20260416</td></tr>
+<tr><td>24</td><td>&#x1F500; <strong>終話分岐_電話種別</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">END_通常_携帯 / END_通常_固定</td><td style="font-size:0.8rem">ref: phonetype</td></tr>
+<tr><td>25</td><td>&#x1F6D1; <strong>END_通常_携帯</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_通常_携帯</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>26</td><td>&#x1F6D1; <strong>END_通常_固定</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_通常_固定</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>27</td><td>&#x1F6D1; <strong>END_歯科口腔外科</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_歯科口腔外科</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>28</td><td>&#x1F6D1; <strong>END_健康管理センター</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_健康管理センター</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>29</td><td>&#x1F6D1; <strong>END_インフルエンザワクチン</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_インフルエンザワクチン</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>30</td><td>&#x1F6D1; <strong>END_コロナワクチン</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_コロナワクチン</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>31</td><td>&#x1F6D1; <strong>END_対応外診療科案内</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_対応外診療科案内</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>32</td><td>&#x1F6D1; <strong>END_当日予約案内</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_当日予約案内</td><td style="font-size:0.8rem">—</td></tr>
+</table>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">14. エラー・例外時の挙動</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x26A0;&#xFE0F;</span><span class="title">エラー時の対応一覧</span><span class="badge badge-red">重要</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th>状況</th><th>対応</th></tr>
+<tr><td>非通知着信</td><td>恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td>受付時間外</td><td>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td>リトライ上限到達</td><td>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td>全聴取完了 かつ phonetype=携帯</td><td>お申し込みを受付いたしました。予約はまだ確定しておりません。担当者より3日以内に、お電話またはショートメッセージで必ずご連絡いたします。お電話ありがとうございま</td></tr>
+<tr><td>全聴取完了 かつ phonetype=固定/その他</td><td>お申し込みを受付いたしました。予約はまだ確定しておりません。担当者より3日以内に、お電話にて必ずご連絡いたします。お電話ありがとうございました。</td></tr>
+<tr><td>用件確認で歯科口腔外科を検出</td><td>歯科口腔外科のご予約につきましては歯科口腔外科直通番号へおかけ直しください。受付時間は、日曜・祝日を除く月曜日から金曜日は9時から17時、土曜日は9時から12時</td></tr>
+<tr><td>用件確認で健康管理センターを検出</td><td>健康管理センターのご予約につきましては健診センター直通番号へおかけ直しください。受付時間は、日曜・祝日を除く月曜日から土曜日の13時から16時となっております。</td></tr>
+<tr><td>用件確認でインフルエンザワクチンを検出</td><td>インフルエンザワクチンのご予約につきましては健診センター直通番号へおかけ直しください。受付時間は、日曜・祝日を除く月曜日から土曜日の13時から16時となっており</td></tr>
+<tr><td>用件確認でコロナウイルスワクチンを検出</td><td>コロナワクチンの予約受付は終了いたしました。お電話ありがとうございました。</td></tr>
+<tr><td>用件確認で対応外診療科を検出</td><td>AI電話では対応していない診療科のため代表電話へおかけ直しください。受付時間は、月曜日から金曜日は9時から17時、土・日・祝日は9時から12時となっております。</td></tr>
+<tr><td>予約日が当日と判定（変更/キャンセルルート）</td><td>申し訳ございません。本日の予約に関するご相談は、代表電話へおかけ直しください。受付時間は、月曜日から金曜日は9時から17時、土・日・祝日は9時から12時となって</td></tr>
+</table>
+<div class="speech"><div class="label">聞き取り失敗時の切断アナウンス</div>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">15. 終話パターン一覧</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F6AA;</span><span class="title">全終話パターンの発話テキスト</span><span class="badge badge-red">11件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">END_非通知</div>恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_時間外</div>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_聴取失敗</div>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_通常_携帯</div>お申し込みを受付いたしました。予約はまだ確定しておりません。担当者より3日以内に、お電話またはショートメッセージで必ずご連絡いたします。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_通常_固定</div>お申し込みを受付いたしました。予約はまだ確定しておりません。担当者より3日以内に、お電話にて必ずご連絡いたします。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_歯科口腔外科</div>歯科口腔外科のご予約につきましては歯科口腔外科直通番号へおかけ直しください。受付時間は、日曜・祝日を除く月曜日から金曜日は9時から17時、土曜日は9時から12時となっております。電話番号は、047-498-8721 です。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_健康管理センター</div>健康管理センターのご予約につきましては健診センター直通番号へおかけ直しください。受付時間は、日曜・祝日を除く月曜日から土曜日の13時から16時となっております。電話番号は、047-498-8125 です。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_インフルエンザワクチン</div>インフルエンザワクチンのご予約につきましては健診センター直通番号へおかけ直しください。受付時間は、日曜・祝日を除く月曜日から土曜日の13時から16時となっております。電話番号は、047-498-8125 です。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_コロナワクチン</div>コロナワクチンの予約受付は終了いたしました。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_対応外診療科案内</div>AI電話では対応していない診療科のため代表電話へおかけ直しください。受付時間は、月曜日から金曜日は9時から17時、土・日・祝日は9時から12時となっております。電話番号は、047-498-8111 です。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_当日予約案内</div>申し訳ございません。本日の予約に関するご相談は、代表電話へおかけ直しください。受付時間は、月曜日から金曜日は9時から17時、土・日・祝日は9時から12時となっております。電話番号は、047-498-8111 です。お電話ありがとうございました。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">16. 発話テキスト全文一覧</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F4DD;</span><span class="title">全発話テキスト（24件）</span><span class="badge badge-blue">24件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th style="width:30%">ステップ名</th><th>発話テキスト</th></tr>
+<tr><td><strong>END_非通知</strong></td><td>恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_時間外</strong></td><td>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>冒頭_アナウンス</strong></td><td>お電話ありがとうございます。鎌ケ谷総合病院の、予約専用、AI電話です。</td></tr>
+<tr><td><strong>用件確認</strong></td><td>ご用件をお話しください。予約は1、変更は2、キャンセルは3、その他のお問い合わせは4を押してください。</td></tr>
+<tr><td><strong>受診歴確認</strong></td><td>当院でのご受診は初めてですか。初めての方は1、以前受診されたことがある方は2を押してください。</td></tr>
+<tr><td><strong>紹介状確認</strong></td><td>初診のご予約ですね。他の医療機関からの紹介状はお持ちですか。お持ちの方は1、お持ちでない方は2を押してください。</td></tr>
+<tr><td><strong>選定療養費案内</strong></td><td>他の医療機関からの紹介状をお持ちでない患者さんにつきましては、通常の診療費とは別に、初診時選定療養費として、2200円を全額自己負担いただいております。何卒ご了承いただきますよう、お願い申し上げます。</td></tr>
+<tr><td><strong>診療科</strong></td><td>受診を希望される診療科をお話しください。</td></tr>
+<tr><td><strong>予約日_変更</strong></td><td>次に、予約票に記載されている予約日を、5月1日のように日付でお話しください。</td></tr>
+<tr><td><strong>予約希望日_変更</strong></td><td>次に、予約希望日をお伺いいたします。ご都合の良い日付や曜日をお話しください。</td></tr>
+<tr><td><strong>予約希望日復唱_変更</strong></td><td>承りました。日曜・祝日は休診の診療科もございます。こちらのお電話では予約は確定しておりませんので、担当者からの折返し連絡をお待ちください。</td></tr>
+<tr><td><strong>予約日_キャンセル</strong></td><td>次に、予約票に記載されている予約日を、5月1日のように日付でお話しください。</td></tr>
+<tr><td><strong>理由_変更</strong></td><td>差し支えなければご予約変更の理由をお話しください。</td></tr>
+<tr><td><strong>理由_キャンセル</strong></td><td>差し支えなければご予約キャンセルの理由をお話しください。</td></tr>
+<tr><td><strong>内容確認</strong></td><td>ご確認内容についてお伺いします。次回の予約日時を教えてほしい、など、内容を簡潔にお話しください。</td></tr>
+<tr><td><strong>END_聴取失敗</strong></td><td>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_通常_携帯</strong></td><td>お申し込みを受付いたしました。予約はまだ確定しておりません。担当者より3日以内に、お電話またはショートメッセージで必ずご連絡いたします。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_通常_固定</strong></td><td>お申し込みを受付いたしました。予約はまだ確定しておりません。担当者より3日以内に、お電話にて必ずご連絡いたします。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_歯科口腔外科</strong></td><td>歯科口腔外科のご予約につきましては歯科口腔外科直通番号へおかけ直しください。受付時間は、日曜・祝日を除く月曜日から金曜日は9時から17時、土曜日は9時から12時となっております。電話番号は、047-498-8721 です。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_健康管理センター</strong></td><td>健康管理センターのご予約につきましては健診センター直通番号へおかけ直しください。受付時間は、日曜・祝日を除く月曜日から土曜日の13時から16時となっております。電話番号は、047-498-8125 です。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_インフルエンザワクチン</strong></td><td>インフルエンザワクチンのご予約につきましては健診センター直通番号へおかけ直しください。受付時間は、日曜・祝日を除く月曜日から土曜日の13時から16時となっております。電話番号は、047-498-8125 です。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_コロナワクチン</strong></td><td>コロナワクチンの予約受付は終了いたしました。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_対応外診療科案内</strong></td><td>AI電話では対応していない診療科のため代表電話へおかけ直しください。受付時間は、月曜日から金曜日は9時から17時、土・日・祝日は9時から12時となっております。電話番号は、047-498-8111 です。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_当日予約案内</strong></td><td>申し訳ございません。本日の予約に関するご相談は、代表電話へおかけ直しください。受付時間は、月曜日から金曜日は9時から17時、土・日・祝日は9時から12時となっております。電話番号は、047-498-8111 です。お電話ありがとうございました。</td></tr>
+</table>
+</div></div>
+</div>
+
+</div>
+<div class="footer">自動生成: VoiceBot Flow Builder | 鎌ケ谷総合病院 | 2026年04月16日</div>
+<script>
+document.querySelectorAll('.block-header').forEach(function(el){
+  el.addEventListener('click', function(){});
+});
+</script>
+</body>
+</html>

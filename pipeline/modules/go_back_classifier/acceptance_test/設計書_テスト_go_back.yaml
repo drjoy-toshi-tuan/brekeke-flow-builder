@@ -1,0 +1,93 @@
+# Pattern 6 (テストフロー) — go_back_classifier (L0 戻る/繰り返し検知) 単体受入テスト
+#
+# 検証対象: docs/brekeke/script_templates/go_back_classifier.js（このモジュールの正本テンプレート）
+#   script_test_matrix が JS をそのまま読み込み、input_placeholder "{{INPUT_MODULE}}" を
+#   case ごとの <id>_in に置換するだけ（ロジックは 1 文字も変えない）。
+#   テンプレートの {{CONTEXT_FIELD}} は未解決のままだが、テストでは context モデルが無いため
+#   context 読みは失敗し getModuleResult(<id>_in) にフォールバックする（=入力注入値を読む）。
+#
+# 狙い: Python オラクル (test_oracle.py 24/24) と同一の 24 ケースを Brekeke 実機 (Nashorn/ES5.1) で
+#   単体実行し、オラクル↔実機のパリティを確証する。
+#
+# 実機確認: Brekeke ログを grep "[TEST FAIL]" して 0 件なら全 PASS。"[TEST DONE]" 到達で完走。
+# モジュール数: dispatch 1 + 24×5 + frame 4 = 125（1コール上限内）。
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$go_back"
+  flow_name: "テスト$go_back"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$go_back"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] go_back_classifier 単体受入テスト (24 ケース)");
+      $runner.getLogger().info("対象: docs/brekeke/script_templates/go_back_classifier.js / オラクル 24/24 PASS 済");
+      $runner.getLogger().info("grep [TEST FAIL] = 0 なら実機も全 PASS");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: matrix
+
+  - step: matrix
+    type: script_test_matrix
+    script_file: "../../../docs/brekeke/script_templates/go_back_classifier.js"
+    input_placeholder: "{{INPUT_MODULE}}"
+    final_next: ログ_終了
+    cases:
+      # --- 戻る（気が変わった・前工程へ戻す）---
+      - {id: gb01, input: "やっぱりキャンセルしたいです", expected: "戻る"}
+      - {id: gb02, input: "やっぱり変更したいです", expected: "戻る"}
+      - {id: gb03, input: "別の用件でお願いします", expected: "戻る"}
+      - {id: gb04, input: "最初からやり直したいです", expected: "戻る"}
+      - {id: gb05, input: "一からお願いします", expected: "戻る"}
+      - {id: gb06, input: "前に戻してください", expected: "戻る"}
+      - {id: gb07, input: "違う用件なんですけど", expected: "戻る"}
+      - {id: gb08, input: "取り消してください", expected: "戻る"}
+      - {id: gb09, input: "もう一回最初からお願いします", expected: "戻る"}
+      # --- 繰り返し（直前のTTSをもう一度）---
+      - {id: rp01, input: "もう一回言ってください", expected: "繰り返し"}
+      - {id: rp02, input: "もう一度お願いします", expected: "繰り返し"}
+      - {id: rp03, input: "聞こえなかったです", expected: "繰り返し"}
+      - {id: rp04, input: "なんて言いましたか", expected: "繰り返し"}
+      - {id: rp05, input: "もっかい言って", expected: "繰り返し"}
+      - {id: rp06, input: "聞き取れませんでした", expected: "繰り返し"}
+      # --- NONE（FAQ へ）---
+      - {id: nn01, input: "駐車場はありますか", expected: "NONE"}
+      - {id: nn02, input: "何時までやってますか", expected: "NONE"}
+      - {id: nn03, input: "内科でお願いします", expected: "NONE"}
+      - {id: nn04, input: "えっと", expected: "NONE"}
+      - {id: nn05, input: "", expected: "NONE"}
+      # 用件発話は NONE（"変更したい"/"キャンセルしたい"単独は用件語なので戻るにしない）
+      - {id: nn06, input: "予約を変更したいんですけど、6月20日の10時の予約です。", expected: "NONE"}
+      - {id: nn07, input: "予約をキャンセルしたいです。来週火曜の予約です。", expected: "NONE"}
+      - {id: nn08, input: "変更したいです", expected: "NONE"}
+      - {id: nn09, input: "キャンセルしたいです", expected: "NONE"}
+
+  - step: ログ_終了
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST DONE] go_back_classifier 単体受入テスト 24 ケース 完走");
+      $runner.getLogger().info("Brekeke ログを grep [TEST FAIL] で件数確認 (0 なら全 PASS)");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: 終了
+
+  - step: 終了
+    type: termination

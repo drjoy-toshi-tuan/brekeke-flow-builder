@@ -1,0 +1,1137 @@
+# 設計書 — カレス記念病院 診療
+# 生成元: tools/csv_to_yaml.py (raw_to_spec.py 出力から自動生成)
+# 生成日: 2026/07/16
+# ⚠️  TTS文言・business_hours・office_id は (要記入) 箇所を確認・修正してください
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "カレス記念病院"
+  scenario_name: "診療"
+  group_name: "カレス記念病院_診療_20260716"
+  flow_name: "カレス記念病院_診療_20260716$診療"
+  office_id: "6a44c5d815f52d0007140538"
+  phone_number: "TODO_要確認"
+  business_hours: "TODO_要確認"
+  flow_type: "1flow"
+  work_type: "new"
+  environment: "demo"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "1flow"
+  flows:
+    - name: "カレス記念病院_診療_20260716$診療"
+      role: "main"
+      description: "CSV 入口（csv_to_yaml.py）から自動生成"
+
+# --- セクション3: フローの目的 ---
+purpose: "(要記入) — カレス記念病院の診療フロー"
+
+# --- セクション4: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    output_format: text
+    next: 3診療日確認
+
+  - step: 3診療日確認
+    type: hearing
+    output_format: enum
+    save_to: acceptancePeriodConfirm
+    output_labels:
+      - "はい"
+      - "いいえ"
+    conditions:
+      - match: "はい"
+        next: 用件確認
+      - match: "いいえ"
+        next: END_代表案内
+      - match: "default"
+        next: END_代表案内
+    retry_failure: END_代表案内
+
+  - step: END_代表案内
+    type: termination
+    termination_ref: "END_代表案内"
+
+  - step: END_残薬不足案内
+    type: termination
+    termination_ref: "END_残薬不足案内"
+
+  - step: 用件確認
+    type: intent
+    engine: v2
+    output_format: enum
+    save_to: classification
+    stt_type: DTMF_AmiVoice  # TTSで「1番」「2番」...「ダイヤルプッシュでも入力いただけます」と案内しているため
+    options:
+      - number: 1
+        label: 予約
+        strong: true
+        keywords: [予約, よやく]
+      - number: 2
+        label: 変更
+        strong: true
+        keywords: [変更, へんこう, かえる, 変え]
+      - number: 3
+        label: キャンセル
+        strong: true
+        keywords: [キャンセル, 取り消し, とりけし]
+      - number: 4
+        label: その他お問い合わせ
+        strong: false
+        keywords: [その他お問い合わせ, お問い合わせ, 問い合わせ, といあわせ, 質問, 相談]
+    # 2026-07-17: menu_代表spec（他施設で49/49 oracle + 27/27実機PASS済みの実証済み語彙）を
+    # カレスの4ルート（予約/変更/キャンセル/その他お問い合わせ）に合わせて移植。
+    # 除外した代表spec要素（浜口さん確認済み・2026-07-17）:
+    #   - operator（オペレーター転送）: カレスに転送route無し → evidence自体を追加しない
+    #   - キャンセル否定（「キャンセルしないでください」等）: 専用route無し → NO_RESULT（リトライ）のまま
+    #   - inquiry_vague（曖昧な質問）: その他お問い合わせに丸めず、代表spec通りCLARIFY（聞き返し）に
+    intent_spec:
+      question_type: menu
+      clarify_margin: 1
+      numbers:
+        "1": 予約
+        "2": 変更
+        "3": キャンセル
+        "4": その他お問い合わせ
+      evidences:
+        - name: reservation
+          keywords: [予約, よやく, 予定だっ, お願いしてた, 入れてた]
+          negatable: true
+        - name: change_words
+          keywords: [変更, へんこう, 変え, かえ, 取り直し, とりなおし, ずらし, ずらす, ずらせ, リスケ, りすけ, 振り替え, ふりかえ, 振替, 組み直し, くみなおし, 繰り上げ, くりあげ, 先延ばし, さきのばし, 後ろ倒し, うしろだおし, 延ばす, のばす, 再設定, さいせってい, 再調整, さいちょうせい]
+          negatable: true
+        - name: change_words_extra
+          patterns:
+            - "(別|べつ|ほか|他|違|ちが)(の|う)?日(程)?"
+            - "日を(改|あらた|延|のば|また)"
+            - "スケジュール(を|の)?(組み直|見直|調整)"
+            - "予定(を|の)?(見直|繰り上|組み直)"
+            - "いつもの(日|ひ)"
+            - "(今週|こんしゅう|今日|きょう)(じゃ|で)なく"
+        - name: cannot_visit
+          patterns:
+            - "(つごう|都合)が?(つかな(い|く)|わる(い|く)|あわな(い|く)|悪く)"
+            - "いけな(い|く)|行けな(い|く)"
+            - "(行か|いか)なきゃ"
+            - "間に合わな"
+            - "(難し|むずかし)くな"
+            - "終わらな"
+            - "(出張|しゅっちょう)"
+            - "(電車|でんしゃ|バス|ばす).*(止まっ|遅れ)"
+            - "(会議|かいぎ).*(入っ|はい)"
+            - "(シフト|しふと).*(変わ|合わな)"
+            - "(お腹|おなか).*(痛|いた)"
+            - "ばたばた"
+            - "別件"
+            - "無理"
+            - "ぎりぎり"
+            - "(天気|てんき).*(悪|わる)"
+            - "(予定|よてい)が(変わ|かわ)"
+            - "勘違い"
+            - "(仕事|しごと).*(休め|やすめ)"
+            - "親戚"
+            - "合わなく|合わない"
+        - name: future_date
+          patterns: ["らいげつ|来月|らいしゅう|来週|べつのひ|別の日"]
+        - name: cancel_words
+          keywords: [キャンセル, 取り消し, とりけし, やめ, 取りやめ, とりやめ, 解除, かいじょ]
+          patterns: ["(なし|無し)にして", "白紙に戻"]
+          negatable: true
+        - name: inquiry_explicit
+          keywords: [質問, しつもん, 問い合わせ, といあわせ, 確認, かくにん, 教えて, おしえて, 相談, そうだん, 聞きたい, ききたい, 伺い, うかがい, 知りたい, しりたい, よんばん, 待ち時間, まちじかん, いくら, 飛び込み, とびこみ, 薬, くすり, れんとげん, おうしん, 往診, ふぁっくす]
+          patterns:
+            - "(お聞き|おきき)(したい|してもいい)"
+            - "(分から|わから)(ない|なくて)"
+            - "(おしえてもらえますか|おしえていただけますか)"
+            - "(きいて|聞いて)(もいい|ていい|ください)"
+            - "どうすれば(いい|いいですか)"
+            - "(いた(い|かったり)|痛(い|かったり))"
+        - name: inquiry_vague
+          patterns:
+            - "ありますか"
+            - "いますか"
+            - "いけますか|行けますか"
+            - "どこですか|どこにありますか"
+            - "(ひつようですか|必要ですか)"
+            - "(みて|診て)(もらえますか|いただけますか|もらえる)"
+            - "(あいて|空いて)(いますか|ますか)"
+            - "(大丈夫|だいじょうぶ)ですか"
+            - "いつ(ですか|でしょうか|わかりますか|できますか)"
+            - "使えますか"
+            - "かかりますか|かかっちゃいますか"
+            - "(いつから|なんじから|何時から|なんじまで|何時まで|いつまで)"
+            - "(こんで|混んで)(ますか|いますか)"
+            - "(なんにちまえ|何日前)"
+            - "(やってます|やっています)(か|かね)?"
+      events:
+        - name: ReservationCannotVisit
+          all: [reservation, cannot_visit]
+        - name: WantAnotherDate
+          all: [ReservationCannotVisit, future_date]
+      rules:
+        - intent: 変更
+          all: [WantAnotherDate]
+        - intent: 変更
+          all: [ReservationCannotVisit]
+        - intent: 変更
+          all: [reservation, change_words]
+        - intent: キャンセル
+          all: [ReservationCannotVisit, cancel_words]
+        - intent: キャンセル
+          all: [reservation, cancel_words]
+        - intent: 変更
+          all: [change_words]
+          none: [change_words_neg]
+        - intent: 変更
+          all: [change_words_extra]
+        - intent: 変更
+          all: [reservation, change_words_extra]
+        - intent: キャンセル
+          all: [cancel_words]
+          none: [cancel_words_neg, inquiry_explicit, inquiry_vague]
+        - intent: 予約
+          all: [reservation, inquiry_vague]
+          none: [cannot_visit, cancel_words, change_words, change_words_extra, inquiry_explicit]
+        - intent: 予約
+          all: [reservation]
+          none: [cannot_visit, cancel_words, change_words, change_words_extra, inquiry_explicit, inquiry_vague]
+        - intent: その他お問い合わせ
+          all: [inquiry_explicit]
+          none: [change_words, change_words_extra]
+        - intent: CLARIFY
+          all: [inquiry_vague]
+          none: [inquiry_explicit, change_words, change_words_extra]
+    next: 質問
+    retry_failure: END_代表案内
+
+  - step: 質問
+    type: free_text
+    output_format: text
+    save_to: otherInquiryCheck
+    next: 氏名
+    retry_failure: 氏名
+
+  - step: 氏名
+    type: patient_name
+    save_to: patientName
+    next: 生年月日
+
+  - step: 生年月日
+    type: dob
+    save_to: patientDateOfBirth
+    next: 連絡先番号確認
+
+  # phone slot は着信分類で携帯(ANI確認)/固定・その他(新規番号聴取)の両方を
+  # 内部で分岐するため、type: phone は1ブロックのみでよい（INC-260716-2:
+  # 携帯/固定を別ブロックにするとphone分岐一式が二重生成されるバグを修正）。
+  - step: 連絡先番号確認
+    type: phone
+    save_to: additionalPhoneNumber
+    next: 用件ルーター
+
+  # ============================================================
+  # 用件確認(classification)で保存した値により4ルートへ分岐
+  # ============================================================
+  - step: 用件ルーター
+    type: context_match_router
+    reference_module: "<%classification%>"  # 2026-07-16 実機受入CMR-201〜211で検証済みの直接参照形式（施設担当者確認）
+    conditions:
+      - match: "予約"
+        next: 受診歴確認
+      - match: "変更"
+        next: 診療科_変更キャンセル
+      - match: "キャンセル"
+        next: 診療科_変更キャンセル
+      - match: "default"
+        next: 問い合わせ内容
+
+  # ------------------------------------------------------------
+  # A) 予約ルート
+  # ------------------------------------------------------------
+  - step: 受診歴確認
+    type: hearing
+    output_format: enum
+    save_to: firstVisit
+    # 注: いいえ を先に評価する（はい の keywords「はじめて/初めて」が「はじめてではない/
+    # 初めてではない」の部分文字列に一致してしまう誤判定シャドーを避けるため。順序 = compound
+    # 判定の評価順そのもの。P6受入 cases.tsv 準拠。「そうです」は正規化でです語尾が剥がされ
+    # 「そう」になり keyword が発火しないため未使用（発火しないkeywordは付けない）。
+    choices:
+      - number: 2
+        label: "いいえ"
+        strong: true
+        keywords: [いいえ, はじめてではない, 初めてではない, 二回目, 2回目, 再診, 前にも, 通っている, 通っています]
+      - number: 1
+        label: "はい"
+        strong: true
+        keywords: [はい, はじめて, 初めて, 初診, 初めてです]
+      - number: 3
+        label: "わからない"
+        strong: true
+        keywords: [わからない, わかりません, 分からない, 分かりません, 不明]
+    no_result_default: "わからない"
+    conditions:
+      - match: "いいえ"
+        next: 診療科
+      - match: "default"
+        next: 選定療養費アナウンス_予約
+    retry_failure: END_代表案内
+
+  - step: 選定療養費アナウンス_予約
+    type: announcement
+    output_format: text
+    next: 診療科
+
+  - step: 診療科
+    type: clinical_department
+    output_format: enum
+    save_to: clinicalDepartment
+    departments:
+      - 総合内科
+      - 内科
+      - 循環器内科
+      - 心臓血管外科
+      - 消化器内科
+      - 形成外科
+      - 眼科
+      - 呼吸器内科
+      - 脳神経外科・リハビリテーション科
+      - 消化器外科
+      - 整形外科
+      - 泌尿器科
+      - 呼吸器外科
+      - 乳腺外科
+      - 麻酔科
+    next: 予約希望日
+    next_unknown: END_代表案内
+    retry_failure: 予約希望日
+
+  - step: 予約希望日
+    type: hearing
+    output_format: text
+    save_to: desiredDate
+    next: 終話_予約変更問合せ
+    retry_failure: 終話_予約変更問合せ
+
+  # ------------------------------------------------------------
+  # B) 変更 / C) キャンセル 共通ルート
+  # ------------------------------------------------------------
+  - step: 診療科_変更キャンセル
+    type: clinical_department
+    output_format: enum
+    save_to: clinicalDepartment
+    departments:
+      - 総合内科
+      - 内科
+      - 循環器内科
+      - 心臓血管外科
+      - 消化器内科
+      - 形成外科
+      - 眼科
+      - 呼吸器内科
+      - 脳神経外科・リハビリテーション科
+      - 消化器外科
+      - 整形外科
+      - 泌尿器科
+      - 呼吸器外科
+      - 乳腺外科
+      - 麻酔科
+    next: 主治医の先生_変更キャンセル
+    next_unknown: END_代表案内
+    retry_failure: 主治医の先生_変更キャンセル
+
+  - step: 主治医の先生_変更キャンセル
+    type: free_text
+    output_format: text
+    save_to: attendingDoctor
+    next: 予約日聴取
+    retry_failure: 予約日聴取
+
+  - step: 予約日聴取
+    type: hearing
+    output_format: datetime  # 認定 reservation_date_classifier で決定論処理（P7実機レビュー指摘: 従来 text のため無処理だった）
+    save_to: reservationDate
+    next: 理由ルーター
+    retry_failure: 理由ルーター
+
+  # B/C 分岐: 理由聴取の前で変更/キャンセルを分け、各ルート固定TTSで聴取する
+  # （設計原則 2026-07-16: 中間TTSの（変更/キャンセル）プレースホルダーは変数参照でなくルート分割で解消。
+  #   <%変数%> のTTS参照は終話のみ許可）
+  - step: 理由ルーター
+    type: context_match_router
+    reference_module: "<%classification%>"  # 2026-07-16 実機受入CMR-201〜211で検証済みの直接参照形式（施設担当者確認）
+    conditions:
+      - match: "キャンセル"
+        next: 理由_キャンセル
+      - match: "default"
+        next: 理由_変更
+
+  # 変更ルート: 理由聴取後そのまま終話①へ
+  - step: 理由_変更
+    type: hearing
+    output_format: text
+    save_to: reason
+    next: 終話_予約変更問合せ
+    retry_failure: 終話_予約変更問合せ
+
+  # キャンセルルート: 理由聴取後、薬処方確認へ
+  - step: 理由_キャンセル
+    type: hearing
+    output_format: text
+    save_to: reason
+    next: 薬処方確認_変更キャンセル
+    retry_failure: 薬処方確認_変更キャンセル
+
+  - step: 薬処方確認_変更キャンセル
+    type: hearing
+    output_format: enum
+    choices:
+      - number: 1
+        label: "飲んでいる"
+        strong: true
+        keywords: [飲んでいる, 飲んでます, のんでいる, はい]
+      - number: 2
+        label: "飲んでいない"
+        strong: true
+        keywords: [飲んでいない, 飲んでません, のんでいない, いいえ]
+    no_result_default: "飲んでいない"
+    conditions:
+      - match: "飲んでいる"
+        next: 残薬確認
+      - match: "default"
+        next: 終話_キャンセル問合せ
+    retry_failure: 終話_キャンセル問合せ
+
+  - step: 残薬確認
+    type: hearing
+    output_format: enum
+    choices:
+      - number: 1
+        label: "はい"
+        strong: true
+        keywords: [はい, あります, ある]
+      - number: 2
+        label: "いいえ"
+        strong: true
+        keywords: [いいえ, ありません, ない]
+    no_result_default: "いいえ"
+    conditions:
+      - match: "はい"
+        next: 終話_キャンセル問合せ
+      - match: "いいえ"
+        next: END_残薬不足案内
+      - match: "default"
+        next: END_残薬不足案内
+    retry_failure: END_残薬不足案内
+
+  # ------------------------------------------------------------
+  # D) その他お問い合わせルート
+  # ------------------------------------------------------------
+  - step: 問い合わせ内容
+    type: faq
+    method: openai
+    save_to: inquiryContent
+    retry_count: 2
+    conditions:
+      - match: ANSWER
+        next: 終話_キャンセル問合せ
+      - match: NO_RESULT
+        next: FAQ不一致アナウンス
+    retry_failure: END_聴取失敗
+
+  - step: FAQ不一致アナウンス
+    type: announcement
+    output_format: text
+    next: 終話_予約変更問合せ
+
+  - step: 終話_予約変更問合せ
+    type: termination
+    termination_ref: "終話_予約変更問合せ"
+
+  - step: 終話_キャンセル問合せ
+    type: termination
+    termination_ref: "終話_キャンセル問合せ"
+
+  - step: END_時間外
+    type: termination
+    termination_ref: END_時間外
+
+  - step: END_非通知
+    type: termination
+    termination_ref: END_非通知
+
+  - step: END_聴取失敗
+    type: termination
+    termination_ref: END_聴取失敗
+
+# --- セクション5: ステップ詳細 ---
+step_details:
+  - step_name: 冒頭
+    tts_announcement: ""
+    input_method: none
+    next_step: 冒頭_アナウンス
+    retry_failure: skip
+
+  - step_name: 冒頭_アナウンス
+    tts_announcement: "{tts_g:お電話ありがとうございます。 カレス記念病院の診療専用AI電話です。
+「プ」と音が鳴ったらお話しください。}"
+    input_method: none
+    next_step: 3診療日確認
+    retry_failure: skip
+
+  - step_name: 3診療日確認
+    tts_announcement: "{tts_g:こちらのお電話は、〇月〇日以降の受診を希望されるお問い合わせでしょうか？
+「はい、そうです」または「いいえ、違います」でお話しください。}"
+    input_method: voice_only
+    next_step: 用件確認
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、こちらのお電話は、〇月〇日以降の受診を希望されるお問い合わせでしょうか？
+「はい、そうです」または「いいえ、違います」でお話しください。}"
+    retry_failure: end_failure
+    save_to: acceptancePeriodConfirm
+
+  - step_name: END_代表案内
+    tts_announcement: "{tts_g:大変申し訳ございません。直近の診療に関するご用件はAI電話では承っておりません。
+恐れ入りますが、代表電話にお電話をお願いいたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+    input_method: none
+    retry_failure: skip
+
+  - step_name: END_残薬不足案内
+    tts_announcement: "{tts_g:大変申し訳ございません。お薬が足りない場合はAI電話では承っておりません。
+恐れ入りますが、代表電話にお電話をお願いいたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+    input_method: none
+    retry_failure: skip
+
+  - step_name: 用件確認
+    tts_announcement: "{tts_g:ご用件を次の４つのうちのいずれかでお話しください。
+「1番、予約」「2番、変更」「3番、キャンセル」「4番、その他お問い合わせ」
+ダイヤルプッシュでも入力いただけます。}"
+    input_method: dtmf_voice
+    next_step: 質問
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、ご用件を次の４つのうちのいずれかでお話しください。
+「1番、予約」「2番、変更」「3番、キャンセル」「4番、その他お問い合わせ」
+ダイヤルプッシュでも入力いただけます。}"
+    reconfirm: true
+    reconfirm_tts: "{tts_g:(要記入 — 復唱文言)}"
+    retry_failure: end_failure
+    save_to: classification
+
+  - step_name: 質問
+    tts_announcement: "{tts_g:そのほかに何かお問い合わせはありますか。ない場合は「ありません。」とお話しください。}"
+    input_method: voice_only
+    next_step: 氏名
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、そのほかに何かお問い合わせはありますか。ない場合は「ありません。」とお話しください。}"
+    retry_failure: skip
+    save_to: otherInquiryCheck
+
+  - step_name: 終話_予約変更問合せ
+    tts_announcement: "{tts_g:<%classification%>の申し込みを受付いたしました。
+3診療日以内に担当者から折り返し電話、もしくはショートメールにてご連絡いたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+    input_method: none
+    retry_failure: skip
+
+  - step_name: 終話_キャンセル問合せ
+    tts_announcement: "{tts_g:<%classification%>の申し込みを受付いたしました。
+確認事項がある場合のみ3診療日以内に担当者から折り返し電話、もしくはショートメールにてご連絡いたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+    input_method: none
+    retry_failure: skip
+
+  - step_name: 受診歴確認
+    tts_announcement: "{tts_g:ご希望される診療科での受診ははじめてですか？わからない場合は、「わからない。」とお話しください。}"
+    input_method: voice_only
+    next_step: 選定療養費アナウンス_予約
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、ご希望される診療科での受診ははじめてですか？わからない場合は、「わからない。」とお話しください。}"
+    retry_failure: end_failure
+    save_to: firstVisit
+
+  - step_name: 選定療養費アナウンス_予約
+    tts_announcement: "{tts_g:他の医療機関からの紹介状をお持ちでない患者様につきましては、
+通常の診療費とは別に、初診時選定療養費として7,700円を全額自己負担いただいております。
+予めご了承ください。}"
+    input_method: voice_only
+    next_step: 診療科
+    retry_count: 0
+    retry_failure: end_failure
+
+  - step_name: 診療科
+    tts_announcement: "{tts_g:受診を希望される診療科をお話しください。わからない場合は、「わからない。」とお話しください。}"
+    input_method: voice_only
+    next_step: 予約希望日
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、受診を希望される診療科をお話しください。わからない場合は、「わからない。」とお話しください。}"
+    retry_failure: skip
+    save_to: clinicalDepartment
+
+  - step_name: 予約希望日
+    tts_announcement: "{tts_g:ご予約ご希望日をお話しください。ない場合は「ありません。」とお話しください。}"
+    input_method: voice_only
+    next_step: 終話_予約変更問合せ
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、ご予約ご希望日をお話しください。ない場合は「ありません。」とお話しください。}"
+    retry_failure: skip
+    save_to: desiredDate
+
+  - step_name: 診療科_変更キャンセル
+    tts_announcement: "{tts_g:予約されている診療科をお話しください。わからない場合は、「わからない。」とお話しください。}"
+    input_method: voice_only
+    next_step: 主治医の先生_変更キャンセル
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、予約されている診療科をお話しください。わからない場合は、「わからない。」とお話しください。}"
+    retry_failure: skip
+    save_to: clinicalDepartment
+
+  - step_name: 主治医の先生_変更キャンセル
+    tts_announcement: "{tts_g:主治医の先生をお話しください。わからない場合は、「わからない。」とお話しください。}"
+    input_method: voice_only
+    next_step: 予約日聴取
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、主治医の先生をお話しください。わからない場合は、「わからない。」とお話しください。}"
+    retry_failure: skip
+    save_to: attendingDoctor
+
+  - step_name: 予約日聴取
+    tts_announcement: "{tts_g:現在のご予約日をお話しください。}"
+    input_method: dtmf_voice
+    next_step: 理由ルーター
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、現在のご予約日をお話しください。}"
+    retry_failure: skip
+    save_to: reservationDate
+
+  - step_name: 理由_変更
+    tts_announcement: "{tts_g:変更の理由をお話しください。}"
+    input_method: voice_only
+    next_step: 終話_予約変更問合せ
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、変更の理由をお話しください。}"
+    retry_failure: skip
+    save_to: reason
+
+  - step_name: 理由_キャンセル
+    tts_announcement: "{tts_g:キャンセルの理由をお話しください。}"
+    input_method: voice_only
+    next_step: 薬処方確認_変更キャンセル
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、キャンセルの理由をお話しください。}"
+    retry_failure: skip
+    save_to: reason
+
+  - step_name: 薬処方確認_変更キャンセル
+    tts_announcement: "{tts_g:病院からお薬を処方されている方は、「はい、飲んでいます」と、
+されていない方は「いいえ、飲んでいません」とお話しください。}"
+    input_method: voice_only
+    next_step: 残薬確認
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、病院からお薬を処方されている方は、「はい、飲んでいます」と、
+されていない方は「いいえ、飲んでいません」とお話しください。}"
+    retry_failure: skip
+    save_to: medicationTaking
+    no_result_default: "飲んでいない"
+
+  - step_name: 残薬確認
+    tts_announcement: "{tts_g:残薬について確認をいたします。
+残薬がある場合は「はい、あります」、無い場合は「いいえありません」とお話しください。}"
+    input_method: voice_only
+    next_step: 終話_キャンセル問合せ
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、残薬について確認をいたします。
+残薬がある場合は「はい、あります」、無い場合は「いいえありません」とお話しください。}"
+    retry_failure: skip
+    save_to: remainingDrugs
+    no_result_default: "いいえ"
+
+  - step_name: 問い合わせ内容
+    tts_announcement: "{tts_g:お問い合わせ内容をお話しください。}"
+    input_method: voice_only
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、お問い合わせ内容をお話しください。}"
+    retry_failure: skip
+    save_to: inquiryContent
+
+  - step_name: FAQ不一致アナウンス
+    tts_announcement: "{tts_g:(要記入 — FAQ不一致時の案内文言。sheet_faq.csv 整備後に確定)}"
+    input_method: none
+    next_step: 終話_予約変更問合せ
+    retry_failure: skip
+
+# --- セクション6: 終話パターン ---
+termination_patterns:
+  - name: END_代表案内
+    condition: 緊急/AI対応不可のため代表案内へ転送
+    tts_announcement: "{tts_g:大変申し訳ございません。直近の診療に関するご用件はAI電話では承っておりません。
+恐れ入りますが、代表電話にお電話をお願いいたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+    status: 2
+    sms_flag: "-2"
+    completion_flag_name: 完了フラグ_代表案内
+
+  - name: END_残薬不足案内
+    condition: 残薬確認「いいえ」（お薬が足りない）のため代表案内へ転送
+    tts_announcement: "{tts_g:大変申し訳ございません。お薬が足りない場合はAI電話では承っておりません。
+恐れ入りますが、代表電話にお電話をお願いいたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+    status: 2
+    sms_flag: "-2"
+    completion_flag_name: 完了フラグ_残薬不足案内
+
+  - name: 終話_予約変更問合せ
+    condition: 予約/変更/その他問い合わせ 受付完了
+    tts_announcement: "{tts_g:<%classification%>の申し込みを受付いたしました。
+3診療日以内に担当者から折り返し電話、もしくはショートメールにてご連絡いたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+    status: 1
+    sms_flag: 1
+    completion_flag_name: 完了フラグ_予約変更問合せ完了
+
+  - name: 終話_キャンセル問合せ
+    condition: キャンセル 受付完了
+    tts_announcement: "{tts_g:<%classification%>の申し込みを受付いたしました。
+確認事項がある場合のみ3診療日以内に担当者から折り返し電話、もしくはショートメールにてご連絡いたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+    status: 1
+    sms_flag: 1
+    completion_flag_name: 完了フラグ_キャンセル完了
+
+  - name: END_時間外
+    condition: 受付時間外
+    tts_announcement: "{tts_g:(要記入)}"
+    status: 6
+    sms_flag: "-2"
+    completion_flag_name: 完了フラグ_時間外
+
+  - name: END_非通知
+    condition: 非通知着信
+    tts_announcement: "{tts_g:恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。}"
+    status: 2
+    sms_flag: "-2"
+    completion_flag_name: 完了フラグ_非通知
+
+  - name: END_聴取失敗
+    condition: retry 上限到達
+    tts_announcement: "{tts_g:(要記入)}"
+    status: 2
+    sms_flag: "-2"
+    completion_flag_name: 完了フラグ_聴取失敗
+
+# --- セクション7: フロー図（自動生成テキスト）---
+flow_diagrams:
+  - name: "カレス記念病院_診療_20260716$診療"
+    diagram: |
+      [冒頭] opening -> 3診療日確認
+      [3診療日確認] hearing -> END_代表案内
+      [END_代表案内] termination
+      [用件確認] intent -> 質問
+      [質問] free_text -> 氏名
+      [氏名] patient_name -> 生年月日
+      [生年月日] dob -> 連絡先番号確認
+      [連絡先番号確認] phone -> 用件ルーター（以下は本文 scenario_flow 参照。この diagram は簡易表示のため注意）
+      [終話_予約変更問合せ] termination
+      [終話_キャンセル問合せ] termination
+      [リトライ時ガイダンス] announcement -> 通話切断ガイダンス（代表案内で終話）
+      [通話切断ガイダンス（代表案内で終話）] termination
+      [受診歴確認] hearing -> 選定療養費アナウンス_予約
+      [選定療養費アナウンス_予約] announcement -> 診療科
+      [診療科] clinical_department -> 予約希望日
+      [予約希望日] hearing -> 診療科_変更キャンセル
+      [診療科_変更キャンセル] clinical_department -> 主治医の先生_変更キャンセル
+      [主治医の先生_変更キャンセル] free_text -> 予約日聴取
+      [予約日聴取] hearing -> 理由ルーター
+      [理由ルーター] context_match_router -> 理由_変更 / 理由_キャンセル
+      [理由_変更] hearing -> 終話_予約変更問合せ
+      [理由_キャンセル] hearing -> 薬処方確認_変更キャンセル
+      [薬処方確認_変更キャンセル] hearing -> 残薬確認
+      [残薬確認] hearing -> 問い合わせ内容 / (いいえ) -> END_残薬不足案内
+      [問い合わせ内容] hearing -> END_通話完了
+      [END_通話完了] termination
+      [END_時間外] termination
+      [END_非通知] termination
+      [END_聴取失敗] termination
+
+# --- セクション8: コンテキストフィールド ---
+context_fields:
+  - context_name: "acceptancePeriodConfirm"
+    context_name_jp: "3診療日確認"
+    display_type: "TEXT"
+    description: "3診療日確認（CSV 入口由来・自動生成）"
+  - context_name: "classification"
+    context_name_jp: "用件確認"
+    display_type: "CLASSIFICATION"
+    description: "用件確認（CSV 入口由来・自動生成）"
+    range_values:
+      - value: "予約"
+        order: 1
+      - value: "変更"
+        order: 2
+      - value: "キャンセル"
+        order: 3
+      - value: "その他お問い合わせ"
+        order: 4
+  - context_name: "otherInquiryCheck"
+    context_name_jp: "質問"
+    display_type: "TEXT"
+    description: "質問（CSV 入口由来・自動生成）"
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    description: "氏名（CSV 入口由来・自動生成）"
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE"
+    description: "生年月日（CSV 入口由来・自動生成）"
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先番号確認"
+    display_type: "PHONE_NUMBER"
+    description: "連絡先番号確認（CSV 入口由来・自動生成）"
+  - context_name: "firstVisit"
+    context_name_jp: "受診歴確認"
+    display_type: "TEXT"
+    description: "受診歴確認（CSV 入口由来・自動生成）"
+    range_values:
+      - value: "はい"
+        order: 1
+      - value: "いいえ"
+        order: 2
+      - value: "わからない"
+        order: 3
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    description: "診療科（CSV 入口由来・自動生成）"
+    range_values:
+      - value: "総合内科"
+        order: 1
+      - value: "内科"
+        order: 2
+      - value: "循環器内科"
+        order: 3
+      - value: "心臓血管外科"
+        order: 4
+      - value: "消化器内科"
+        order: 5
+      - value: "形成外科"
+        order: 6
+      - value: "眼科"
+        order: 7
+      - value: "呼吸器内科"
+        order: 8
+      - value: "脳神経外科・リハビリテーション科"
+        order: 9
+      - value: "消化器外科"
+        order: 10
+      - value: "整形外科"
+        order: 11
+      - value: "泌尿器科"
+        order: 12
+      - value: "呼吸器外科"
+        order: 13
+      - value: "乳腺外科"
+        order: 14
+      - value: "麻酔科"
+        order: 15
+      - value: "登録なし"
+        order: 16
+  - context_name: "desiredDate"
+    context_name_jp: "予約希望日"
+    display_type: "DATE"
+    description: "予約希望日（CSV 入口由来・自動生成）"
+  - context_name: "attendingDoctor"
+    context_name_jp: "主治医の先生_変更キャンセル"
+    display_type: "TEXT"
+    description: "主治医の先生_変更キャンセル（CSV 入口由来・自動生成）"
+  - context_name: "reservationDate"
+    context_name_jp: "予約日聴取"
+    display_type: "DATE"
+    description: "予約日聴取（CSV 入口由来・自動生成）"
+  - context_name: "reason"
+    context_name_jp: "理由"
+    display_type: "TEXT"
+    description: "理由（CSV 入口由来・自動生成）"
+  - context_name: "medicationTaking"
+    context_name_jp: "薬処方確認_変更キャンセル"
+    display_type: "TEXT"
+    description: "薬処方確認_変更キャンセル（CSV 入口由来・自動生成）"
+    range_values:
+      - value: "飲んでいる"
+        order: 1
+      - value: "飲んでいない"
+        order: 2
+  - context_name: "remainingDrugs"
+    context_name_jp: "残薬確認"
+    display_type: "TEXT"
+    description: "残薬確認（CSV 入口由来・自動生成）"
+    range_values:
+      - value: "はい"
+        order: 1
+      - value: "いいえ"
+        order: 2
+  - context_name: "inquiryContent"
+    context_name_jp: "問い合わせ内容"
+    display_type: "TEXT"
+    description: "問い合わせ内容（CSV 入口由来・自動生成）"
+
+# --- セクション9: 聴取項目 ---
+hearing_items:
+  - name: "3診療日確認"
+    echo_back: false
+    retry_count: 2
+    save_to: "acceptancePeriodConfirm"
+    output_labels:
+      - "はい"
+      - "いいえ"
+  - name: "用件確認"
+    echo_back: true
+    retry_count: 2
+  - name: "質問"
+    echo_back: false
+    retry_count: 2
+    retry_failure: skip
+  - name: "氏名"
+    echo_back: false
+    retry_count: 2
+  - name: "生年月日"
+    echo_back: false
+    retry_count: 2
+  - name: "連絡先番号確認"
+    echo_back: true
+    retry_count: 2
+    save_to: "additionalPhoneNumber"
+  - name: "受診歴確認"
+    echo_back: false
+    retry_count: 2
+    save_to: "firstVisit"
+    output_labels:
+      - "はい"
+      - "いいえ"
+      - "わからない"
+  - name: "診療科"
+    echo_back: false
+    retry_count: 2
+    retry_failure: skip
+  - name: "予約希望日"
+    echo_back: false
+    retry_count: 2
+    retry_failure: skip
+    save_to: "desiredDate"
+  - name: "診療科_変更キャンセル"
+    echo_back: false
+    retry_count: 2
+    retry_failure: skip
+  - name: "主治医の先生_変更キャンセル"
+    echo_back: false
+    retry_count: 2
+    retry_failure: skip
+  - name: "予約日聴取"
+    echo_back: false
+    retry_count: 2
+    retry_failure: skip
+    save_to: "reservationDate"
+  - name: "理由_変更"
+    echo_back: false
+    retry_count: 2
+    retry_failure: skip
+    save_to: "reason"
+  - name: "理由_キャンセル"
+    echo_back: false
+    retry_count: 2
+    retry_failure: skip
+    save_to: "reason"
+  - name: "薬処方確認_変更キャンセル"
+    echo_back: false
+    retry_count: 2
+    retry_failure: skip
+    save_to: "medicationTaking"
+  - name: "残薬確認"
+    echo_back: false
+    retry_count: 2
+    retry_failure: skip
+    save_to: "remainingDrugs"
+  - name: "問い合わせ内容"
+    echo_back: false
+    retry_count: 2
+    retry_failure: skip
+
+# --- セクション10: TTS モジュール ---
+tts_modules:
+  - module_name: "冒頭"
+    announcement: "{tts_g:お電話ありがとうございます。 カレス記念病院の診療専用AI電話です。
+「プ」と音が鳴ったらお話しください。}"
+  - module_name: "3診療日確認"
+    announcement: "{tts_g:こちらのお電話は、〇月〇日以降の受診を希望されるお問い合わせでしょうか？
+「はい、そうです」または「いいえ、違います」でお話しください。}"
+  - module_name: "END_代表案内"
+    announcement: "{tts_g:大変申し訳ございません。直近の診療に関するご用件はAI電話では承っておりません。
+恐れ入りますが、代表電話にお電話をお願いいたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+  - module_name: "END_残薬不足案内"
+    announcement: "{tts_g:大変申し訳ございません。お薬が足りない場合はAI電話では承っておりません。
+恐れ入りますが、代表電話にお電話をお願いいたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+  - module_name: "用件確認"
+    announcement: "{tts_g:ご用件を次の４つのうちのいずれかでお話しください。
+「1番、予約」「2番、変更」「3番、キャンセル」「4番、その他お問い合わせ」
+ダイヤルプッシュでも入力いただけます。}"
+  - module_name: "質問"
+    announcement: "{tts_g:そのほかに何かお問い合わせはありますか。ない場合は「ありません。」とお話しください。}"
+  - module_name: "氏名"
+    announcement: "{tts_g:患者さんのお名前を「名前は山田太郎です。」のようにフルネームでお話しください。}"
+  - module_name: "生年月日"
+    announcement: "{tts_g:生年月日をお話しください。西暦の場合ダイヤルプッシュでも入力いただけます。}"
+  - module_name: "復唱_連絡先番号確認_ANI"
+    announcement: "{tts_g:ご連絡先は今おかけいただいている「××× ‐ ××× ‐ ×××」でよろしいですか？
+「はい、そうです」、または、「いいえ、ちがいます」、でお話しください。}"
+  - module_name: "聴取_連絡先番号確認_連絡先"
+    announcement: "{tts_g:ご連絡先のお電話番号をお伺いします。携帯番号または0から始まる市外局番でお話しください。
+ダイヤルプッシュでも入力いただけます。
+入力が終わりましたら、最後に「こめじるし」を押してください。}"
+  - module_name: "終話_予約変更問合せ"
+    announcement: "{tts_g:<%classification%>の申し込みを受付いたしました。
+3診療日以内に担当者から折り返し電話、もしくはショートメールにてご連絡いたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+  - module_name: "終話_キャンセル問合せ"
+    announcement: "{tts_g:<%classification%>の申し込みを受付いたしました。
+確認事項がある場合のみ3診療日以内に担当者から折り返し電話、もしくはショートメールにてご連絡いたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+  - module_name: "受診歴確認"
+    announcement: "{tts_g:ご希望される診療科での受診ははじめてですか？わからない場合は、「わからない。」とお話しください。}"
+  - module_name: "選定療養費アナウンス_予約"
+    announcement: "{tts_g:他の医療機関からの紹介状をお持ちでない患者様につきましては、
+通常の診療費とは別に、初診時選定療養費として7,700円を全額自己負担いただいております。
+予めご了承ください。}"
+  - module_name: "診療科"
+    announcement: "{tts_g:受診を希望される診療科をお話しください。わからない場合は、「わからない。」とお話しください。}"
+  - module_name: "予約希望日"
+    announcement: "{tts_g:ご予約ご希望日をお話しください。ない場合は「ありません。」とお話しください。}"
+  - module_name: "診療科_変更キャンセル"
+    announcement: "{tts_g:予約されている診療科をお話しください。わからない場合は、「わからない。」とお話しください。}"
+  - module_name: "主治医の先生_変更キャンセル"
+    announcement: "{tts_g:主治医の先生をお話しください。わからない場合は、「わからない。」とお話しください。}"
+  - module_name: "予約日聴取"
+    announcement: "{tts_g:現在のご予約日をお話しください。}"
+  - module_name: "理由_変更"
+    announcement: "{tts_g:変更の理由をお話しください。}"
+  - module_name: "理由_キャンセル"
+    announcement: "{tts_g:キャンセルの理由をお話しください。}"
+  - module_name: "薬処方確認_変更キャンセル"
+    announcement: "{tts_g:病院からお薬を処方されている方は、「はい、飲んでいます」と、
+されていない方は「いいえ、飲んでいません」とお話しください。}"
+  - module_name: "残薬確認"
+    announcement: "{tts_g:残薬について確認をいたします。
+残薬がある場合は「はい、あります」、無い場合は「いいえありません」とお話しください。}"
+  - module_name: "問い合わせ内容"
+    announcement: "{tts_g:お問い合わせ内容をお話しください。}"
+
+# --- セクション11: AmiVoice 辞書（docs/specs/stt_dictionary_templates.json を項目ごとに割当。
+#     2026-07-16 施設担当者BIVRレビュー指摘の対応。tools/csv_to_yaml.py の自動推定ロジックに
+#     倣い手動反映（本ファイルは再生成すると手修正が失われるため csv_to_yaml.py 再実行はしない）---
+amivoice_dictionary:
+  - step_name: "3診療日確認"
+    use_template:
+      - "hearing_yesno_common"
+  - step_name: "用件確認"
+    use_template:
+      - "hearing_yoken_common"
+  - step_name: "氏名"
+    use_template:
+      - "hearing_name"
+  - step_name: "連絡先番号確認"
+    use_template:
+      - "hearing_phone_number"
+      - "hearing_unknown"
+  - step_name: "受診歴確認"
+    use_template:
+      - "hearing_yesno_common"
+  - step_name: "診療科"
+    use_template:
+      - "hearing_shinryoka_basic"
+  - step_name: "予約希望日"
+    use_template:
+      - "hearing_datetime"
+  - step_name: "診療科_変更キャンセル"
+    use_template:
+      - "hearing_shinryoka_basic"
+  - step_name: "予約日聴取"
+    use_template:
+      - "hearing_datetime"
+  - step_name: "薬処方確認_変更キャンセル"
+    use_template:
+      - "hearing_yesno_common"
+  - step_name: "残薬確認"
+    use_template:
+      - "hearing_yesno_common"
+
+# --- セクション12: 特記事項・確認項目 ---
+special_notes:
+  - "本設計書は CSV 入口（tools/csv_to_yaml.py）から自動生成。"
+  - "TODO_要確認 は facility 固有値＝壁打ちで確定（confirmation_items にアジェンダ化）。"
+
+confirmation_items:
+  - item: "office_id"
+    description: "施設の Dr.JOY オフィス ID。施設台帳で確認"
+    resolved: false
+  - item: "phone_number"
+    description: "このシナリオに割り当てる着信電話番号"
+    resolved: false
+  - item: "business_hours"
+    description: "受付時間（時間外判定に使用）"
+    resolved: false
+
+# --- セクション13: script_blocks（認定部品 spec データ・CSV 由来）---
+# ⚠️ spec 新規/変更時は P6 受入（part-certification-spec: engine既知・spec要受入）
+script_blocks:
+  - type: department
+    input_module: "診療科"
+    departments:
+      - 総合内科
+      - 内科
+      - 循環器内科
+      - 心臓血管外科
+      - 消化器内科
+      - 形成外科
+      - 眼科
+      - 呼吸器内科
+      - 脳神経外科・リハビリテーション科
+      - 消化器外科
+      - 整形外科
+      - 泌尿器科
+      - 呼吸器外科
+      - 乳腺外科
+      - 麻酔科
+    synonyms:
+      総合内科: [総合, 総内]
+      形成外科: [皮膚科, 皮膚]
+      眼科: [目]
+      脳神経外科・リハビリテーション科: [脳外, リハ, リハビリ, 脳神経, 脳外科]
+      消化器外科: [消化外科]
+      泌尿器科: [ウロ]
+      麻酔科: [ペイン]
+    readings:
+      総合内科: そうごうないか
+      内科: ないか
+      循環器内科: じゅんかんきないか
+      心臓血管外科: しんぞうけっかんげか
+      消化器内科: しょうかきないか
+      形成外科: けいせいげか
+      眼科: がんか
+      呼吸器内科: こきゅうきないか
+      脳神経外科・リハビリテーション科: のうしんけいげか
+      消化器外科: しょうかきげか
+      整形外科: せいけいげか
+      泌尿器科: ひにょうきか
+      呼吸器外科: こきゅうきげか
+      乳腺外科: にゅうせんげか
+      麻酔科: ますいか

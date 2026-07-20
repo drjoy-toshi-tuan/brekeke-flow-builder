@@ -1,0 +1,2105 @@
+# 設計書 — 信州大学医学部附属病院 病診連携
+# 生成元: @director エージェント
+# 生成日: 2026-05-01
+# 確認レポート: 確認レポート_信州大学医学部附属病院_病診連携_20260501.md
+# 元資料: commubo抽出/【042】信州大学医学部附属病院/【0038信州大学病院】病診連携1_M_本番/
+
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "信州大学医学部附属病院"
+  scenario_name: "病診連携"
+  group_name: "信州大学医学部附属病院"
+  flow_name: "信州大学医学部附属病院$病診連携"
+  target_facility: "信州大学医学部附属病院 地域医療連携支援室"
+  office_id: "TODO_要確認"
+  phone_number: "0263-37-3370"
+  business_hours: "祝日・年末年始を除く月〜金 8:30〜17:15（土日祝・年末年始休）"
+  flow_type: "subflow"
+  work_type: "gen1_migration"
+  environment: "prod"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "信州大学医学部附属病院$病診連携"
+      role: "main"
+      description: "医療機関からの病診連携受付フロー（FAX到着確認/情報提供依頼/入院・転院依頼/その他問合せ）"
+  subflows:
+    - name: "{group}$氏名聴取_{date}"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "PatientName サブフロー1枠を3ルート（情報提供依頼/入院転院依頼/その他問合せ）で共有して呼び出す。"
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  医療機関スタッフからの inbound 架電を受け、用件（FAX到着確認/情報提供依頼/入院・転院依頼/その他問合せ）を分類し、
+  各用件に応じた追加情報（紹介元医療機関名・担当者名・患者氏名・生年月日・診療科・依頼詳細・希望時期・医師間共有・医師名・返答期限・問合せ内容等）を聴取して
+  地域医療連携支援室へ取り次ぐ。受付時間外（土日祝・年末年始・平日17:15以降〜翌8:30）は時間外案内、聴取失敗時は代表番号案内（0263-37-3370）でクローズする。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "信州大学医学部附属病院$病診連携"
+    diagram: |
+      冒頭(wait)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → END_非通知 → 切断
+            └─ 通常   → 受付時間判定(acceptance_times)
+                          ├─ 時間外 → END_時間外 → 切断
+                          └─ 受付可 → 冒頭_アナウンス
+                                        → 施設名聴取(text + 復唱)
+                                        → 担当者名聴取(text)
+                                        → 用件確認(enum + DTMF1〜4 + 復唱)
+                                            ├─ FAX到着確認 → 用件詳細_FAX到着確認(enum + DTMF1〜4 + 復唱)
+                                            │       ├─ 診療報告/問い合わせ回答/これから受診の方の追加情報 → END_FAX到着確認
+                                            │       └─ その他 → FAX_内容確認(text) → END_FAX到着確認
+                                            ├─ 情報提供依頼 → 当日予約日_情報提供依頼(enum DTMF1/2)
+                                            │       → 情報提供_患者氏名(subflow) → 情報提供_生年月日(text)
+                                            │       → 情報提供_診療科(enum) → 用件詳細_情報提供依頼(enum + DTMF1〜3 + 復唱)
+                                            │            ├─ 治療の経過/MRIの実施可否 → 返答期限_情報提供依頼(text)
+                                            │            └─ その他 → 情報提供_内容確認(text) → 返答期限_情報提供依頼(text)
+                                            │       → END_情報提供依頼
+                                            ├─ 入院・転院依頼 → 当日予約日_入院転院(enum DTMF1/2)
+                                            │       → 入院転院_患者氏名(subflow) → 入院転院_生年月日(text)
+                                            │       → 入院転院_診療科(enum) → 希望時期_入院転院(text)
+                                            │       → 医師間共有(enum DTMF1/2) → 医師名_入院転院(text)
+                                            │       → その他問合せ_入院転院(text) → END_入院転院依頼
+                                            └─ その他問合せ → 用件詳細_問合せ(enum + DTMF1〜3 + 復唱)
+                                                    ├─ 紹介状の送信依頼/問い合わせの進捗確認 → 問合せ_患者氏名(subflow)
+                                                    │       → 問合せ_生年月日(text) → 問合せ_診療科(enum) → END_その他問合せ
+                                                    └─ その他の問合せ → 問合せ_その他内容(text) → END_その他問合せ
+
+      [異常系] 各 hearing のリトライ上限到達 → END_聴取失敗（代表案内 0263-37-3370 を 3 連呼）
+    notes: "Gen1 の API_DRJOY_CONTEXT_SETTINGS / API_DRJOY による『入電番号→施設名 自動取得』機能は本設計書では非採用。施設名・担当者名は毎回 hearing で聴取する。"
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # === 冒頭ブロック ===
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 施設名聴取
+
+  # === 共通: 施設名 + 担当者名 + 用件分岐 ===
+  - step: 施設名聴取
+    type: hearing
+    output_format: text
+    save_to: organizationName
+    echo_back: true
+    next: 担当者名聴取
+
+  - step: 担当者名聴取
+    type: hearing
+    output_format: text
+    save_to: staffName
+    next: 用件確認
+
+  - step: 用件確認
+    type: hearing
+    output_format: enum
+    save_to: classification
+    echo_back: true
+    conditions:
+      - match: "FAX到着確認"
+        next: 用件詳細_FAX到着確認
+      - match: "情報提供依頼"
+        next: 当日予約日_情報提供依頼
+      - match: "入院・転院依頼"
+        next: 当日予約日_入院転院
+      - match: "other"
+        next: 用件詳細_問合せ
+
+  # === FAX到着確認ルート ===
+  - step: 用件詳細_FAX到着確認
+    type: hearing
+    output_format: enum
+    save_to: subClassification
+    echo_back: true
+    conditions:
+      - match: "診療報告"
+        next: END_FAX到着確認
+      - match: "問い合わせ回答"
+        next: END_FAX到着確認
+      - match: "これから受診の方の追加情報"
+        next: END_FAX到着確認
+      - match: "other"
+        next: FAX_内容確認
+
+  - step: FAX_内容確認
+    type: hearing
+    output_format: text
+    save_to: otherInquiryContent
+    next: END_FAX到着確認
+
+  # === 情報提供依頼ルート ===
+  - step: 当日予約日_情報提供依頼
+    type: hearing
+    output_format: enum
+    save_to: sameDayConfirmation
+    conditions:
+      - match: "はい"
+        next: 情報提供_患者氏名
+      - match: "other"
+        next: 情報提供_患者氏名
+
+  - step: 情報提供_患者氏名
+    type: subflow
+    flowname: "{group}$氏名聴取_{date}"
+    next: 情報提供_生年月日
+
+  - step: 情報提供_生年月日
+    type: hearing
+    output_format: text
+    save_to: patientDateOfBirth
+    next: 情報提供_診療科
+
+  - step: 情報提供_診療科
+    type: hearing
+    output_format: enum
+    save_to: clinicalDepartment
+    no_result_default: "登録なし"
+    conditions:
+      - match: "other"
+        next: 用件詳細_情報提供依頼
+
+  - step: 用件詳細_情報提供依頼
+    type: hearing
+    output_format: enum
+    save_to: subClassification
+    echo_back: true
+    conditions:
+      - match: "治療の経過"
+        next: 返答期限_情報提供依頼
+      - match: "MRIの実施可否"
+        next: 返答期限_情報提供依頼
+      - match: "other"
+        next: 情報提供_内容確認
+
+  - step: 情報提供_内容確認
+    type: hearing
+    output_format: text
+    save_to: otherInquiryContent
+    next: 返答期限_情報提供依頼
+
+  - step: 返答期限_情報提供依頼
+    type: hearing
+    output_format: text
+    save_to: replyDeadline
+    next: END_情報提供依頼
+
+  # === 入院・転院依頼ルート ===
+  - step: 当日予約日_入院転院
+    type: hearing
+    output_format: enum
+    save_to: sameDayConfirmation
+    conditions:
+      - match: "はい"
+        next: 入院転院_患者氏名
+      - match: "other"
+        next: 入院転院_患者氏名
+
+  - step: 入院転院_患者氏名
+    type: subflow
+    flowname: "{group}$氏名聴取_{date}"
+    next: 入院転院_生年月日
+
+  - step: 入院転院_生年月日
+    type: hearing
+    output_format: text
+    save_to: patientDateOfBirth
+    next: 入院転院_診療科
+
+  - step: 入院転院_診療科
+    type: hearing
+    output_format: enum
+    save_to: clinicalDepartment
+    no_result_default: "登録なし"
+    conditions:
+      - match: "other"
+        next: 希望時期_入院転院
+
+  - step: 希望時期_入院転院
+    type: hearing
+    output_format: text
+    save_to: desiredTiming
+    next: 医師間共有
+
+  - step: 医師間共有
+    type: hearing
+    output_format: enum
+    save_to: doctorSharing
+    conditions:
+      - match: "はい"
+        next: 医師名_入院転院
+      - match: "other"
+        next: 医師名_入院転院
+
+  - step: 医師名_入院転院
+    type: hearing
+    output_format: text
+    save_to: doctorName
+    next: その他問合せ_入院転院
+
+  - step: その他問合せ_入院転院
+    type: hearing
+    output_format: text
+    save_to: additionalInquiry
+    next: END_入院転院依頼
+
+  # === その他問合せルート ===
+  - step: 用件詳細_問合せ
+    type: hearing
+    output_format: enum
+    save_to: subClassification
+    echo_back: true
+    conditions:
+      - match: "紹介状の送信依頼"
+        next: 問合せ_患者氏名
+      - match: "問い合わせの進捗確認"
+        next: 問合せ_患者氏名
+      - match: "other"
+        next: 問合せ_その他内容
+
+  - step: 問合せ_その他内容
+    type: hearing
+    output_format: text
+    save_to: otherInquiryContent
+    next: END_その他問合せ
+
+  - step: 問合せ_患者氏名
+    type: subflow
+    flowname: "{group}$氏名聴取_{date}"
+    next: 問合せ_生年月日
+
+  - step: 問合せ_生年月日
+    type: hearing
+    output_format: text
+    save_to: patientDateOfBirth
+    next: 問合せ_診療科
+
+  - step: 問合せ_診療科
+    type: hearing
+    output_format: enum
+    save_to: clinicalDepartment
+    no_result_default: "登録なし"
+    conditions:
+      - match: "other"
+        next: END_その他問合せ
+
+  # === 終話ブロック ===
+  - step: END_FAX到着確認
+    type: termination
+    termination_ref: "END_FAX到着確認"
+
+  - step: END_情報提供依頼
+    type: termination
+    termination_ref: "END_情報提供依頼"
+
+  - step: END_入院転院依頼
+    type: termination
+    termination_ref: "END_入院転院依頼"
+
+  - step: END_その他問合せ
+    type: termination
+    termination_ref: "END_その他問合せ"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "FAX到着確認"
+      - id: "2"
+        order: "2"
+        value: "情報提供依頼"
+      - id: "3"
+        order: "3"
+        value: "入院・転院依頼"
+      - id: "4"
+        order: "4"
+        value: "その他問合せ"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件4分類。DTMF 1=FAX到着確認, 2=情報提供依頼, 3=入院・転院依頼, 4=その他問合せ"
+
+  - context_name: "patientName"
+    context_name_jp: "患者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "情報提供依頼/入院転院依頼/その他問合せ(紹介状送信・進捗確認)の3ルートで PatientName サブフロー経由で取得"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本フローでは未使用（医療機関スタッフからの架電のため聴取しない）"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "IVRセンター"
+      - id: "2"
+        order: "2"
+        value: "アレルギー科"
+      - id: "3"
+        order: "3"
+        value: "オンコロジー"
+      - id: "4"
+        order: "4"
+        value: "セカンドオピニオン"
+      - id: "5"
+        order: "5"
+        value: "フット外来"
+      - id: "6"
+        order: "6"
+        value: "リウマチ膠原病内科"
+      - id: "7"
+        order: "7"
+        value: "リハビリテーション｜その他"
+      - id: "8"
+        order: "8"
+        value: "リハビリテーション｜外傷"
+      - id: "9"
+        order: "9"
+        value: "リハビリテーション｜心臓"
+      - id: "10"
+        order: "10"
+        value: "外科"
+      - id: "11"
+        order: "11"
+        value: "外傷整形外科"
+      - id: "12"
+        order: "12"
+        value: "肝胆膵外科"
+      - id: "13"
+        order: "13"
+        value: "眼科"
+      - id: "14"
+        order: "14"
+        value: "形成外科"
+      - id: "15"
+        order: "15"
+        value: "血液内科"
+      - id: "16"
+        order: "16"
+        value: "呼吸器外科"
+      - id: "17"
+        order: "17"
+        value: "呼吸器内科"
+      - id: "18"
+        order: "18"
+        value: "産科"
+      - id: "19"
+        order: "19"
+        value: "歯科口腔外科"
+      - id: "20"
+        order: "20"
+        value: "耳鼻咽喉科"
+      - id: "21"
+        order: "21"
+        value: "腫瘍外科"
+      - id: "22"
+        order: "22"
+        value: "腫瘍内科"
+      - id: "23"
+        order: "23"
+        value: "循環器科"
+      - id: "24"
+        order: "24"
+        value: "小児科"
+      - id: "25"
+        order: "25"
+        value: "消化器内科"
+      - id: "26"
+        order: "26"
+        value: "心臓血管外科"
+      - id: "27"
+        order: "27"
+        value: "心療内科"
+      - id: "28"
+        order: "28"
+        value: "人工透析"
+      - id: "29"
+        order: "29"
+        value: "人工膝関節センター"
+      - id: "30"
+        order: "30"
+        value: "腎臓内科"
+      - id: "31"
+        order: "31"
+        value: "睡眠時無呼吸科"
+      - id: "32"
+        order: "32"
+        value: "整形外科"
+      - id: "33"
+        order: "33"
+        value: "脊椎脊髄外科"
+      - id: "34"
+        order: "34"
+        value: "総合診療科"
+      - id: "35"
+        order: "35"
+        value: "総合内科"
+      - id: "36"
+        order: "36"
+        value: "糖尿病内分泌科"
+      - id: "37"
+        order: "37"
+        value: "頭頸部外科"
+      - id: "38"
+        order: "38"
+        value: "内視鏡"
+      - id: "39"
+        order: "39"
+        value: "内分泌外科"
+      - id: "40"
+        order: "40"
+        value: "乳腺外科"
+      - id: "41"
+        order: "41"
+        value: "脳神経外科"
+      - id: "42"
+        order: "42"
+        value: "脳神経内科"
+      - id: "43"
+        order: "43"
+        value: "脳卒中診療科"
+      - id: "44"
+        order: "44"
+        value: "泌尿器科"
+      - id: "45"
+        order: "45"
+        value: "皮膚科"
+      - id: "46"
+        order: "46"
+        value: "婦人科"
+      - id: "47"
+        order: "47"
+        value: "放射線腫瘍科"
+      - id: "48"
+        order: "48"
+        value: "予防医学センター"
+      - id: "49"
+        order: "49"
+        value: "登録なし"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "47診療科 + no_result 用『登録なし』。Gen1 main.yaml の診療科 entity から転記。情報提供依頼/入院転院依頼/その他問合せ(紹介状送信・進捗確認) の3ルートで使用"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "Gen1『生年月日フリー』を踏襲し、自由テキストとして保存（『分からない』も受容）。和暦/西暦の正規化は行わない"
+
+  - context_name: "reason"
+    context_name_jp: "理由"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本フローでは未使用"
+
+  - context_name: "reservationDate"
+    context_name_jp: "予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本フローでは未使用（病診連携のため診療予約日は持たない）"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本フローでは未使用（架電者は医療機関スタッフのため聴取しない）"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "聴取失敗"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=未処理（受付完了）, 2=代表案内（非通知）, 3=聴取失敗, 6=時間外"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "システム自動取得"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値"
+
+  # --- 案件固有フィールド ---
+  - context_name: "organizationName"
+    context_name_jp: "紹介元医療機関名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "施設名 hearing で取得（自由テキスト）"
+
+  - context_name: "staffName"
+    context_name_jp: "担当者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "担当者名 hearing で取得（自由テキスト）"
+
+  - context_name: "subClassification"
+    context_name_jp: "用件詳細"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "用件②（FAX到着確認/情報提供依頼/問合せ）の詳細分類値を保存"
+
+  - context_name: "otherInquiryContent"
+    context_name_jp: "その他内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "FAX到着確認その他/情報提供依頼その他/その他の問合せ の自由テキスト内容"
+
+  - context_name: "replyDeadline"
+    context_name_jp: "返答期限"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "情報提供依頼の返答期限（自由テキスト、例: 来週月曜まで）"
+
+  - context_name: "desiredTiming"
+    context_name_jp: "希望時期"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "入院・転院依頼の希望時期（自由テキスト）"
+
+  - context_name: "doctorSharing"
+    context_name_jp: "医師間共有有無"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "入院・転院依頼の医師間共有 Yes/No（はい/いいえ を文字列で保存）"
+
+  - context_name: "doctorName"
+    context_name_jp: "事前相談医師名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "入院・転院依頼の事前相談医師名（自由テキスト、『分からない』も受容）"
+
+  - context_name: "sameDayConfirmation"
+    context_name_jp: "本日明日希望"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "情報提供依頼/入院転院依頼の『本日または明日の回答/入転院希望か』Yes/No"
+
+  - context_name: "additionalInquiry"
+    context_name_jp: "追加問合せ"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "入院・転院依頼の最後に職員へ伝えたい追加事項（自由テキスト、『特にない』も受容）"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "施設名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: true
+    save_to: "organizationName"
+    openai_processing: "none"
+    output_format: "text"
+    notes: "Gen1『施設名』サブシナリオ相当。元 yaml の施設名確認TTS『<? $復唱 ?>、様、ご連絡ありがとうございます。』を Re-confirmation node 復唱で再現"
+
+  - order: 2
+    name: "担当者名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "staffName"
+    openai_processing: "none"
+    output_format: "text"
+    notes: "Gen1『担当者名』サブシナリオ相当。復唱なし"
+
+  - order: 3
+    name: "用件確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: true
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "FAX到着確認"
+      - "情報提供依頼"
+      - "入院・転院依頼"
+      - "その他問合せ"
+    notes: "DTMF 1=FAX到着確認, 2=情報提供依頼, 3=入院・転院依頼, 4=その他問合せ。同音異義救済: 店員/入金/返品/転院依頼→入院・転院依頼、医療請求/資料請求依頼/診療情報提供依頼→情報提供依頼、ファックス/到着→FAX到着確認、四/問い合わせ→その他問合せ"
+
+  - order: 4
+    name: "用件詳細_FAX到着確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: true
+    save_to: "subClassification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "診療報告"
+      - "問い合わせ回答"
+      - "これから受診の方の追加情報"
+      - "その他"
+    notes: "DTMF 1=診療報告, 2=問い合わせ回答, 3=これから受診の方の追加情報, 4=その他。同音異義救済: Suica/受信→これから受診の方の追加情報"
+
+  - order: 5
+    name: "FAX_内容確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "otherInquiryContent"
+    openai_processing: "none"
+    output_format: "text"
+    notes: "FAX到着確認の『その他』分岐の自由テキスト聴取"
+
+  - order: 6
+    name: "当日予約日_情報提供依頼"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "sameDayConfirmation"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "DTMF 1=はい, 2=いいえ。Yes/No いずれでも次（情報提供_患者氏名）に進む（context のみ保存）"
+
+  - order: 7
+    name: "情報提供_生年月日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientDateOfBirth"
+    openai_processing: "none"
+    output_format: "text"
+    notes: "Gen1『生年月日フリー』を踏襲。和暦/西暦の正規化は行わず自由テキストで保存。『分からない/わかりません』等も受容"
+
+  - order: 8
+    name: "情報提供_診療科"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    no_result_default: "登録なし"
+    output_labels:
+      - "IVRセンター"
+      - "アレルギー科"
+      - "オンコロジー"
+      - "セカンドオピニオン"
+      - "フット外来"
+      - "リウマチ膠原病内科"
+      - "リハビリテーション｜その他"
+      - "リハビリテーション｜外傷"
+      - "リハビリテーション｜心臓"
+      - "外科"
+      - "外傷整形外科"
+      - "肝胆膵外科"
+      - "眼科"
+      - "形成外科"
+      - "血液内科"
+      - "呼吸器外科"
+      - "呼吸器内科"
+      - "産科"
+      - "歯科口腔外科"
+      - "耳鼻咽喉科"
+      - "腫瘍外科"
+      - "腫瘍内科"
+      - "循環器科"
+      - "小児科"
+      - "消化器内科"
+      - "心臓血管外科"
+      - "心療内科"
+      - "人工透析"
+      - "人工膝関節センター"
+      - "腎臓内科"
+      - "睡眠時無呼吸科"
+      - "整形外科"
+      - "脊椎脊髄外科"
+      - "総合診療科"
+      - "総合内科"
+      - "糖尿病内分泌科"
+      - "頭頸部外科"
+      - "内視鏡"
+      - "内分泌外科"
+      - "乳腺外科"
+      - "脳神経外科"
+      - "脳神経内科"
+      - "脳卒中診療科"
+      - "泌尿器科"
+      - "皮膚科"
+      - "婦人科"
+      - "放射線腫瘍科"
+      - "予防医学センター"
+    notes: "47診療科 + no_result_default で『登録なし』を保存。同義語: 循環器→循環器科"
+
+  - order: 9
+    name: "用件詳細_情報提供依頼"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: true
+    save_to: "subClassification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "治療の経過"
+      - "MRIの実施可否"
+      - "その他"
+    notes: "DTMF 1=治療の経過, 2=MRIの実施可否, 3=その他。同音異義救済: あーる/えむ→MRIの実施可否、可否/実施→MRIの実施可否、経過/治療→治療の経過"
+
+  - order: 10
+    name: "情報提供_内容確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "otherInquiryContent"
+    openai_processing: "none"
+    output_format: "text"
+    notes: "情報提供依頼の『その他』分岐の自由テキスト聴取"
+
+  - order: 11
+    name: "返答期限_情報提供依頼"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "replyDeadline"
+    openai_processing: "none"
+    output_format: "text"
+    notes: "返答期限を自由テキストで保存（例: 来週月曜まで、今週中、明日まで 等）"
+
+  - order: 12
+    name: "当日予約日_入院転院"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "sameDayConfirmation"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "DTMF 1=はい, 2=いいえ。Yes/No いずれでも次（入院転院_患者氏名）に進む"
+
+  - order: 13
+    name: "入院転院_生年月日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientDateOfBirth"
+    openai_processing: "none"
+    output_format: "text"
+    notes: "情報提供_生年月日と同仕様"
+
+  - order: 14
+    name: "入院転院_診療科"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    no_result_default: "登録なし"
+    output_labels:
+      - "IVRセンター"
+      - "アレルギー科"
+      - "オンコロジー"
+      - "セカンドオピニオン"
+      - "フット外来"
+      - "リウマチ膠原病内科"
+      - "リハビリテーション｜その他"
+      - "リハビリテーション｜外傷"
+      - "リハビリテーション｜心臓"
+      - "外科"
+      - "外傷整形外科"
+      - "肝胆膵外科"
+      - "眼科"
+      - "形成外科"
+      - "血液内科"
+      - "呼吸器外科"
+      - "呼吸器内科"
+      - "産科"
+      - "歯科口腔外科"
+      - "耳鼻咽喉科"
+      - "腫瘍外科"
+      - "腫瘍内科"
+      - "循環器科"
+      - "小児科"
+      - "消化器内科"
+      - "心臓血管外科"
+      - "心療内科"
+      - "人工透析"
+      - "人工膝関節センター"
+      - "腎臓内科"
+      - "睡眠時無呼吸科"
+      - "整形外科"
+      - "脊椎脊髄外科"
+      - "総合診療科"
+      - "総合内科"
+      - "糖尿病内分泌科"
+      - "頭頸部外科"
+      - "内視鏡"
+      - "内分泌外科"
+      - "乳腺外科"
+      - "脳神経外科"
+      - "脳神経内科"
+      - "脳卒中診療科"
+      - "泌尿器科"
+      - "皮膚科"
+      - "婦人科"
+      - "放射線腫瘍科"
+      - "予防医学センター"
+    notes: "情報提供_診療科と同仕様（47診療科 + no_result_default）"
+
+  - order: 15
+    name: "希望時期_入院転院"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "desiredTiming"
+    openai_processing: "none"
+    output_format: "text"
+    notes: "入院・転院希望時期を自由テキストで保存"
+
+  - order: 16
+    name: "医師間共有"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "doctorSharing"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "DTMF 1=はい, 2=いいえ。貴院と当院の医師間で本件は既にお話しいただいているか確認。Yes/No いずれでも次（医師名_入院転院）に進む"
+
+  - order: 17
+    name: "医師名_入院転院"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "doctorName"
+    openai_processing: "none"
+    output_format: "text"
+    notes: "事前相談の当院医師名。『分からない』『わかりません』等も受容"
+
+  - order: 18
+    name: "その他問合せ_入院転院"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "additionalInquiry"
+    openai_processing: "none"
+    output_format: "text"
+    notes: "職員へ伝えたい追加事項。『特にない』等も受容"
+
+  - order: 19
+    name: "用件詳細_問合せ"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: true
+    save_to: "subClassification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "紹介状の送信依頼"
+      - "問い合わせの進捗確認"
+      - "その他の問合せ"
+    notes: "DTMF 1=紹介状の送信依頼, 2=問い合わせの進捗確認, 3=その他の問合せ。同音異義救済: 送信→紹介状の送信依頼、進捗→問い合わせの進捗確認"
+
+  - order: 20
+    name: "問合せ_その他内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "otherInquiryContent"
+    openai_processing: "none"
+    output_format: "text"
+    notes: "『その他の問合せ』分岐の自由テキスト聴取"
+
+  - order: 21
+    name: "問合せ_生年月日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientDateOfBirth"
+    openai_processing: "none"
+    output_format: "text"
+    notes: "情報提供_生年月日と同仕様"
+
+  - order: 22
+    name: "問合せ_診療科"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    no_result_default: "登録なし"
+    output_labels:
+      - "IVRセンター"
+      - "アレルギー科"
+      - "オンコロジー"
+      - "セカンドオピニオン"
+      - "フット外来"
+      - "リウマチ膠原病内科"
+      - "リハビリテーション｜その他"
+      - "リハビリテーション｜外傷"
+      - "リハビリテーション｜心臓"
+      - "外科"
+      - "外傷整形外科"
+      - "肝胆膵外科"
+      - "眼科"
+      - "形成外科"
+      - "血液内科"
+      - "呼吸器外科"
+      - "呼吸器内科"
+      - "産科"
+      - "歯科口腔外科"
+      - "耳鼻咽喉科"
+      - "腫瘍外科"
+      - "腫瘍内科"
+      - "循環器科"
+      - "小児科"
+      - "消化器内科"
+      - "心臓血管外科"
+      - "心療内科"
+      - "人工透析"
+      - "人工膝関節センター"
+      - "腎臓内科"
+      - "睡眠時無呼吸科"
+      - "整形外科"
+      - "脊椎脊髄外科"
+      - "総合診療科"
+      - "総合内科"
+      - "糖尿病内分泌科"
+      - "頭頸部外科"
+      - "内視鏡"
+      - "内分泌外科"
+      - "乳腺外科"
+      - "脳神経外科"
+      - "脳神経内科"
+      - "脳卒中診療科"
+      - "泌尿器科"
+      - "皮膚科"
+      - "婦人科"
+      - "放射線腫瘍科"
+      - "予防医学センター"
+    notes: "情報提供_診療科と同仕様（47診療科 + no_result_default）"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "施設名聴取"
+    tts_announcement: "まず初めに、施設名をお話ください。"
+    input_method: "voice_only"
+    save_to: "organizationName"
+    next_step: "担当者名聴取"
+    retry_failure: "end_failure"
+    retry_failure_announcement: "大変申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、地域医療連携支援室へおかけ直しください。電話番号が分かる方は、このままお電話をお切りください。わからない方はご案内しますので、メモをご準備ください。0263-37-3370、0263-37-3370、0263-37-3370"
+
+  - step_name: "担当者名聴取"
+    tts_announcement: "続いて、お電話いただいているご担当者様のお名前をお話ください。"
+    input_method: "voice_only"
+    save_to: "staffName"
+    next_step: "用件確認"
+    retry_failure: "end_failure"
+    retry_failure_announcement: "大変申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、地域医療連携支援室へおかけ直しください。電話番号が分かる方は、このままお電話をお切りください。わからない方はご案内しますので、メモをご準備ください。0263-37-3370、0263-37-3370、0263-37-3370"
+
+  - step_name: "用件確認"
+    tts_announcement: "ご用件をダイヤルプッシュで選択してください。1「FAX到着確認」、2「情報提供依頼」、3「入院・転院依頼」、4「その他問合せ」、それでは、ご選択ください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "FAX到着確認"
+        - "情報提供依頼"
+        - "入院・転院依頼"
+        - "その他問合せ"
+      mapping:
+        - input: "DTMF 1 / イチ / ファックス / 到着 / FAX / 位置(同音救済)"
+          output: "FAX到着確認"
+        - input: "DTMF 2 / 二 / 資料 / 資料請求 / 医療請求 / 書類 / 情報 / 診療情報提供依頼 / 請求 / 請求書"
+          output: "情報提供依頼"
+        - input: "DTMF 3 / サン / 三 / 入院 / 転院 / 転院依頼 / 相談 / 受信(同音救済) / 店員(同音救済) / 入金(同音救済) / 返品(同音救済) / 天神依頼(同音救済)"
+          output: "入院・転院依頼"
+        - input: "DTMF 4 / ヨン / 四 / 問い合わせ / その他"
+          output: "その他問合せ"
+      no_result_condition: "上記いずれにも該当しない・無発話・聞き取り失敗"
+    save_to: "classification"
+    next_step: "用件詳細_FAX到着確認 / 当日予約日_情報提供依頼 / 当日予約日_入院転院 / 用件詳細_問合せ"
+    retry_failure: "end_failure"
+
+  - step_name: "用件詳細_FAX到着確認"
+    tts_announcement: "FAXにてご送信いただいた内容を、ダイヤルプッシュでお答えください。「診療報告」は1番、「問い合わせ回答」は2番、「これから受診の方の追加情報」は3番、「その他」は4番、それではご選択ください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "診療報告"
+        - "問い合わせ回答"
+        - "これから受診の方の追加情報"
+        - "その他"
+      mapping:
+        - input: "DTMF 1 / 一 / イチ / 診療 / 報告 / 位置(同音救済)"
+          output: "診療報告"
+        - input: "DTMF 2 / 二 / 回答 / 問い合わせ"
+          output: "問い合わせ回答"
+        - input: "DTMF 3 / 三 / サン / これから / 追加 / 情報 / 入院 / Suica(同音救済) / 受信(同音救済)"
+          output: "これから受診の方の追加情報"
+        - input: "DTMF 4 / 四 / ヨン / ほか / その他"
+          output: "その他"
+      no_result_condition: "上記いずれにも該当しない・無発話・聞き取り失敗"
+    save_to: "subClassification"
+    next_step: "END_FAX到着確認（診療報告/問い合わせ回答/これから受診の方の追加情報の場合） / FAX_内容確認（その他の場合）"
+    retry_failure: "end_failure"
+
+  - step_name: "FAX_内容確認"
+    tts_announcement: "ご連絡いただきました内容を簡単にお話ください。"
+    input_method: "voice_only"
+    save_to: "otherInquiryContent"
+    next_step: "END_FAX到着確認"
+    retry_failure: "end_failure"
+
+  - step_name: "当日予約日_情報提供依頼"
+    tts_announcement: "本日または明日の回答をご希望ですか？はいの方は1番を、いいえの方は2番を、ダイヤルプッシュで選択してください。それではご選択ください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+      mapping:
+        - input: "DTMF 1 / はい / 大丈夫 / 丈夫 / 異常部(同音救済)"
+          output: "はい"
+        - input: "DTMF 2 / いいえ / いえ / いや / じゃない"
+          output: "いいえ"
+      no_result_condition: "上記いずれにも該当しない・無発話・聞き取り失敗"
+    save_to: "sameDayConfirmation"
+    next_step: "情報提供_患者氏名（Yes/No いずれも同じ）"
+    retry_failure: "end_failure"
+
+  - step_name: "情報提供_患者氏名"
+    tts_announcement: "（PatientName サブフローへ Jump。サブフロー内で『患者さんのお名前を、フルネームでおっしゃってください。』と発話）"
+    input_method: "voice_only"
+    save_to: "patientName"
+    next_step: "情報提供_生年月日"
+    retry_failure: "end_failure"
+
+  - step_name: "情報提供_生年月日"
+    tts_announcement: "患者さんの生年月日をおっしゃってください。"
+    input_method: "voice_only"
+    save_to: "patientDateOfBirth"
+    next_step: "情報提供_診療科"
+    retry_failure: "end_failure"
+
+  - step_name: "情報提供_診療科"
+    tts_announcement: "対象の診療科をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "IVRセンター"
+        - "アレルギー科"
+        - "オンコロジー"
+        - "セカンドオピニオン"
+        - "フット外来"
+        - "リウマチ膠原病内科"
+        - "リハビリテーション｜その他"
+        - "リハビリテーション｜外傷"
+        - "リハビリテーション｜心臓"
+        - "外科"
+        - "外傷整形外科"
+        - "肝胆膵外科"
+        - "眼科"
+        - "形成外科"
+        - "血液内科"
+        - "呼吸器外科"
+        - "呼吸器内科"
+        - "産科"
+        - "歯科口腔外科"
+        - "耳鼻咽喉科"
+        - "腫瘍外科"
+        - "腫瘍内科"
+        - "循環器科"
+        - "小児科"
+        - "消化器内科"
+        - "心臓血管外科"
+        - "心療内科"
+        - "人工透析"
+        - "人工膝関節センター"
+        - "腎臓内科"
+        - "睡眠時無呼吸科"
+        - "整形外科"
+        - "脊椎脊髄外科"
+        - "総合診療科"
+        - "総合内科"
+        - "糖尿病内分泌科"
+        - "頭頸部外科"
+        - "内視鏡"
+        - "内分泌外科"
+        - "乳腺外科"
+        - "脳神経外科"
+        - "脳神経内科"
+        - "脳卒中診療科"
+        - "泌尿器科"
+        - "皮膚科"
+        - "婦人科"
+        - "放射線腫瘍科"
+        - "予防医学センター"
+      mapping:
+        - input: "発話された診療科名・同義語・通称（例: 循環器→循環器科）"
+          output: "上記output_valuesのうち最も意味的に一致するもの"
+      no_result_condition: "上記47診療科のいずれにも該当しない・無発話・聞き取り失敗 → no_result_default『登録なし』を適用"
+    save_to: "clinicalDepartment"
+    next_step: "用件詳細_情報提供依頼"
+    retry_failure: "end_failure"
+
+  - step_name: "用件詳細_情報提供依頼"
+    tts_announcement: "ご依頼内容をダイヤルプッシュで選択してください。「治療の経過」は1番、「MRIの実施可否」は2番、「その他」は3番、それではご選択ください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "治療の経過"
+        - "MRIの実施可否"
+        - "その他"
+      mapping:
+        - input: "DTMF 1 / 一 / イチ / 経過 / 治療 / 位置(同音救済)"
+          output: "治療の経過"
+        - input: "DTMF 2 / 二 / MRI / あーる / えむ / 可否 / 実施"
+          output: "MRIの実施可否"
+        - input: "DTMF 3 / 三 / サン / ほか / その他"
+          output: "その他"
+      no_result_condition: "上記いずれにも該当しない・無発話・聞き取り失敗"
+    save_to: "subClassification"
+    next_step: "返答期限_情報提供依頼（治療の経過/MRIの実施可否） / 情報提供_内容確認（その他）"
+    retry_failure: "end_failure"
+
+  - step_name: "情報提供_内容確認"
+    tts_announcement: "ご連絡いただきました内容を簡単にお話ください。"
+    input_method: "voice_only"
+    save_to: "otherInquiryContent"
+    next_step: "返答期限_情報提供依頼"
+    retry_failure: "end_failure"
+
+  - step_name: "返答期限_情報提供依頼"
+    tts_announcement: "お返事の期限を教えてください。"
+    input_method: "voice_only"
+    save_to: "replyDeadline"
+    next_step: "END_情報提供依頼"
+    retry_failure: "end_failure"
+
+  - step_name: "当日予約日_入院転院"
+    tts_announcement: "本日または明日の入院・転院をご希望ですか？はいの方は1番を、いいえの方は2番を、ダイヤルプッシュで選択してください。それではご選択ください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+      mapping:
+        - input: "DTMF 1 / はい / 大丈夫 / 丈夫"
+          output: "はい"
+        - input: "DTMF 2 / いいえ / いえ / いや / じゃない"
+          output: "いいえ"
+      no_result_condition: "上記いずれにも該当しない・無発話・聞き取り失敗"
+    save_to: "sameDayConfirmation"
+    next_step: "入院転院_患者氏名（Yes/No いずれも同じ）"
+    retry_failure: "end_failure"
+
+  - step_name: "入院転院_患者氏名"
+    tts_announcement: "（PatientName サブフローへ Jump）"
+    input_method: "voice_only"
+    save_to: "patientName"
+    next_step: "入院転院_生年月日"
+    retry_failure: "end_failure"
+
+  - step_name: "入院転院_生年月日"
+    tts_announcement: "患者さんの生年月日をおっしゃってください。"
+    input_method: "voice_only"
+    save_to: "patientDateOfBirth"
+    next_step: "入院転院_診療科"
+    retry_failure: "end_failure"
+
+  - step_name: "入院転院_診療科"
+    tts_announcement: "対象の診療科をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "IVRセンター"
+        - "アレルギー科"
+        - "オンコロジー"
+        - "セカンドオピニオン"
+        - "フット外来"
+        - "リウマチ膠原病内科"
+        - "リハビリテーション｜その他"
+        - "リハビリテーション｜外傷"
+        - "リハビリテーション｜心臓"
+        - "外科"
+        - "外傷整形外科"
+        - "肝胆膵外科"
+        - "眼科"
+        - "形成外科"
+        - "血液内科"
+        - "呼吸器外科"
+        - "呼吸器内科"
+        - "産科"
+        - "歯科口腔外科"
+        - "耳鼻咽喉科"
+        - "腫瘍外科"
+        - "腫瘍内科"
+        - "循環器科"
+        - "小児科"
+        - "消化器内科"
+        - "心臓血管外科"
+        - "心療内科"
+        - "人工透析"
+        - "人工膝関節センター"
+        - "腎臓内科"
+        - "睡眠時無呼吸科"
+        - "整形外科"
+        - "脊椎脊髄外科"
+        - "総合診療科"
+        - "総合内科"
+        - "糖尿病内分泌科"
+        - "頭頸部外科"
+        - "内視鏡"
+        - "内分泌外科"
+        - "乳腺外科"
+        - "脳神経外科"
+        - "脳神経内科"
+        - "脳卒中診療科"
+        - "泌尿器科"
+        - "皮膚科"
+        - "婦人科"
+        - "放射線腫瘍科"
+        - "予防医学センター"
+      mapping:
+        - input: "発話された診療科名・同義語・通称（例: 循環器→循環器科）"
+          output: "上記output_valuesのうち最も意味的に一致するもの"
+      no_result_condition: "上記47診療科のいずれにも該当しない・無発話・聞き取り失敗 → no_result_default『登録なし』を適用"
+    save_to: "clinicalDepartment"
+    next_step: "希望時期_入院転院"
+    retry_failure: "end_failure"
+
+  - step_name: "希望時期_入院転院"
+    tts_announcement: "入院、または転院を希望する時期をお話ください。"
+    input_method: "voice_only"
+    save_to: "desiredTiming"
+    next_step: "医師間共有"
+    retry_failure: "end_failure"
+
+  - step_name: "医師間共有"
+    tts_announcement: "貴院と当院、医師間で本件は既にお話いただいてる状況ですか？はいの方は1番を、いいえの方は2番を、ダイヤルプッシュで選択してください。それではご選択ください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+      mapping:
+        - input: "DTMF 1 / はい / 大丈夫 / 丈夫"
+          output: "はい"
+        - input: "DTMF 2 / いいえ / いえ / いや / じゃない"
+          output: "いいえ"
+      no_result_condition: "上記いずれにも該当しない・無発話・聞き取り失敗"
+    save_to: "doctorSharing"
+    next_step: "医師名_入院転院（Yes/No いずれも同じ）"
+    retry_failure: "end_failure"
+
+  - step_name: "医師名_入院転院"
+    tts_announcement: "事前にご相談いただいた当院医師名をお話ください。分からない場合は「分からない」とお話ください。"
+    input_method: "voice_only"
+    save_to: "doctorName"
+    next_step: "その他問合せ_入院転院"
+    retry_failure: "end_failure"
+
+  - step_name: "その他問合せ_入院転院"
+    tts_announcement: "その他、職員へお伝えになりたいことがありましたらお話ください。ない場合には「特にない」などとお話ください。"
+    input_method: "voice_only"
+    save_to: "additionalInquiry"
+    next_step: "END_入院転院依頼"
+    retry_failure: "end_failure"
+
+  - step_name: "用件詳細_問合せ"
+    tts_announcement: "次のうちいずれかの番号をダイヤルプッシュで選択してください。「紹介状の送信依頼」は1番、「問い合わせの進捗確認」は2番、「その他の問合せ」は3番、それではご選択ください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "紹介状の送信依頼"
+        - "問い合わせの進捗確認"
+        - "その他の問合せ"
+      mapping:
+        - input: "DTMF 1 / 一 / イチ / 紹介 / 紹介状 / 送信 / 依頼 / 位置(同音救済)"
+          output: "紹介状の送信依頼"
+        - input: "DTMF 2 / 二 / 確認 / 進捗"
+          output: "問い合わせの進捗確認"
+        - input: "DTMF 3 / 三 / サン / その他"
+          output: "その他の問合せ"
+      no_result_condition: "上記いずれにも該当しない・無発話・聞き取り失敗"
+    save_to: "subClassification"
+    next_step: "問合せ_患者氏名（紹介状送信/進捗確認） / 問合せ_その他内容（その他の問合せ）"
+    retry_failure: "end_failure"
+
+  - step_name: "問合せ_その他内容"
+    tts_announcement: "それでは、お問い合わせいただいた内容をお話ください。"
+    input_method: "voice_only"
+    save_to: "otherInquiryContent"
+    next_step: "END_その他問合せ"
+    retry_failure: "end_failure"
+
+  - step_name: "問合せ_患者氏名"
+    tts_announcement: "（PatientName サブフローへ Jump）"
+    input_method: "voice_only"
+    save_to: "patientName"
+    next_step: "問合せ_生年月日"
+    retry_failure: "end_failure"
+
+  - step_name: "問合せ_生年月日"
+    tts_announcement: "患者さんの生年月日をおっしゃってください。"
+    input_method: "voice_only"
+    save_to: "patientDateOfBirth"
+    next_step: "問合せ_診療科"
+    retry_failure: "end_failure"
+
+  - step_name: "問合せ_診療科"
+    tts_announcement: "対象の診療科をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "IVRセンター"
+        - "アレルギー科"
+        - "オンコロジー"
+        - "セカンドオピニオン"
+        - "フット外来"
+        - "リウマチ膠原病内科"
+        - "リハビリテーション｜その他"
+        - "リハビリテーション｜外傷"
+        - "リハビリテーション｜心臓"
+        - "外科"
+        - "外傷整形外科"
+        - "肝胆膵外科"
+        - "眼科"
+        - "形成外科"
+        - "血液内科"
+        - "呼吸器外科"
+        - "呼吸器内科"
+        - "産科"
+        - "歯科口腔外科"
+        - "耳鼻咽喉科"
+        - "腫瘍外科"
+        - "腫瘍内科"
+        - "循環器科"
+        - "小児科"
+        - "消化器内科"
+        - "心臓血管外科"
+        - "心療内科"
+        - "人工透析"
+        - "人工膝関節センター"
+        - "腎臓内科"
+        - "睡眠時無呼吸科"
+        - "整形外科"
+        - "脊椎脊髄外科"
+        - "総合診療科"
+        - "総合内科"
+        - "糖尿病内分泌科"
+        - "頭頸部外科"
+        - "内視鏡"
+        - "内分泌外科"
+        - "乳腺外科"
+        - "脳神経外科"
+        - "脳神経内科"
+        - "脳卒中診療科"
+        - "泌尿器科"
+        - "皮膚科"
+        - "婦人科"
+        - "放射線腫瘍科"
+        - "予防医学センター"
+      mapping:
+        - input: "発話された診療科名・同義語・通称（例: 循環器→循環器科）"
+          output: "上記output_valuesのうち最も意味的に一致するもの"
+      no_result_condition: "上記47診療科のいずれにも該当しない・無発話・聞き取り失敗 → no_result_default『登録なし』を適用"
+    save_to: "clinicalDepartment"
+    next_step: "END_その他問合せ"
+    retry_failure: "end_failure"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # === 異常系（必須） ===
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外（土日祝・年末年始・平日17:15以降〜翌8:30）"
+    tts_announcement: "申し訳ございません。ただいまの時間は受付時間外となっております。受付時間は、土日祝日と年末年始を除く、月曜日から金曜日の8時30分から17時15分です。恐れ入りますが、受付時間内におかけなおしください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達（代表案内）"
+    tts_announcement: "大変申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、地域医療連携支援室へおかけ直しください。電話番号が分かる方は、このままお電話をお切りください。わからない方はご案内しますので、メモをご準備ください。0263-37-3370、0263-37-3370、0263-37-3370。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # === 正常系 ===
+  - name: "END_FAX到着確認"
+    condition: "FAX到着確認 受付完了"
+    tts_announcement: "申込みを受付けしました。到着が確認できない場合は折り返しご連絡致します。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_FAX到着確認"
+
+  - name: "END_情報提供依頼"
+    condition: "情報提供依頼 受付完了"
+    tts_announcement: "申込みを受付けしました。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_情報提供依頼"
+
+  - name: "END_入院転院依頼"
+    condition: "入院・転院依頼 受付完了"
+    tts_announcement: "入院・転院依頼を受付いたしました。診療科よりお返事いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_入院転院依頼"
+
+  - name: "END_その他問合せ"
+    condition: "その他問合せ 受付完了"
+    tts_announcement: "お問い合わせを受付いたしました。担当者から折り返しご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_その他問合せ"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。信大病院・連携室AI電話です。"
+
+  - module_name: "施設名聴取"
+    purpose: "紹介元医療機関名の聴取"
+    announcement: "まず初めに、施設名をお話ください。"
+
+  - module_name: "担当者名聴取"
+    purpose: "ご担当者様氏名の聴取"
+    announcement: "続いて、お電話いただいているご担当者様のお名前をお話ください。"
+
+  - module_name: "用件確認"
+    purpose: "用件4分類のDTMF/音声選択"
+    announcement: "ご用件をダイヤルプッシュで選択してください。1「FAX到着確認」、2「情報提供依頼」、3「入院・転院依頼」、4「その他問合せ」、それでは、ご選択ください。"
+
+  - module_name: "用件詳細_FAX到着確認"
+    purpose: "FAX到着確認の詳細分類"
+    announcement: "FAXにてご送信いただいた内容を、ダイヤルプッシュでお答えください。「診療報告」は1番、「問い合わせ回答」は2番、「これから受診の方の追加情報」は3番、「その他」は4番、それではご選択ください。"
+
+  - module_name: "FAX_内容確認"
+    purpose: "FAX到着確認の『その他』自由テキスト聴取"
+    announcement: "ご連絡いただきました内容を簡単にお話ください。"
+
+  - module_name: "当日予約日_情報提供依頼"
+    purpose: "情報提供依頼の本日/明日希望Yes/No"
+    announcement: "本日または明日の回答をご希望ですか？はいの方は1番を、いいえの方は2番を、ダイヤルプッシュで選択してください。それではご選択ください。"
+
+  - module_name: "情報提供_生年月日"
+    purpose: "情報提供依頼ルートの患者生年月日聴取（自由テキスト）"
+    announcement: "患者さんの生年月日をおっしゃってください。"
+
+  - module_name: "情報提供_診療科"
+    purpose: "情報提供依頼ルートの対象診療科聴取"
+    announcement: "対象の診療科をお話ください。"
+
+  - module_name: "用件詳細_情報提供依頼"
+    purpose: "情報提供依頼の詳細分類"
+    announcement: "ご依頼内容をダイヤルプッシュで選択してください。「治療の経過」は1番、「MRIの実施可否」は2番、「その他」は3番、それではご選択ください。"
+
+  - module_name: "情報提供_内容確認"
+    purpose: "情報提供依頼の『その他』自由テキスト聴取"
+    announcement: "ご連絡いただきました内容を簡単にお話ください。"
+
+  - module_name: "返答期限_情報提供依頼"
+    purpose: "情報提供依頼の返答期限聴取"
+    announcement: "お返事の期限を教えてください。"
+
+  - module_name: "当日予約日_入院転院"
+    purpose: "入院・転院依頼の本日/明日希望Yes/No"
+    announcement: "本日または明日の入院・転院をご希望ですか？はいの方は1番を、いいえの方は2番を、ダイヤルプッシュで選択してください。それではご選択ください。"
+
+  - module_name: "入院転院_生年月日"
+    purpose: "入院・転院依頼ルートの患者生年月日聴取"
+    announcement: "患者さんの生年月日をおっしゃってください。"
+
+  - module_name: "入院転院_診療科"
+    purpose: "入院・転院依頼ルートの対象診療科聴取"
+    announcement: "対象の診療科をお話ください。"
+
+  - module_name: "希望時期_入院転院"
+    purpose: "入院・転院希望時期の聴取"
+    announcement: "入院、または転院を希望する時期をお話ください。"
+
+  - module_name: "医師間共有"
+    purpose: "医師間で既に話済みかのYes/No"
+    announcement: "貴院と当院、医師間で本件は既にお話いただいてる状況ですか？はいの方は1番を、いいえの方は2番を、ダイヤルプッシュで選択してください。それではご選択ください。"
+
+  - module_name: "医師名_入院転院"
+    purpose: "事前相談の当院医師名聴取（『分からない』も受容）"
+    announcement: "事前にご相談いただいた当院医師名をお話ください。分からない場合は「分からない」とお話ください。"
+
+  - module_name: "その他問合せ_入院転院"
+    purpose: "入院・転院依頼の追加問合せ聴取（『特にない』も受容）"
+    announcement: "その他、職員へお伝えになりたいことがありましたらお話ください。ない場合には「特にない」などとお話ください。"
+
+  - module_name: "用件詳細_問合せ"
+    purpose: "その他問合せの詳細分類"
+    announcement: "次のうちいずれかの番号をダイヤルプッシュで選択してください。「紹介状の送信依頼」は1番、「問い合わせの進捗確認」は2番、「その他の問合せ」は3番、それではご選択ください。"
+
+  - module_name: "問合せ_その他内容"
+    purpose: "『その他の問合せ』自由テキスト聴取"
+    announcement: "それでは、お問い合わせいただいた内容をお話ください。"
+
+  - module_name: "問合せ_生年月日"
+    purpose: "その他問合せルートの患者生年月日聴取"
+    announcement: "患者さんの生年月日をおっしゃってください。"
+
+  - module_name: "問合せ_診療科"
+    purpose: "その他問合せルートの対象診療科聴取"
+    announcement: "対象の診療科をお話ください。"
+
+  - module_name: "END_FAX到着確認"
+    purpose: "FAX到着確認 受付完了の終話アナウンス"
+    announcement: "申込みを受付けしました。到着が確認できない場合は折り返しご連絡致します。お電話ありがとうございました。"
+
+  - module_name: "END_情報提供依頼"
+    purpose: "情報提供依頼 受付完了の終話アナウンス"
+    announcement: "申込みを受付けしました。お電話ありがとうございました。"
+
+  - module_name: "END_入院転院依頼"
+    purpose: "入院・転院依頼 受付完了の終話アナウンス"
+    announcement: "入院・転院依頼を受付いたしました。診療科よりお返事いたします。お電話ありがとうございました。"
+
+  - module_name: "END_その他問合せ"
+    purpose: "その他問合せ 受付完了の終話アナウンス"
+    announcement: "お問い合わせを受付いたしました。担当者から折り返しご連絡いたします。お電話ありがとうございました。"
+
+  - module_name: "END_時間外"
+    purpose: "受付時間外の終話アナウンス"
+    announcement: "申し訳ございません。ただいまの時間は受付時間外となっております。受付時間は、土日祝日と年末年始を除く、月曜日から金曜日の8時30分から17時15分です。恐れ入りますが、受付時間内におかけなおしください。お電話ありがとうございました。"
+
+  - module_name: "END_非通知"
+    purpose: "非通知着信時の終話アナウンス"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ上限到達時の代表案内アナウンス"
+    announcement: "大変申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、地域医療連携支援室へおかけ直しください。電話番号が分かる方は、このままお電話をお切りください。わからない方はご案内しますので、メモをご準備ください。0263-37-3370、0263-37-3370、0263-37-3370。お電話ありがとうございました。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "用件確認"
+    words: |
+      FAX到着確認 ふぁっくすとうちゃくかくにん
+      情報提供依頼 じょうほうていきょういらい
+      入院・転院依頼 にゅういんてんいんいらい
+      その他問合せ そのたといあわせ
+      ファックス ふぁっくす
+      到着 とうちゃく
+      位置 いち
+      イチ いち
+      二 に
+      資料 しりょう
+      資料請求 しりょうせいきゅう
+      資料請求依頼 しりょうせいきゅういらい
+      医療請求 いりょうせいきゅう
+      書類 しょるい
+      情報 じょうほう
+      診療情報提供依頼 しんりょうじょうほうていきょういらい
+      請求 せいきゅう
+      請求書 せいきゅうしょ
+      入院 にゅういん
+      転院 てんいん
+      転院依頼 てんいんいらい
+      相談 そうだん
+      サン さん
+      三 さん
+      受信 じゅしん
+      店員 てんいん
+      入金 にゅうきん
+      返品 へんぴん
+      天神依頼 てんじんいらい
+      問い合わせ といあわせ
+      その他 そのた
+      ヨン よん
+      四 よん
+
+  - step_name: "用件詳細_FAX到着確認"
+    words: |
+      診療報告 しんりょうほうこく
+      問い合わせ回答 といあわせかいとう
+      これから受診の方の追加情報 これからじゅしんのかたのついかじょうほう
+      その他 そのた
+      診療 しんりょう
+      報告 ほうこく
+      回答 かいとう
+      これから これから
+      追加 ついか
+      情報 じょうほう
+      入院 にゅういん
+      Suica すいか
+      受信 じゅしん
+      ほか ほか
+      位置 いち
+      イチ いち
+      二 に
+      三 さん
+      サン さん
+      四 よん
+      ヨン よん
+
+  - step_name: "用件詳細_情報提供依頼"
+    words: |
+      治療の経過 ちりょうのけいか
+      MRIの実施可否 えむあーるあいのじっしかひ
+      その他 そのた
+      治療 ちりょう
+      経過 けいか
+      MRI えむあーるあい
+      あーる あーる
+      えむ えむ
+      可否 かひ
+      実施 じっし
+      ほか ほか
+      位置 いち
+      イチ いち
+      二 に
+      三 さん
+      サン さん
+
+  - step_name: "用件詳細_問合せ"
+    words: |
+      紹介状の送信依頼 しょうかいじょうのそうしんいらい
+      問い合わせの進捗確認 といあわせのしんちょくかくにん
+      その他の問合せ そのたのといあわせ
+      紹介 しょうかい
+      紹介状 しょうかいじょう
+      送信 そうしん
+      依頼 いらい
+      進捗 しんちょく
+      確認 かくにん
+      その他 そのた
+      位置 いち
+      イチ いち
+      二 に
+      三 さん
+      サン さん
+
+  - step_name: "当日予約日_情報提供依頼"
+    words: |
+      はい はい
+      いいえ いいえ
+      いえ いえ
+      いや いや
+      じゃない じゃない
+      大丈夫 だいじょうぶ
+      丈夫 じょうぶ
+      異常部 いじょうぶ
+
+  - step_name: "当日予約日_入院転院"
+    words: |
+      はい はい
+      いいえ いいえ
+      いえ いえ
+      いや いや
+      じゃない じゃない
+      大丈夫 だいじょうぶ
+      丈夫 じょうぶ
+      異常部 いじょうぶ
+
+  - step_name: "医師間共有"
+    words: |
+      はい はい
+      いいえ いいえ
+      いえ いえ
+      いや いや
+      じゃない じゃない
+      大丈夫 だいじょうぶ
+      丈夫 じょうぶ
+      異常部 いじょうぶ
+
+  - step_name: "情報提供_生年月日"
+    words: |
+      分からない わからない
+      わからない わからない
+      わかりません わかりません
+      しらない しらない
+      しりません しりません
+      わすれた わすれた
+      覚えていない おぼえていない
+      覚えてない おぼえてない
+      忘れちゃった わすれちゃった
+      知らない しらない
+      解らない わからない
+      持ってない もってない
+      動かない うごかない
+      分かりません わかりません
+      書いていない かいていない
+
+  - step_name: "入院転院_生年月日"
+    words: |
+      分からない わからない
+      わからない わからない
+      わかりません わかりません
+      しらない しらない
+      しりません しりません
+      わすれた わすれた
+      覚えていない おぼえていない
+      覚えてない おぼえてない
+      忘れちゃった わすれちゃった
+
+  - step_name: "問合せ_生年月日"
+    words: |
+      分からない わからない
+      わからない わからない
+      わかりません わかりません
+      しらない しらない
+      しりません しりません
+      わすれた わすれた
+      覚えていない おぼえていない
+      覚えてない おぼえてない
+      忘れちゃった わすれちゃった
+
+  - step_name: "医師名_入院転院"
+    words: |
+      分からない わからない
+      わからない わからない
+      わかりません わかりません
+      ません ません
+      解らない わからない
+      分かりません わかりません
+
+  - step_name: "情報提供_診療科"
+    words: |
+      IVRセンター あいぶいあーるせんたー
+      アレルギー科 あれるぎーか
+      オンコロジー おんころじー
+      セカンドオピニオン せかんどおぴにおん
+      フット外来 ふっとがいらい
+      リウマチ膠原病内科 りうまちこうげんびょうないか
+      リハビリテーション｜その他 りはびりてーしょんそのた
+      リハビリテーション｜外傷 りはびりてーしょんがいしょう
+      リハビリテーション｜心臓 りはびりてーしょんしんぞう
+      外科 げか
+      外傷整形外科 がいしょうせいけいげか
+      肝胆膵外科 かんたんすいげか
+      眼科 がんか
+      形成外科 けいせいげか
+      血液内科 けつえきないか
+      呼吸器外科 こきゅうきげか
+      呼吸器内科 こきゅうきないか
+      産科 さんか
+      歯科口腔外科 しかこうくうげか
+      耳鼻咽喉科 じびいんこうか
+      腫瘍外科 しゅようげか
+      腫瘍内科 しゅようないか
+      循環器科 じゅんかんきか
+      循環器 じゅんかんき
+      小児科 しょうにか
+      消化器内科 しょうかきないか
+      心臓血管外科 しんぞうけっかんげか
+      心療内科 しんりょうないか
+      人工透析 じんこうとうせき
+      人工膝関節センター じんこうしつかんせつせんたー
+      腎臓内科 じんぞうないか
+      睡眠時無呼吸科 すいみんじむこきゅうか
+      整形外科 せいけいげか
+      脊椎脊髄外科 せきついせきずいげか
+      総合診療科 そうごうしんりょうか
+      総合内科 そうごうないか
+      糖尿病内分泌科 とうにょうびょうないぶんぴつか
+      頭頸部外科 とうけいぶげか
+      内視鏡 ないしきょう
+      内分泌外科 ないぶんぴつげか
+      乳腺外科 にゅうせんげか
+      脳神経外科 のうしんけいげか
+      脳神経内科 のうしんけいないか
+      脳卒中診療科 のうそっちゅうしんりょうか
+      泌尿器科 ひにょうきか
+      皮膚科 ひふか
+      婦人科 ふじんか
+      放射線腫瘍科 ほうしゃせんしゅようか
+      予防医学センター よぼういがくせんたー
+
+  - step_name: "入院転院_診療科"
+    words: |
+      IVRセンター あいぶいあーるせんたー
+      アレルギー科 あれるぎーか
+      オンコロジー おんころじー
+      セカンドオピニオン せかんどおぴにおん
+      フット外来 ふっとがいらい
+      リウマチ膠原病内科 りうまちこうげんびょうないか
+      リハビリテーション｜その他 りはびりてーしょんそのた
+      リハビリテーション｜外傷 りはびりてーしょんがいしょう
+      リハビリテーション｜心臓 りはびりてーしょんしんぞう
+      外科 げか
+      外傷整形外科 がいしょうせいけいげか
+      肝胆膵外科 かんたんすいげか
+      眼科 がんか
+      形成外科 けいせいげか
+      血液内科 けつえきないか
+      呼吸器外科 こきゅうきげか
+      呼吸器内科 こきゅうきないか
+      産科 さんか
+      歯科口腔外科 しかこうくうげか
+      耳鼻咽喉科 じびいんこうか
+      腫瘍外科 しゅようげか
+      腫瘍内科 しゅようないか
+      循環器科 じゅんかんきか
+      循環器 じゅんかんき
+      小児科 しょうにか
+      消化器内科 しょうかきないか
+      心臓血管外科 しんぞうけっかんげか
+      心療内科 しんりょうないか
+      人工透析 じんこうとうせき
+      人工膝関節センター じんこうしつかんせつせんたー
+      腎臓内科 じんぞうないか
+      睡眠時無呼吸科 すいみんじむこきゅうか
+      整形外科 せいけいげか
+      脊椎脊髄外科 せきついせきずいげか
+      総合診療科 そうごうしんりょうか
+      総合内科 そうごうないか
+      糖尿病内分泌科 とうにょうびょうないぶんぴつか
+      頭頸部外科 とうけいぶげか
+      内視鏡 ないしきょう
+      内分泌外科 ないぶんぴつげか
+      乳腺外科 にゅうせんげか
+      脳神経外科 のうしんけいげか
+      脳神経内科 のうしんけいないか
+      脳卒中診療科 のうそっちゅうしんりょうか
+      泌尿器科 ひにょうきか
+      皮膚科 ひふか
+      婦人科 ふじんか
+      放射線腫瘍科 ほうしゃせんしゅようか
+      予防医学センター よぼういがくせんたー
+
+  - step_name: "問合せ_診療科"
+    words: |
+      IVRセンター あいぶいあーるせんたー
+      アレルギー科 あれるぎーか
+      オンコロジー おんころじー
+      セカンドオピニオン せかんどおぴにおん
+      フット外来 ふっとがいらい
+      リウマチ膠原病内科 りうまちこうげんびょうないか
+      リハビリテーション｜その他 りはびりてーしょんそのた
+      リハビリテーション｜外傷 りはびりてーしょんがいしょう
+      リハビリテーション｜心臓 りはびりてーしょんしんぞう
+      外科 げか
+      外傷整形外科 がいしょうせいけいげか
+      肝胆膵外科 かんたんすいげか
+      眼科 がんか
+      形成外科 けいせいげか
+      血液内科 けつえきないか
+      呼吸器外科 こきゅうきげか
+      呼吸器内科 こきゅうきないか
+      産科 さんか
+      歯科口腔外科 しかこうくうげか
+      耳鼻咽喉科 じびいんこうか
+      腫瘍外科 しゅようげか
+      腫瘍内科 しゅようないか
+      循環器科 じゅんかんきか
+      循環器 じゅんかんき
+      小児科 しょうにか
+      消化器内科 しょうかきないか
+      心臓血管外科 しんぞうけっかんげか
+      心療内科 しんりょうないか
+      人工透析 じんこうとうせき
+      人工膝関節センター じんこうしつかんせつせんたー
+      腎臓内科 じんぞうないか
+      睡眠時無呼吸科 すいみんじむこきゅうか
+      整形外科 せいけいげか
+      脊椎脊髄外科 せきついせきずいげか
+      総合診療科 そうごうしんりょうか
+      総合内科 そうごうないか
+      糖尿病内分泌科 とうにょうびょうないぶんぴつか
+      頭頸部外科 とうけいぶげか
+      内視鏡 ないしきょう
+      内分泌外科 ないぶんぴつげか
+      乳腺外科 にゅうせんげか
+      脳神経外科 のうしんけいげか
+      脳神経内科 のうしんけいないか
+      脳卒中診療科 のうそっちゅうしんりょうか
+      泌尿器科 ひにょうきか
+      皮膚科 ひふか
+      婦人科 ふじんか
+      放射線腫瘍科 ほうしゃせんしゅようか
+      予防医学センター よぼういがくせんたー
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "Gen1→Gen3 移管。同施設の診療フローは別途 Gen3 化済（gen1_信州大学医学部附属病院_診療.md）。本フローは inbound 病診連携受付（医療機関スタッフからの架電）で、患者からの架電を扱う診療フローとは構造が異なる。"
+  - "用件は4分類: FAX到着確認/情報提供依頼/入院・転院依頼/その他問合せ。各用件で聴取項目が大きく異なるため、scenario_flow は4ルート並列の構造。"
+  - "用件の DTMF 番号は冒頭 TTS で明示する: 1=FAX到着確認, 2=情報提供依頼, 3=入院・転院依頼, 4=その他問合せ。"
+  - "復唱（echo_back: true）対象は 5 ステップ（施設名聴取 / 用件確認 / 用件詳細_FAX到着確認 / 用件詳細_情報提供依頼 / 用件詳細_問合せ）のみ。生年月日・診療科・自由テキスト・Yes/No 系は復唱なし。"
+  - "PatientName サブフロー（氏名聴取）は1本のみ。情報提供依頼/入院転院依頼/その他問合せ(紹介状送信・進捗確認) の3ルートから同じ flowname を呼び出して共有する。flow_structure.subflows[] には1エントリのみ登録（qa_validator E-12 準拠）。"
+  - "患者生年月日は『生年月日フリー』を踏襲し自由テキストで保存。和暦/西暦の正規化は行わない。『分からない』『わかりません』『忘れた』等も受容。"
+  - "47 診療科に no_result_default『登録なし』を設定。OpenAI が NO_RESULT を返した場合、context に『登録なし』を保存してリトライ（モジュール選定ガイド 2.5 準拠）。"
+  - "代表番号 0263-37-3370 はリトライ上限到達時の代表案内 TTS で 3 連呼する（元 yaml の代表案内箱を踏襲）。"
+  - "Gen1 の API_DRJOY_CONTEXT_SETTINGS / API_DRJOY による『入電番号→施設名 自動取得』機能は本設計書では非採用。施設名・担当者名は毎回 hearing で聴取する方針（Gen3 アーキテクチャでは標準モジュールに該当する API 呼び出し機能がないため。詳細は確認レポート N-3 参照）。"
+  - "Gen1 のテスト系箱（テスト番号判別 / テスト：DrJOY渡部 / テスト：DrJOY清水 / テスト：DrJOY / テスト施設名 / 稼働前）は本番フローで未使用のため移管対象外。"
+  - "Gen1 の主要動線では転送（API_DRJOY_1 → 転送 → 転送完了）は使われていないため、本設計書では call_transfer ブロック未配置。転送が必要になった場合は別途設計を再検討する。"
+  - "SMS は本フロー全体で送信しない（医療機関スタッフからの架電のため、患者向け SMS は対象外）。全終話の sms_flag=-1。"
+  - "用件確認で同音異義語が多い: 店員/入金/返品/天神依頼→入院・転院依頼、Suica/受信→これから受診の方の追加情報、位置/イチ→1番系、ファックス→FAX到着確認 等。OpenAI プロンプトで吸収する。"
+  - "RAG/FAQ サブフローは未配置（pattern: none）。本フローは医療機関スタッフ向け業務窓口で患者 FAQ を扱わないため。"
+  - "営業時間 平日 8:30〜17:15 の Brekeke 側 acceptance_times パラメータ詳細（祝日リスト・年末年始定義）は Dr.JOY 側で設定する。"
+  - "context_field は Dr.JOY デフォルト 11 件 + 案件固有 10 件（organizationName / staffName / subClassification / otherInquiryContent / replyDeadline / desiredTiming / doctorSharing / doctorName / sameDayConfirmation / additionalInquiry）。フロー内で実際に使うのは案件固有10件 + classification + patientName + clinicalDepartment + patientDateOfBirth + status + telephoneNumber + dateOfCall + callId。reservationDate / medicalCardNumber / additionalPhoneNumber / reason はデフォルト維持のため定義のみ残し、本フローでは未使用。"
+
+# --- セクション12: 要確認事項 ---
+confirmation_items:
+  - item: "office_id"
+    resolved: false
+    notes: "Dr.JOY管理画面で確認。設計書・フローJSONには直接含めない（NON-BLOCKER 共通）"
+
+  - item: "営業時間 acceptance_times の祝日リスト・年末年始定義"
+    resolved: false
+    notes: "平日 8:30〜17:15 は元 yaml 確定。祝日リスト・年末年始の具体的範囲は Dr.JOY 側で設定が必要"
+
+  - item: "Gen1 の『入電番号→施設名 自動取得』機能の Gen3 移管方針"
+    resolved: false
+    notes: "本設計書では非採用（毎回 hearing で聴取）。将来的に Gen3 で API 呼び出しモジュールが整備された時点で再設計を検討"
+
+  - item: "転送機能の要否"
+    resolved: false
+    notes: "Gen1 では『転送 / 転送完了 / 転送不可』箱が定義されているが主要動線では未使用。Gen3 でも未配置。必要なら再設計が必要"
+
+  - item: "SMS送信文面の設定（Dr.JOY側）"
+    resolved: false
+    notes: "本フローは sms_flag=-1（送信なし）で統一しているため Dr.JOY 側設定不要。要否を改めて確認すること"

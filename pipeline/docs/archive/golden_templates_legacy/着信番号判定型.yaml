@@ -1,0 +1,279 @@
+# ゴールデンテンプレート: 着信番号判定型（Caller Type Branching）
+# 着信電話番号から携帯/固定/非通知を判定し、電話番号聴取方法を分岐するパターン。
+# 電話番号聴取サブフローのリファレンス実装。
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "テストクリニック"
+  group_name: "テストCL"
+  flow_name: "テストCL$電話番号聴取"
+  target_facility: "本院のみ"
+  office_id: "67890"
+  phone_number: "03-9876-5432"
+  business_hours: "祝日除く月〜土 9:00〜18:00"
+  flow_type: "subflow"
+  work_type: "new"
+  environment: "demo"
+
+# --- セクション2: フロー構成 ---
+# 電話番号聴取サブフローの単体定義。
+# メインフローからCustom Jump to Flowで呼び出される前提。
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "テストCL$電話番号聴取"
+      role: "sub"
+      description: "着信番号から携帯/固定を判別し、携帯は復唱確認、固定は手動聴取で電話番号を取得するサブフロー"
+  subflows:
+    - name: "テストCL$電話番号聴取"
+      target: "電話番号聴取"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "メインフローの冒頭チェーン完了後に遷移。結果返却でメインフローに戻る"
+
+# --- セクション3: フローの目的 ---
+purpose: "着信電話番号から携帯電話か固定電話かを判定し、携帯の場合は着信番号を復唱確認、固定電話・非通知の場合は連絡先電話番号を手動聴取する。最終的にscript_携帯判別で携帯/その他を正規表現判定し、結果をメインフローに返却する。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "テストCL$電話番号聴取"
+    diagram: |
+      incoming-classifier
+          ├─ 非通知 → 電話番号_手動聴取ルート（下記固定ルートと合流）
+          ├─ 携帯(090/080/070) → 携帯確認_アナウンス(TTS)
+          │     → 入力_携帯確認(STT: DTMF_AmiVoice)
+          │         → OpenAI_携帯確認(generate_by_OpenAI)
+          │             ├─ 肯定 → saveContext2DB_携帯電話番号 → script_携帯判別 → 結果返却
+          │             └─ 否定 → 電話番号_手動聴取ルートへ合流
+          └─ 通常(固定電話) → 電話番号_手動聴取ルート
+                                  ↓
+                              電話番号聴取_アナウンス(TTS)
+                                → 入力_電話番号(STT: DTMF_AmiVoice, 11桁)
+                                  → OpenAI_電話番号正規化(generate_by_OpenAI)
+                                      ├─ 成功 → 電話番号復唱_アナウンス(TTS: Re-confirmation)
+                                      │           → 入力_電話番号復唱確認(STT: DTMF_AmiVoice)
+                                      │               → OpenAI_電話番号復唱確認(generate_by_OpenAI)
+                                      │                   ├─ 肯定 → saveContext2DB_連絡先電話番号 → script_携帯判別 → 結果返却
+                                      │                   └─ 否定 → 電話番号聴取_アナウンスへ戻る（リトライ）
+                                      └─ NO_RESULT → リトライ_電話番号 → 電話番号聴取_アナウンスへ戻る
+    notes: "incoming-classifierは着信番号のプレフィックス(090/080/070)で携帯判定。script_携帯判別は最終的な正規表現判定で携帯/その他を確定する"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+# 電話番号聴取に必要な最小限のフィールド。
+# メインフローのsaveContextModel2DBで定義済みのフィールドを参照する前提。
+context_fields:
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "着信番号自動格納。携帯ルートではこの値を復唱確認に使用"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "固定電話・非通知ルートで手動聴取した電話番号を格納"
+
+  - context_name: "phonetype"
+    context_name_jp: "電話種別"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "script_携帯判別の判定結果。携帯/その他 のいずれか"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "携帯確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "telephoneNumber"
+    openai_processing: "judge"
+    output_format: "label"
+    output_labels:
+      - "肯定"
+      - "否定"
+    notes: "着信番号が携帯の場合、その番号でよいか確認。DTMF 1=はい, 2=いいえ"
+
+  - order: 2
+    name: "電話番号手動聴取"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 11
+    retry_count: 2
+    echo_back: true
+    save_to: "additionalPhoneNumber"
+    openai_processing: "normalize"
+    output_format: "number"
+    output_labels: []
+    notes: "固定電話・非通知ルート。11桁の電話番号をDTMFまたは音声で聴取"
+
+  - order: 3
+    name: "電話番号復唱確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "additionalPhoneNumber"
+    openai_processing: "judge"
+    output_format: "label"
+    output_labels:
+      - "肯定"
+      - "否定"
+    notes: "手動聴取した電話番号の復唱確認。DTMF 1=はい, 2=いいえ"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "携帯確認"
+    tts_announcement: "お電話番号を確認いたします。ご連絡先は、{着信番号の復唱}、でよろしいでしょうか。よろしければ1を、違う番号をご希望の場合は2を押してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "肯定"
+        - "否定"
+      mapping:
+        - input: "DTMF 1 または「はい」「そうです」「お願いします」等の肯定表現"
+          output: "肯定"
+        - input: "DTMF 2 または「いいえ」「違います」「別の番号」等の否定表現"
+          output: "否定"
+      no_result_condition: "上記いずれにも該当しない発話"
+    save_to: "telephoneNumber"
+    next_step: "肯定→saveContext2DB_携帯電話番号→script_携帯判別, 否定→電話番号手動聴取ルートへ合流"
+    retry_failure: "end_failure"
+
+  - step_name: "電話番号手動聴取"
+    tts_announcement: "ご連絡先のお電話番号を、数字11桁でご入力ください。入力が終わりましたら、シャープを押してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "正規化された電話番号（ハイフンなし11桁）"
+      mapping:
+        - input: "DTMF入力または音声での電話番号発話"
+          output: "数字のみ11桁に正規化（例: 09012345678）"
+      no_result_condition: "電話番号として解釈できない入力、桁数不足"
+    save_to: "additionalPhoneNumber"
+    next_step: "電話番号復唱確認"
+    retry_failure: "end_failure"
+
+  - step_name: "電話番号復唱確認"
+    tts_announcement: "お電話番号は、{聴取した番号の復唱}、でよろしいでしょうか。よろしければ1を、修正する場合は2を押してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "肯定"
+        - "否定"
+      mapping:
+        - input: "DTMF 1 または「はい」「そうです」「合っています」等の肯定表現"
+          output: "肯定"
+        - input: "DTMF 2 または「いいえ」「違います」「もう一度」等の否定表現"
+          output: "否定"
+      no_result_condition: "上記いずれにも該当しない発話"
+    save_to: "additionalPhoneNumber"
+    next_step: "肯定→saveContext2DB_連絡先電話番号→script_携帯判別, 否定→電話番号手動聴取へ戻る"
+    retry_failure: "end_failure"
+
+# --- セクション8: 終話パターン ---
+# サブフローのため直接切断はしない。結果返却でメインフローに戻る。
+# 終話_失敗のみサブフロー内で切断する。
+termination_patterns:
+  - name: "RETURN_携帯確定"
+    condition: "携帯確認で肯定、またはscript_携帯判別で携帯判定"
+    tts_announcement: ""
+    status: ""
+    sms_flag: ""
+    completion_flag_name: ""
+
+  - name: "RETURN_固定確定"
+    condition: "電話番号手動聴取完了後、script_携帯判別でその他判定"
+    tts_announcement: ""
+    status: ""
+    sms_flag: ""
+    completion_flag_name: ""
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限超過（携帯確認または電話番号聴取のいずれか）"
+    tts_announcement: "お電話番号を確認できませんでした。恐れ入りますが、もう一度おかけ直しください。"
+    status: ""
+    sms_flag: ""
+    completion_flag_name: ""
+
+# smsFlag分岐設計
+# サブフローのためsmsFlag制御はメインフローで行う。
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "携帯確認_アナウンス"
+    purpose: "携帯着信番号の復唱確認プロンプト"
+    announcement: "お電話番号を確認いたします。ご連絡先は、#data#、でよろしいでしょうか。よろしければ1を、違う番号をご希望の場合は2を押してください。"
+
+  - module_name: "電話番号聴取_アナウンス"
+    purpose: "連絡先電話番号の入力指示"
+    announcement: "ご連絡先のお電話番号を、数字11桁でご入力ください。入力が終わりましたら、シャープを押してください。"
+
+  - module_name: "電話番号復唱_アナウンス"
+    purpose: "聴取した電話番号の復唱確認（Re-confirmation）"
+    announcement: "お電話番号は、#data#、でよろしいでしょうか。よろしければ1を、修正する場合は2を押してください。"
+
+  - module_name: "終話_聴取失敗"
+    purpose: "電話番号聴取失敗時の終話アナウンス"
+    announcement: "お電話番号を確認できませんでした。恐れ入りますが、もう一度おかけ直しください。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "携帯確認"
+    words: |
+      はい はい
+      いいえ いいえ
+      そうです そうです
+      違います ちがいます
+      お願いします おねがいします
+      結構です けっこうです
+
+  - step_name: "電話番号手動聴取"
+    words: |
+      ゼロ ぜろ
+      レイ れい
+      マル まる
+
+  - step_name: "電話番号復唱確認"
+    words: |
+      はい はい
+      いいえ いいえ
+      そうです そうです
+      違います ちがいます
+      合っています あっています
+      もう一度 もういちど
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "incoming-classifierは着信番号プレフィックス(090/080/070)で携帯を一次判定するが、最終判定はscript_携帯判別の正規表現で行う"
+  - "script_携帯判別は /^0[789]0\\d{8}$/ の正規表現で携帯番号を判定し、phonetypeに「携帯」または「その他」を設定する"
+  - "携帯ルートでは着信番号(telephoneNumber)をそのまま使用するため、additionalPhoneNumberへの書き込みは行わない"
+  - "固定電話・非通知ルートでは聴取した番号をadditionalPhoneNumberに保存する"
+  - "サブフローの出口にはscript_結果返却_電話番号を配置し、$runner.setResult()でメインフローに結果を返却する"
+  - "復唱確認のTTSで #data# を使用して聴取済みの電話番号を読み上げる"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "office_id（67890はダミー値。本番設定時に要変更）"
+    resolved: false
+  - item: "携帯確認で否定の場合、固定ルートに合流する仕様で正しいか"
+    resolved: true
+  - item: "電話番号聴取失敗時の動作（現在: 終話切断。メインフローに戻す選択肢もあり）"
+    resolved: true
+  - item: "非通知着信時、電話番号手動聴取ルートに流す仕様で正しいか"
+    resolved: true

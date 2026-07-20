@@ -1,0 +1,107 @@
+# Pattern 6 (テストフロー) — 用件分類 決定論スクリプト (inquiry_classifier) 単体受入テスト
+#
+# 検証対象: modules/inquiry_classifier/script.js（このモジュールの正本）
+#   亀田 総合相談室の OpenAI_用件確認 を置き換える @General$Script（相談室語彙・優先順位）。
+#
+# 狙い: Python オラクル (test_oracle.py 30/30) と同一ケースを Brekeke 実機 (Nashorn/ES5) で単体実行し、
+#   オラクル↔実機のパリティを確証する（P7 連結はラベル注入のみ。本テストでキーワード分類の全入力耐性を検証）。
+#   script_file で正本 JS を そのまま読み込む。input_placeholder "{{INPUT_MODULE}}" を case ごとの <id>_in に置換するだけ。
+#   ※ {{CONTEXT_NAME}}/{{CONTEXT_DISPLAY_TYPE}} は文字列リテラルとして無害に残り、saveContext は try/catch 内のため
+#     setResult（分類結果）には影響しない。
+#
+# 確認: Brekeke ログを grep "[TEST FAIL]" で 0 件なら全 PASS。末尾 "[TEST DONE]" で全 30 ケース完走。
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$用件分類"
+  flow_name: "テスト$用件分類"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$用件分類"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] 用件分類 決定論 単体受入 (inquiry_classifier, 30 ケース)");
+      $runner.getLogger().info("対象: modules/inquiry_classifier/script.js / オラクル 30/30 PASS 済");
+      $runner.getLogger().info("grep [TEST FAIL] = 0 なら実機も全 PASS");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: matrix
+
+  - step: matrix
+    type: script_test_matrix
+    script_file: "../../script.js"
+    input_placeholder: "{{INPUT_MODULE}}"
+    final_next: ログ_終了
+    cases:
+      # --- 相談（相談室業務）---
+      - {id: s01, input: "退院の相談をしたいのですが", expected: "相談"}
+      - {id: s02, input: "転院について相談です", expected: "相談"}
+      - {id: s03, input: "ケアマネージャーに相談したい", expected: "相談"}
+      - {id: s04, input: "在宅介護のことで", expected: "相談"}
+      - {id: s05, input: "総合相談室をお願いします", expected: "相談"}
+      - {id: s06, input: "ソーシャルワーカーさんはいますか", expected: "相談"}
+      - {id: s07, input: "医療相談です", expected: "相談"}
+      # --- 相談予約は相談優先（弾かない）---
+      - {id: sy01, input: "相談の予約を取りたい", expected: "相談"}
+      - {id: sy02, input: "退院調整の予約をお願いします", expected: "相談"}
+      # --- 予約（弾く対象）---
+      - {id: y01, input: "予約をお願いします", expected: "予約"}
+      - {id: y02, input: "受診したいのですが", expected: "予約"}
+      - {id: y03, input: "予約の変更をしたい", expected: "予約"}
+      - {id: y04, input: "予約をキャンセルしたい", expected: "予約"}
+      - {id: y05, input: "診察の予約です", expected: "予約"}
+      - {id: y06, input: "外来予約をお願いします", expected: "予約"}
+      # --- 大代表 ---
+      - {id: d01, input: "代表番号にかけたかったんです", expected: "大代表"}
+      - {id: d02, input: "別の部署をお願いします", expected: "大代表"}
+      - {id: d03, input: "かけ間違えました", expected: "大代表"}
+      # --- 定型案内 ---
+      - {id: g01, input: "駐車場はありますか", expected: "定型案内"}
+      - {id: g02, input: "受付時間を教えてください", expected: "定型案内"}
+      - {id: g03, input: "面会時間は何時までですか", expected: "定型案内"}
+      - {id: g04, input: "病院の電話番号を知りたい", expected: "定型案内"}
+      - {id: g05, input: "行き方を教えて", expected: "定型案内"}
+      # --- その他（伝言折返しへ）---
+      - {id: o01, input: "請求書のことで聞きたいのですが", expected: "その他"}
+      - {id: o02, input: "ちょっとお尋ねしたいことがあります", expected: "その他"}
+      # --- NO_RESULT（無音/フィラー/用件なし/数字のみ）---
+      - {id: n01, input: "", expected: "NO_RESULT"}
+      - {id: n02, input: "えーっと", expected: "NO_RESULT"}
+      - {id: n03, input: "あのー", expected: "NO_RESULT"}
+      - {id: n04, input: "特にありません", expected: "NO_RESULT"}
+      - {id: n05, input: "12345", expected: "NO_RESULT"}
+
+  - step: ログ_終了
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST DONE] 用件分類 単体受入 全 30 ケース完走");
+      $runner.setResult("done");
+    next: 終了
+
+  - step: 終了
+    type: termination
+    termination_ref: "END_テスト終了"
+
+termination_patterns:
+  - name: "END_テスト終了"
+    condition: "テスト完走"
+    tts_announcement: "テストを終了します。"
+    status: "1"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_テスト終了"

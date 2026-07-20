@@ -1,0 +1,587 @@
+# 設計書 — 井上病院 診療
+# 生成元: @director エージェント
+# 生成日: 2026/05/12
+# 確認レポート: output/scenarios/井上病院_診療/確認レポート_井上病院_診療_20260512.md
+# ベース: docs/migration/gen1_井上病院_診療.md (Gen1→Gen3 移管) + commubo抽出 yaml 8 本
+#
+# 主要設計ポイント:
+#   - 経路判断 hearing で WEB 受付 / 電話受付 の 2 値分岐（save_to=classification, rangeValues=[WEB, 電話]）
+#   - 同一 context を CMR で 2 箇所参照: 生年月日後（用件分岐: 問い合わせ内容聴取の有無）と終話前（受付完了 TTS の差替）
+#   - 個人情報サブフロー連鎖: 診察券番号 → 氏名 → 生年月日 → （ルート分岐）→ 連絡先
+#   - 電話ルートのみ問い合わせ内容聴取（自由テキスト hearing, output_format=text）
+#   - 3 回失敗 → END_聴取失敗（代表案内 TTS 上書き、status=2）
+#   - 営業時間: 祝日除く 月〜金 8:30-16:00（acceptance_times モジュールで自動制御）
+#   - テスト用箱（渡部・千葉）/ END_受付時間説明（孤児箱）は本番投入版で除外
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "井上病院"
+  scenario_name: "診療"
+  group_name: "井上病院"
+  flow_name: "井上病院$診療"
+  target_facility: "井上病院（本院のみ）"
+  office_id: "TODO_要確認"
+  phone_number: "TODO_要確認"
+  business_hours: "祝日を除く、月曜日〜金曜日 8:30〜16:00"
+  flow_type: "subflow"
+  work_type: "gen1_migration"
+  environment: "demo"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "井上病院$診療"
+      role: "main"
+      description: "冒頭チェーン → 経路判断（WEB / 電話 2 値）→ 診察券番号聴取 → 氏名聴取 → 生年月日聴取 → 用件分岐 CMR（電話=問い合わせ内容聴取あり / WEB=スキップ）→ 連絡先聴取 → 終話分岐 CMR（WEB=URL 案内 / 電話=折り返し案内）"
+
+  subflows:
+    - name: "井上病院$診察券番号聴取"
+      target: "診察券番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。静的JSONコピー。Gen1 ID聞き取り.yaml 相当（発話 / DTMF 8 桁 / 「分からない」分岐）。「分からない」発話で診察券番号未保存のまま氏名聴取へ進む（main.yaml: ID 聞き取り次は無条件で患者氏名聞き取り）"
+
+    - name: "井上病院$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。静的JSONコピー。Gen1 患者氏名聞き取り.yaml 仕様: 復唱なし（聞き取り完了 = 「かしこまりました」）。受診者本人のフルネームのみ（PatientName 1 枠 / subject='patient'）"
+
+    - name: "井上病院$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。静的JSONコピー。DOB Re-confirmation あり。Gen1 生年月日聴取.yaml の和暦/西暦自動判別（大正/昭和/平成/令和元年）は Gen3 では OpenAI 日付正規化（YYYY-MM-DD 固定出力）に完全置換。DTMF 8 桁対応"
+
+    - name: "井上病院$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9/10 準拠。静的JSONコピー。incoming-classifier→携帯確認/連絡先聴取→Phone Normalization→復唱確認→携帯判別→結果返却。Gen1 連絡先聴取.yaml + 電話番号区切り.yaml（フリー0120/0800 / 携帯 / IP / 固定 2〜5 桁市外局番）はサブフロー内部の標準処理に集約。非通知時携帯推し TTS（Gen1 ヒアリング）は要確認（NON-BLOCKER N-9）"
+
+# --- セクション3: フローの目的 ---
+purpose: "井上病院の予約専用 AI 電話。患者からの電話を受け、（A）WEB 受付（依頼内容入力用 URL を SMS で送信）または（B）電話受付（折り返し電話 / SMS で担当者連絡）の 2 系統に振り分けて受付完了を自動化する。診察券番号・氏名・生年月日・連絡先電話番号を聴取し、電話受付の場合は問い合わせ内容も自由テキストで取得する。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "井上病院$診療"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → 完了フラグ_非通知(saveCompletionFlag2db, status=2, smsFlag=-1)
+            │            → 非通知_アナウンス(TTS) → 切断
+            └─ 通常/携帯/固定/その他 → acceptance_times
+                          ├─ 時間外/祝日 → 完了フラグ_時間外(saveCompletionFlag2db, status=6, smsFlag=-1)
+                          │                  → 時間外_アナウンス(TTS, 祝日除く月〜金 8:30-16:00 案内) → 切断
+                          └─ 受付可 → 冒頭_アナウンス(TTS)
+
+      ─── 経路判断（Pattern B = WEB / 電話 2 値分岐、save_to=classification）───
+      冒頭_アナウンス → 経路判断(hearing, enum, save_to=classification)
+        → 次へ_アナウンス("それでは、")
+        → 診察券番号聴取(subflow)
+        → 氏名聴取(subflow)
+        → 次に_アナウンス("次に、")
+        → 生年月日聴取(subflow)
+        → CMR_用件分岐(ContextMatchRouter, reference_module=OpenAI_経路判断)
+
+      ─── CMR_用件分岐（WEB=問い合わせスキップ / 電話=問い合わせあり）───
+      CMR_用件分岐
+        ├─ WEB → 最後に_アナウンス("最後に、") → 連絡先聴取(subflow)
+        └─ other(=電話) → 続いて_アナウンス("続いて、")
+                          → 問い合わせ内容聴取(hearing, text, retry_failure=end_failure)
+                          → 最後に_アナウンス("最後に、")
+                          → 連絡先聴取(subflow)
+
+      ─── CMR_終話分岐（同 context を再利用、終話 TTS を 2 集約）───
+      連絡先聴取 → CMR_終話分岐(ContextMatchRouter, reference_module=OpenAI_経路判断)
+        ├─ WEB → END_受付完了_WEB(TTS, URL を SMS で送信案内、status=1, smsFlag=1)
+        └─ other(=電話) → END_受付完了_電話(TTS, 担当者からショートメール or 折り返し電話案内、status=1, smsFlag=-1)
+
+      ─── リトライ失敗時の代表案内（問い合わせ内容聴取のみ自動配線、サブフロー 3 種は手動タスク）───
+      問い合わせ内容聴取 retry 失敗 → END_聴取失敗(TTS, 代表案内、status=2, smsFlag=-1)
+      ※ サブフロー（診察券番号 / 氏名 / 電話番号）内 retry 失敗 → 代表案内 TTS → 切断 を Brekeke UI で手動接続（confirmation_items 参照）
+    notes: |
+      Gen1 commubo の 100+ 個の「箱」を Gen3 6 ブロック型（opening / announcement / hearing / subflow / context_match_router / termination）にマッピング。
+      経路判断は hearing で 1 ブロック、CMR で 2 箇所参照することで Gen1 の「分岐」「分岐_1」二箱を集約。
+      Gen1 のテスト用箱（渡部 / 千葉発話で 経路判断 へ早期分岐）は本番投入版で除外（移管ノート明記）。
+      Gen1 の END_受付時間説明（代表電話 9:00-17:00 案内）は孤児箱のため除外（NON-BLOCKER N-6）。
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # === 冒頭ブロック（2 ブロック 1 セット必須）===
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 経路判断
+
+  # === 経路判断（hearing, enum=[WEB,電話]、save_to=classification）===
+  - step: 経路判断
+    type: hearing
+    output_format: enum
+    save_to: classification
+    echo_back: false
+    conditions:
+      - match: "WEB"
+        next: 次へ_アナウンス
+      - match: "電話"
+        next: 次へ_アナウンス
+      - match: "other"
+        next: 次へ_アナウンス
+
+  # === 「それでは、」遷移アナウンス ===
+  - step: 次へ_アナウンス
+    type: announcement
+    next: 診察券番号聴取
+
+  # === 診察券番号聴取（subflow）===
+  - step: 診察券番号聴取
+    type: subflow
+    flowname: "井上病院$診察券番号聴取"
+    next: 氏名聴取
+
+  # === 氏名聴取（subflow）===
+  - step: 氏名聴取
+    type: subflow
+    flowname: "井上病院$氏名聴取"
+    next: 次に_アナウンス
+
+  # === 「次に、」遷移アナウンス ===
+  - step: 次に_アナウンス
+    type: announcement
+    next: 生年月日聴取
+
+  # === 生年月日聴取（subflow）===
+  - step: 生年月日聴取
+    type: subflow
+    flowname: "井上病院$生年月日聴取"
+    next: CMR_用件分岐
+
+  # === CMR_用件分岐（WEB = 問い合わせスキップ / 電話 = 問い合わせあり）===
+  - step: CMR_用件分岐
+    type: context_match_router
+    reference_module: "OpenAI_経路判断"
+    conditions:
+      - match: "WEB"
+        next: 最後に_アナウンス
+      - match: "other"
+        next: 続いて_アナウンス
+
+  # === 電話ルート: 「続いて、」遷移アナウンス → 問い合わせ内容聴取 ===
+  - step: 続いて_アナウンス
+    type: announcement
+    next: 問い合わせ内容聴取
+
+  - step: 問い合わせ内容聴取
+    type: hearing
+    output_format: text
+    save_to: inquiryContent
+    echo_back: false
+    next: 最後に_アナウンス
+
+  # === 「最後に、」遷移アナウンス（WEB / 電話 両ルートから合流）===
+  - step: 最後に_アナウンス
+    type: announcement
+    next: 連絡先聴取
+
+  # === 連絡先聴取（subflow）===
+  - step: 連絡先聴取
+    type: subflow
+    flowname: "井上病院$電話番号聴取"
+    next: CMR_終話分岐
+
+  # === CMR_終話分岐（経路判断の context を再利用、終話 TTS を 2 集約）===
+  - step: CMR_終話分岐
+    type: context_match_router
+    reference_module: "OpenAI_経路判断"
+    conditions:
+      - match: "WEB"
+        next: END_受付完了_WEB
+      - match: "other"
+        next: END_受付完了_電話
+
+  # === 終話ブロック群 ===
+  - step: END_受付完了_WEB
+    type: termination
+    termination_ref: "END_受付完了_WEB"
+
+  - step: END_受付完了_電話
+    type: termination
+    termination_ref: "END_受付完了_電話"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "予約方法"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "WEB"
+      - id: "2"
+        order: "2"
+        value: "電話"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "Gen1 経路判断.yaml 相当。WEB 受付（URL を SMS で送信）/ 電話受付（折り返し電話 or SMS）の 2 値分岐。CMR_用件分岐 と CMR_終話分岐 の 2 箇所で参照"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "患者氏名（カタカナ変換済み）。サブフローで聴取。Gen1 仕様: 復唱なし"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "和暦/西暦自動変換。サブフローで聴取。DOB Re-confirmation あり。Gen1 の和暦/西暦判定（大正/昭和/平成/令和元年）は OpenAI 日付正規化に統一"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "8 桁。発話 / DTMF 両対応。「分からない」発話で未保存のまま次へ進む（Gen1 ID聞き取り.yaml わからないセット 仕様）"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "聴取する連絡先電話番号。サブフローで聴取。携帯着信なら着信番号を自動採用、非通知時は携帯推し聴取（要確認 NON-BLOCKER N-9）"
+
+  - context_name: "inquiryContent"
+    context_name_jp: "問い合わせ内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "電話受付ルートのみ聴取。Gen1 問い合わせ内容聴取.yaml 相当。フリーテキスト（『8月1日の内科予約を8月8日以降に変更してほしい』のような具体的内容）"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=受付完了（WEB / 電話）2=非通知・聴取失敗（代表案内）6=時間外"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "入電日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値。displayType/itemDefault/deletable は変更不可"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "経路判断"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "WEB"
+      - "電話"
+    notes: "Gen1 経路判断.yaml 相当。Yes/No 判定だが結果値は WEB / 電話 の 2 値を context 化。STT テンプレート: hearing_yesno_common（はい / いいえ / 違います / 大丈夫 / OK / 持ってない 等）を流用。OpenAI で 『はい』系発話 → WEB、『いいえ』『違う』系 → 電話 に正規化"
+
+  - order: 2
+    name: "問い合わせ内容聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "inquiryContent"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: "Gen1 問い合わせ内容聴取.yaml 相当。電話受付ルートのみ。フリーテキスト保存（OpenAI は要約のみで分類しない）。3 回失敗 → END_聴取失敗（代表案内）"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "冒頭_アナウンス"
+    tts_announcement: "お電話ありがとうございます。井上病院の、予約専用AI電話です。"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "経路判断"
+    retry_failure: "none"  # announcement のためリトライ概念なし
+
+  - step_name: "経路判断"
+    tts_announcement: "予約方法についてお伺いします。ショートメールを受信できる携帯電話をお持ちの方は、WEB受付が可能です。WEB受付をご希望の場合は『はい』、固定電話や、このまま電話での受付をご希望の場合は『いいえ』とお答えください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "WEB"
+        - "電話"
+      mapping:
+        - input: "「はい」「OK」「大丈夫」「お願いします」等の肯定発話"
+          output: "WEB"
+        - input: "「いいえ」「違います」「電話で」「固定電話」等の否定 / 電話希望発話"
+          output: "電話"
+      no_result_condition: "上記いずれにも該当しない（無言・雑音・意図不明）"
+    save_to: "classification"
+    next_step: "次へ_アナウンス"
+    retry_failure: "end_failure"
+
+  - step_name: "次へ_アナウンス"
+    tts_announcement: "それでは、"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "診察券番号聴取"
+    retry_failure: "none"  # announcement のためリトライ概念なし
+
+  - step_name: "次に_アナウンス"
+    tts_announcement: "次に、"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "生年月日聴取"
+    retry_failure: "none"  # announcement のためリトライ概念なし
+
+  - step_name: "続いて_アナウンス"
+    tts_announcement: "続いて、"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "問い合わせ内容聴取"
+    retry_failure: "none"  # announcement のためリトライ概念なし
+
+  - step_name: "問い合わせ内容聴取"
+    tts_announcement: "お問い合わせ内容をお伺いします。『8月1日の内科予約を8月8日以降に変更してほしい』、など、具体的にお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "発話なし / 雑音のみ"
+    save_to: "inquiryContent"
+    next_step: "最後に_アナウンス"
+    retry_failure: "end_failure"
+    retry_failure_announcement: "予約制ではないので、基本的に当日受診が可能です。診療時間や休診情報等に関しては代表番号にてご確認ください。"
+
+  - step_name: "最後に_アナウンス"
+    tts_announcement: "最後に、"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "連絡先聴取"
+    retry_failure: "none"  # announcement のためリトライ概念なし
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外（祝日 / 月〜金 8:30 前 / 16:00 以降）"
+    tts_announcement: "申し訳ございません。ただいまの時間は受付時間外となっております。受付時間は、祝日を除く、月曜日から金曜日、朝8時30分から16時までです。恐れ入りますが、受付時間内におかけなおしください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "問い合わせ内容聴取のリトライ上限到達（3 回失敗）"
+    tts_announcement: "予約制ではないので、基本的に当日受診が可能です。診療時間や休診情報等に関しては代表番号にてご確認ください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系 ---
+  - name: "END_受付完了_WEB"
+    condition: "WEB 受付ルート完了（classification=WEB）"
+    tts_announcement: "受付はまだ完了しておりませんので、お電話終了後にショートメールで入力用URLをお送りいたしますので依頼内容を入力していただき、申し込みを完了させてください。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了_WEB"
+
+  - name: "END_受付完了_電話"
+    condition: "電話受付ルート完了（classification=電話）"
+    tts_announcement: "お問い合わせを受け付けました。後ほど担当者からショートメール、もしくは折り返し電話にてご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_受付完了_電話"
+
+# smsFlag 分岐設計
+sms_flag_routing:
+  enabled: true
+  routing_keys: ["classification"]
+  patterns:
+    - condition: "classification=WEB"
+      sms_flag: "1"
+      notes: "WEB ルートは URL を SMS で送信するため smsFlag=1"
+    - condition: "classification=電話"
+      sms_flag: "-1"
+      notes: "電話ルートは担当者対応依存。自動 SMS は送らず -1（要確認 NON-BLOCKER N-4）"
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション8c: Dr.JOY 電話帳エントリ ---
+phonebook:
+  enabled: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。井上病院の、予約専用AI電話です。"
+
+  - module_name: "経路判断"
+    purpose: "WEB 受付 / 電話受付 の希望聴取（Yes/No 判定）"
+    announcement: "予約方法についてお伺いします。ショートメールを受信できる携帯電話をお持ちの方は、WEB受付が可能です。WEB受付をご希望の場合は『はい』、固定電話や、このまま電話での受付をご希望の場合は『いいえ』とお答えください。"
+
+  - module_name: "次へ_アナウンス"
+    purpose: "経路判断 → 診察券番号聴取 への接続フレーズ"
+    announcement: "それでは、"
+
+  - module_name: "次に_アナウンス"
+    purpose: "氏名聴取 → 生年月日聴取 への接続フレーズ"
+    announcement: "次に、"
+
+  - module_name: "続いて_アナウンス"
+    purpose: "生年月日聴取 → 問い合わせ内容聴取 への接続フレーズ（電話ルートのみ）"
+    announcement: "続いて、"
+
+  - module_name: "問い合わせ内容聴取"
+    purpose: "問い合わせ内容の自由テキスト聴取（電話ルートのみ）"
+    announcement: "お問い合わせ内容をお伺いします。『8月1日の内科予約を8月8日以降に変更してほしい』、など、具体的にお話ください。"
+
+  - module_name: "最後に_アナウンス"
+    purpose: "連絡先聴取への接続フレーズ（WEB / 電話 両ルート共通）"
+    announcement: "最後に、"
+
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知着信時アナウンス"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "時間外_アナウンス"
+    purpose: "受付時間外（祝日 / 月〜金 8:30 前 / 16:00 以降）アナウンス"
+    announcement: "申し訳ございません。ただいまの時間は受付時間外となっております。受付時間は、祝日を除く、月曜日から金曜日、朝8時30分から16時までです。恐れ入りますが、受付時間内におかけなおしください。お電話ありがとうございました。"
+
+  - module_name: "聴取失敗_アナウンス"
+    purpose: "リトライ上限到達時の代表案内アナウンス"
+    announcement: "予約制ではないので、基本的に当日受診が可能です。診療時間や休診情報等に関しては代表番号にてご確認ください。お電話ありがとうございました。"
+
+  - module_name: "END_受付完了_WEB"
+    purpose: "WEB ルート完了時アナウンス（URL の SMS 送信案内）"
+    announcement: "受付はまだ完了しておりませんので、お電話終了後にショートメールで入力用URLをお送りいたしますので依頼内容を入力していただき、申し込みを完了させてください。お電話ありがとうございました。"
+
+  - module_name: "END_受付完了_電話"
+    purpose: "電話ルート完了時アナウンス（折り返し電話 / SMS 案内）"
+    announcement: "お問い合わせを受け付けました。後ほど担当者からショートメール、もしくは折り返し電話にてご連絡いたします。お電話ありがとうございました。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "経路判断"
+    words: |
+      はい はい
+      WEB ウェブ
+      電話 でんわ
+      ショートメール ショートメール
+      携帯 けいたい
+
+  - step_name: "問い合わせ内容聴取"
+    words: |
+      予約 よやく
+      変更 へんこう
+      キャンセル キャンセル
+      内科 ないか
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "STT テンプレート再利用（commubo抽出/entity_stt_patch.json）: hearing_yesno_common / hearing_phone_number / hearing_unknown / hearing_yoken_common / echo_back_yesno の 5 テンプレートを各 hearing / subflow に継承（30 surfaces を OpenAI 正規化、19 surfaces を STT 辞書で吸収）"
+  - "OpenAI 正規化辞書（commubo抽出/entity_openai_synonyms.md）: 分からない（解らない/動かない 等）/ 別の（違う/携帯/他の 等）/ 否定（いーえ/ちがうねん 等）/ 持ってない（盛ってない/以てない 等）/ 肯定（はい大丈夫です/配送です 等）/ 否定単語（駄目/違って 等）/ 肯定単語（大丈夫/問題ない 等）を prompter が OpenAI prompt の類義語例セクションに反映"
+  - "Gen1 構造を Gen3 6 ブロック型に集約: opening / announcement（接続フレーズ 4 種）/ hearing（経路判断 + 問い合わせ内容聴取 2 種）/ subflow（個人情報 4 種）/ context_match_router（用件分岐 + 終話分岐 2 種）/ termination（5 種）"
+  - "経路判断は Pattern B（hearing で値確定 → CMR で 2 箇所参照）。CMR の other は明示的に「電話相当」として設計"
+  - "テスト用箱（main.yaml: 渡部 / 千葉発話で 経路判断 へ早期分岐）は本番投入版で除外（移管ノート明記）"
+  - "END_受付時間説明（main.yaml 終了:箱、代表電話 9:00-17:00 / 整形外科・眼科 9:30-12:30 案内）は孤児箱のためフローから除外（NON-BLOCKER N-6）"
+  - "サブフロー（診察券番号 / 氏名 / 電話番号）内のリトライ失敗 → 代表案内 TTS → 切断 は Custom Jump to Flow の制約で親フローに接続不可。Brekeke UI で手動接続必要（confirmation_items 参照）"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "office_id（Dr.JOY 管理画面で確認）"
+    resolved: false
+  - item: "IVR 着信電話番号（デモ / 本番）。設計書には記載不要、Brekeke 設定時に確認"
+    resolved: false
+  - item: "END_受付完了_WEB の smsFlag。仮設定 1（URL を SMS で送信案内のため）。要件レビューで確認"
+    resolved: false
+  - item: "END_受付完了_電話 の smsFlag。仮設定 -1（担当者対応依存）。SMS 自動送信が必要なら 1 に変更"
+    resolved: false
+  - item: "RAG / FAQ サブフロー導入判断（Gen1 元資料に未実装）。CLAUDE.md Rule 16 のデフォルト（Gen1→Gen3=パターン 2）に従って終話前 RAG を追加するか確認"
+    resolved: false
+  - item: "経路判断 hearing の echo_back。仮設定 false。Gen1 では復唱処理あり、Gen3 で再確認したい場合は echo_back=true に変更"
+    resolved: false
+  - item: "連絡先聴取サブフロー内の非通知時携帯推し TTS（Gen1 連絡先聴取.yaml の『非通知：携帯推し』箱）。Gen3 標準サブフローが同等処理を持つか要確認"
+    resolved: false
+  - item: "END_受付時間説明（孤児箱）の取扱。Gen3 では除外しているが、運用上必要なら復活方針を決定"
+    resolved: false
+  - item: "[診察券番号聴取] サブフロー内 retry 上限到達時に 代表案内 TTS→切断 を手動追加（Brekeke UI）"
+    resolved: false
+  - item: "[氏名聴取] サブフロー内 retry 上限到達時に 代表案内 TTS→切断 を手動追加（Brekeke UI）"
+    resolved: false
+  - item: "[電話番号聴取] サブフロー内 retry 上限到達時に 代表案内 TTS→切断 を手動追加（Brekeke UI）"
+    resolved: false

@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>VoiceBot Pipeline 効率推移 (2026-04-06〜04-20)</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+<style>
+  body { font-family: "Segoe UI", sans-serif; max-width: 1100px; margin: 24px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 20px; }
+  h2 { font-size: 16px; margin-top: 32px; border-bottom: 2px solid #eee; padding-bottom: 4px; }
+  .chart-box { position: relative; height: 380px; margin-bottom: 16px; }
+  table { border-collapse: collapse; font-size: 13px; width: 100%; }
+  th, td { border: 1px solid #ddd; padding: 4px 8px; text-align: right; }
+  th { background: #f5f5f5; }
+  td:first-child, th:first-child { text-align: left; }
+  .note { background: #fffbe6; border-left: 3px solid #e0b000; padding: 8px 12px; font-size: 13px; margin: 12px 0; }
+  .caveat { color: #a33; font-size: 12px; }
+  ul { font-size: 13px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<h1>VoiceBot Pipeline 効率推移 (2026-04-06 〜 04-20)</h1>
+
+<h2>① 日別 シナリオ完了件数（[pipeline] 完了コミット数）</h2>
+<div class="chart-box"><canvas id="chartCompletions"></canvas></div>
+
+<div class="note">
+<b>04-17 金曜の爆上がり要因候補（当日入った主な改善コミット）:</b>
+<ul>
+  <li><code>refactor(reviewer)</code>: プロンプト専門レッドチームに再設計</li>
+  <li><code>feat(scaffold)</code>: 多段分岐 Script+CMR 方式で100条件まで対応</li>
+  <li><code>feat</code>: fixer 精度向上・P-5 catch-all 対応・LAYOUT-004 同座標検出</li>
+  <li><code>fix(orchestrator)</code>: scaffold 実行前に旧 JSON 削除 / generator 後に scaffold ファイル削除</li>
+  <li><code>fix(orchestrator)</code>: _group_reports_by_block を完全一致ブロック方式に変更</li>
+  <li><code>feat(orchestrator)</code>: Pattern 2 に BIVR 自動展開ステップを追加</li>
+</ul>
+<b>観察:</b> 04-13〜04-16 (月〜木) = 平均 5.0 件/日 → 04-17 (金) = 14 件。ほぼ 3 倍。
+</div>
+
+<h2>② トークン数・時間の比較（現存 state ファイル）</h2>
+<p class="caveat">※ pipeline_state ファイルは施設ごとに上書きされるため、先週分の横断比較はここに揃っている 2 件のみ。
+他の 4 件（イーストメディカル/多根/朝日/新水巻）はトークン計測追加前の古い状態で、tokens フィールドなし。</p>
+
+<div class="chart-box"><canvas id="chartTokens"></canvas></div>
+
+<h3>per-step 内訳</h3>
+<table>
+<thead>
+<tr><th>施設 / flow</th><th>step</th><th>秒</th><th>input</th><th>output</th><th>cache_read</th><th>cache_creation</th></tr>
+</thead>
+<tbody id="stepTable"></tbody>
+</table>
+
+<div class="note">
+<b>現状のサマリ:</b>
+<ul>
+  <li><b>斗南病院/診療</b> (04-20, <b>完走</b>): 全21ステップ成功。director 638秒 + prompter_props 217秒 + reviewer 97秒 = LLM系952秒。残り18ステップは全て1秒以下の機械処理。合計 <b>約16分</b>。</li>
+  <li><b>北里大学TSC/main</b> (04-17): partial-scenario fix run (dirlite→fixer_modify→fixer 計3ステップ)、LLM系合計 280秒 / 出力 17.4Ktok / cache_read 922Ktok。短時間で収束している。</li>
+  <li>残り 4 件 (イースト/多根/朝日/新水巻) は token 計測前のデータで、秒数のみ残存。</li>
+</ul>
+<b>注意:</b> トークン集計 (~/.claude/projects JSONL 読み取り) には既知バグあり。director で実コストの大半、以降はキャッシュで小さい、が一般的傾向。
+</div>
+
+<script>
+Chart.register(window['chartjs-plugin-annotation']);
+
+const completionsData = {
+  labels: ["04-06","04-07","04-08","04-09","04-10","04-13","04-14","04-15","04-16","04-17"],
+  datasets: [{
+    label: "完了件数",
+    data: [1, 5, 2, 7, 9, 7, 6, 4, 3, 14],
+    backgroundColor: (ctx) => ctx.dataIndex === 9 ? "#e55" : "#4a90d9",
+    borderWidth: 0
+  }]
+};
+
+new Chart(document.getElementById('chartCompletions'), {
+  type: 'bar',
+  data: completionsData,
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    scales: {
+      y: { beginAtZero: true, title: { display: true, text: "完了シナリオ数 (commits)" } },
+      x: { title: { display: true, text: "日付 (2026)" } }
+    },
+    plugins: {
+      legend: { display: false },
+      annotation: {
+        annotations: {
+          line1: {
+            type: 'line',
+            scaleID: 'x',
+            value: "04-17",
+            borderColor: '#e55',
+            borderWidth: 1,
+            borderDash: [4, 4],
+            label: { display: true, content: "金曜: 改善コミット集中投下", position: "start", backgroundColor: "#e55", font: { size: 11 } }
+          },
+          avgLine: {
+            type: 'line',
+            scaleID: 'y',
+            value: 5.4,
+            borderColor: '#999',
+            borderWidth: 1,
+            borderDash: [2, 2],
+            label: { display: true, content: "平均 5.4/日", position: "end", backgroundColor: "rgba(0,0,0,0.4)", font: { size: 10 } }
+          }
+        }
+      }
+    }
+  }
+});
+
+// Token comparison: 斗南 director, 北里 3-steps
+const tokenRows = [
+  { facility: "斗南病院/診療", step: "director",       seconds: 638, input: 24, output: 47594, cache_read: 954955, cache_creation: 143257 },
+  { facility: "斗南病院/診療", step: "prompter_props", seconds: 217, input: 6,  output: 26450, cache_read: 66602,  cache_creation: 62836 },
+  { facility: "斗南病院/診療", step: "reviewer",       seconds: 97,  input: 58, output: 10946, cache_read: 465543, cache_creation: 100063 },
+  { facility: "北里大学TSC/main", step: "dirlite",      seconds: 59,  input: 8,  output: 4317,  cache_read: 106567, cache_creation: 27364 },
+  { facility: "北里大学TSC/main", step: "fixer_modify", seconds: 91,  input: 16, output: 5113,  cache_read: 331125, cache_creation: 23526 },
+  { facility: "北里大学TSC/main", step: "fixer",        seconds: 130, input: 16, output: 8019,  cache_read: 483877, cache_creation: 63307 }
+];
+
+new Chart(document.getElementById('chartTokens'), {
+  type: 'bar',
+  data: {
+    labels: tokenRows.map(r => `${r.facility.split('/')[0]}\n${r.step}`),
+    datasets: [
+      { label: "output",         data: tokenRows.map(r => r.output),          backgroundColor: "#e55" },
+      { label: "cache_creation", data: tokenRows.map(r => r.cache_creation),  backgroundColor: "#f90" },
+      { label: "cache_read",     data: tokenRows.map(r => r.cache_read),      backgroundColor: "#4a90d9" },
+      { label: "input",          data: tokenRows.map(r => r.input),           backgroundColor: "#555" }
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    scales: {
+      x: { stacked: true },
+      y: { stacked: true, title: { display: true, text: "トークン数" } }
+    },
+    plugins: { tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.raw.toLocaleString()}` } } }
+  }
+});
+
+// Fill step table
+const tbody = document.getElementById('stepTable');
+tokenRows.forEach(r => {
+  tbody.insertAdjacentHTML('beforeend',
+    `<tr><td>${r.facility}</td><td>${r.step}</td><td>${r.seconds}</td><td>${r.input.toLocaleString()}</td><td>${r.output.toLocaleString()}</td><td>${r.cache_read.toLocaleString()}</td><td>${r.cache_creation.toLocaleString()}</td></tr>`);
+});
+</script>
+
+<footer style="margin-top: 40px; color: #888; font-size: 11px;">
+生成: 2026-04-20 / データ源: git log (pipeline完了コミット) + output/pipeline_state_*.json
+</footer>
+</body>
+</html>

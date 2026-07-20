@@ -1,0 +1,341 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "bivr-checker 中間フォーマット",
+  "description": "parser エージェントが PDF から抽出した情報を格納する中間 JSON。generator エージェントの入力となる。",
+  "type": "object",
+  "required": [
+    "facility_name",
+    "office_id",
+    "scenario_type",
+    "greeting_text",
+    "purposes",
+    "hearing_items",
+    "personal_info",
+    "status_flags"
+  ],
+  "properties": {
+    "facility_name": {
+      "type": "string",
+      "description": "施設名（PDF記載のまま）。フロー名プレフィックス・アナウンス文に使用"
+    },
+    "facility_name_short": {
+      "type": "string",
+      "description": "施設略称（グループ名に使用。省略時は facility_name を使用）"
+    },
+    "office_id": {
+      "type": "string",
+      "description": "Dr.JOY の office_id（外部入力。24文字の16進数）",
+      "pattern": "^[0-9a-f]{24}$"
+    },
+    "scenario_type": {
+      "type": "string",
+      "enum": ["診療", "健診"],
+      "description": "シナリオ種別"
+    },
+    "creation_date": {
+      "type": "string",
+      "description": "作成日（YYYYMMDD形式）。フロー名サフィックスに使用",
+      "pattern": "^[0-9]{8}$"
+    },
+    "environment": {
+      "type": "string",
+      "enum": ["demo", "prod"],
+      "default": "demo",
+      "description": "デプロイ先環境。API URL・Property.md に影響"
+    },
+    "greeting_text": {
+      "type": "string",
+      "description": "冒頭アナウンス文（PDF記載のまま）"
+    },
+    "non_notification_reject": {
+      "type": "boolean",
+      "default": true,
+      "description": "非通知受入拒否。全ペアで true"
+    },
+    "non_notification_text": {
+      "type": "string",
+      "description": "非通知終話アナウンス文。省略時はデフォルト文言を使用"
+    },
+    "business_hours": {
+      "type": "object",
+      "description": "営業時間チェック設定",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "acceptance_times モジュールを配置するか"
+        },
+        "out_of_hours_text": {
+          "type": "string",
+          "description": "時間外アナウンス文"
+        }
+      }
+    },
+    "purposes": {
+      "type": "array",
+      "description": "用件一覧（フロー図の分岐先）",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "用件名（例: 予約, 変更, キャンセル, その他問い合わせ）"
+          },
+          "description": {
+            "type": "string",
+            "description": "用件の補足説明"
+          },
+          "flow_path": {
+            "type": "string",
+            "description": "この用件の処理フローパス概要"
+          },
+          "status": {
+            "type": "string",
+            "description": "完了時の status 値"
+          },
+          "sms_flag": {
+            "type": "string",
+            "description": "SMS送信フラグ"
+          },
+          "end_text": {
+            "type": "string",
+            "description": "終話ガイダンス文"
+          }
+        }
+      }
+    },
+    "departments": {
+      "type": "array",
+      "description": "診療科一覧（診療型のみ）",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "診療科名"
+          },
+          "reading": {
+            "type": "string",
+            "description": "読み仮名（ひらがな）"
+          },
+          "aliases": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "類義語・別名"
+          },
+          "target": {
+            "type": "boolean",
+            "default": true,
+            "description": "AI電話対象かどうか"
+          },
+          "code": {
+            "type": "string",
+            "description": "診療科コード（DTMF用。存在する場合のみ）"
+          }
+        }
+      }
+    },
+    "hearing_items": {
+      "type": "array",
+      "description": "聴取項目一覧（質問ステップ）",
+      "items": {
+        "type": "object",
+        "required": ["name", "input_type"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "聴取項目名（例: 用件, 診療科, 通院歴）"
+          },
+          "prompt_text": {
+            "type": "string",
+            "description": "質問のTTS発話テキスト"
+          },
+          "input_type": {
+            "type": "string",
+            "enum": ["freeword", "dtmf", "dtmf_stt"],
+            "description": "入力方式。freeword=STT only, dtmf=DTMF only, dtmf_stt=DTMF+STT"
+          },
+          "max_dtmf_length": {
+            "type": ["string", "null"],
+            "description": "DTMF最大桁数。dtmf/dtmf_stt の場合のみ"
+          },
+          "confirmation": {
+            "type": "boolean",
+            "default": false,
+            "description": "復唱確認ありか"
+          },
+          "confirmation_text": {
+            "type": "string",
+            "description": "復唱確認のTTS文言テンプレート"
+          },
+          "options": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "選択肢一覧（用件分岐等）"
+          },
+          "context_name": {
+            "type": "string",
+            "description": "保存先コンテキスト名（英語）"
+          },
+          "context_display_type": {
+            "type": "string",
+            "description": "displayType（TEXT, CLASSIFICATION 等）"
+          },
+          "condition": {
+            "type": "string",
+            "description": "この聴取項目が発生する条件（例: 用件=予約の場合のみ）"
+          },
+          "order": {
+            "type": "integer",
+            "description": "聴取順序"
+          },
+          "retry_count": {
+            "type": "integer",
+            "default": 2,
+            "description": "リトライ回数"
+          },
+          "on_failure": {
+            "type": "string",
+            "enum": ["hearing_impossible", "end_call", "transfer", "skip"],
+            "default": "hearing_impossible",
+            "description": "リトライ上限時の動作"
+          }
+        }
+      }
+    },
+    "personal_info": {
+      "type": "object",
+      "description": "個人情報聴取の要否",
+      "properties": {
+        "name": { "type": "boolean", "default": true, "description": "氏名聴取" },
+        "dob": { "type": "boolean", "default": true, "description": "生年月日聴取" },
+        "dob_confirmation": { "type": "boolean", "default": true, "description": "生年月日復唱" },
+        "phone": { "type": "boolean", "default": true, "description": "電話番号聴取" },
+        "medical_card": { "type": "boolean", "default": false, "description": "診察券番号聴取" },
+        "subflow_split": {
+          "type": "string",
+          "enum": ["combined", "separate_new_returning", "individual"],
+          "default": "combined",
+          "description": "サブフロー分割方式。combined=1フロー, separate=新規/再診分離, individual=項目別"
+        }
+      }
+    },
+    "visit_history": {
+      "type": "object",
+      "description": "受診歴（通院歴）設定",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "options": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "選択肢（例: [初診, 再診]）"
+        },
+        "referral_check": {
+          "type": "boolean",
+          "default": false,
+          "description": "紹介状有無チェック（初診時）"
+        },
+        "referral_no_action": {
+          "type": "string",
+          "description": "紹介状なし時の動作（代表案内 / 自己負担案内 等）"
+        }
+      }
+    },
+    "transfer_settings": {
+      "type": "array",
+      "description": "転送設定",
+      "items": {
+        "type": "object",
+        "properties": {
+          "condition": { "type": "string", "description": "転送条件" },
+          "number": { "type": "string", "description": "転送先番号" },
+          "type": { "type": "string", "default": "Blind Transfer", "description": "転送タイプ" },
+          "announcement": { "type": "string", "description": "転送前アナウンス" }
+        }
+      }
+    },
+    "status_flags": {
+      "type": "object",
+      "description": "状態フラグマッピング",
+      "properties": {
+        "completed": { "type": "string", "default": "1" },
+        "representative": { "type": "string", "default": "2" },
+        "transfer": { "type": "string", "default": "3" },
+        "out_of_hours": { "type": "string", "default": "6" },
+        "disconnected": { "type": "string", "default": "0" }
+      }
+    },
+    "sms_settings": {
+      "type": "array",
+      "description": "SMS設定",
+      "items": {
+        "type": "object",
+        "properties": {
+          "purpose": { "type": "string" },
+          "flag": { "type": "string" },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "rag_enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "RAG/FAQ検索サブフローの有無"
+    },
+    "rag_pattern": {
+      "type": "string",
+      "enum": ["inquiry_only", "before_end", "combined"],
+      "default": "inquiry_only",
+      "description": "RAG配置パターン。inquiry_only=問合せ内, before_end=終話前, combined=両方"
+    },
+    "special_flows": {
+      "type": "array",
+      "description": "施設固有の特殊フロー",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "trigger_condition": { "type": "string" },
+          "modules_hint": { "type": "string" }
+        }
+      }
+    },
+    "end_call_texts": {
+      "type": "object",
+      "description": "終話ガイダンス文（用件別）",
+      "additionalProperties": { "type": "string" }
+    },
+    "failure_text": {
+      "type": "string",
+      "description": "聴取失敗時の終話ガイダンス文"
+    },
+    "representative_text": {
+      "type": "string",
+      "description": "代表案内の終話ガイダンス文"
+    },
+    "representative_number": {
+      "type": "string",
+      "description": "代表電話番号"
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "parser が検出した注意事項・TODO"
+    },
+    "todo_requires_confirmation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "item": { "type": "string" },
+          "reason": { "type": "string" },
+          "default_value": { "type": "string" }
+        }
+      },
+      "description": "人間の確認が必要な項目（パイプライン一時停止トリガー）"
+    }
+  }
+}

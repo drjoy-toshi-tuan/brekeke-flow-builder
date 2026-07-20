@@ -1,0 +1,95 @@
+# Pattern 6 (テストフロー) — n_choice 決定論エンジン 単体受入テスト（残薬確認(2択) config）
+#
+# 検証対象: modules/n_choice/acceptance_test/残薬有無_2択/script.js
+#   = 正本テンプレ modules/n_choice/script.js を「残薬確認(2択)」config で充填した具体版
+#     （エンジンは正本と同一。DTMF_MAP/TOKEN_MAP/COMPOUND_PATTERNS のみカレス記念病院_診療データ。
+#      {{INPUT_MODULE}} は placeholder のまま）。既存 残薬確認 spec（3択・ZANYAKU）とは別 spec。
+#
+# 狙い: n_choice エンジンを Brekeke 実機 (Nashorn/ES5) で単体実行し、オラクル↔実機パリティを確証する。
+#   本テストは「残薬確認(2択) config」（はい/いいえ・DTMF 1/2）で検証する
+#   （オラクル test_oracle.py 19/19 と同一ケース）。
+#
+# 確認: Brekeke ログを grep "[TEST FAIL]" で 0 件なら全 PASS。末尾 "[TEST DONE]" で全 19 ケース完走。
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "カレス記念病院_診療_20260716"
+  flow_name: "カレス記念病院_診療_20260716$残薬有無2択"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "カレス記念病院_診療_20260716$残薬有無2択"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] n_choice 決定論エンジン 単体受入 (残薬確認(2択) config, 19 ケース)");
+      $runner.getLogger().info("対象: script.js (正本 script.js を残薬確認(2択) config 充填) / オラクル 19/19 PASS 済");
+      $runner.getLogger().info("grep [TEST FAIL] = 0 なら実機も全 PASS");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: matrix
+
+  - step: matrix
+    type: script_test_matrix
+    script_file: "./script.js"
+    input_placeholder: "{{INPUT_MODULE}}"
+    final_next: ログ_終了
+    cases:
+      # --- DTMF（単一数字）---
+      - {id: dt1, input: "1", expected: "はい"}
+      - {id: dt2, input: "2", expected: "いいえ"}
+      - {id: dz1, input: "１", expected: "はい"}
+      - {id: dz2, input: "２", expected: "いいえ"}
+      - {id: dt9, input: "9", expected: "NO_RESULT"}
+      - {id: dt0, input: "0", expected: "NO_RESULT"}
+      # --- 数字＋語尾 trim ---
+      - {id: ds1, input: "1です", expected: "はい"}
+      - {id: ds2, input: "２でお願いします", expected: "いいえ"}
+      # --- TOKEN（完全一致）---
+      - {id: tk1, input: "はい", expected: "はい"}
+      - {id: tk2, input: "いいえ", expected: "いいえ"}
+      # --- COMPOUND: はい ---
+      - {id: k01, input: "あります", expected: "はい"}
+      - {id: k02, input: "ある", expected: "はい"}
+      # --- COMPOUND: いいえ ---
+      - {id: k03, input: "ありません", expected: "いいえ"}
+      - {id: k04, input: "ない", expected: "いいえ"}
+      # --- フィラーのみ / 無関連（NO_RESULT）---
+      - {id: nr1, input: "えーっと", expected: "NO_RESULT"}
+      - {id: nr2, input: "あのー", expected: "NO_RESULT"}
+      - {id: nr3, input: "うーん", expected: "NO_RESULT"}
+      - {id: nr4, input: "よろしくお願いします", expected: "NO_RESULT"}
+      - {id: nr5, input: "他になにか", expected: "NO_RESULT"}
+
+  - step: ログ_終了
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST DONE] n_choice 残薬有無2択 config 単体受入 全 19 ケース完走");
+      $runner.setResult("done");
+    next: 終了
+
+  - step: 終了
+    type: termination
+    termination_ref: "END_テスト終了"
+
+termination_patterns:
+  - name: "END_テスト終了"
+    condition: "テスト完走"
+    tts_announcement: "テストを終了します。"
+    status: "1"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_テスト終了"

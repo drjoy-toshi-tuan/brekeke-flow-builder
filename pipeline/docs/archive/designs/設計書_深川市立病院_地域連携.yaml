@@ -1,0 +1,750 @@
+# 設計書 -- 深川市立病院 地域連携
+# 生成元: @director エージェント
+# 生成日: 2026/04/10
+# 確認レポート: docs/designs/確認レポート_深川市立病院_地域連携_20260410.md
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "深川市立病院"
+  group_name: "深川市立病院"
+  flow_name: "深川市立病院$地域連携_20260410"
+  target_facility: "深川市立病院（地域連携室）"
+  office_id: "TODO_要確認"
+  phone_number: "0164-22-1101"
+  business_hours: "祝日除く月〜金 8:30〜16:00"
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "demo"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "深川市立病院$地域連携_20260410"
+      role: "main"
+      description: "冒頭チェーン → 受診申込確認 → 受診申込ルート（本日/明日以降分岐）/ 問合せルート（所属氏名→患者問合せ→外来入院→患者情報→内容→電話番号）→ 終話"
+  subflows:
+    - name: "深川市立病院$電話番号聴取_20260410"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。電話番号聴取サブフロー（復唱あり）をリファレンスから完全コピー"
+
+# --- セクション3: フローの目的 ---
+purpose: "地域連携室専用AI電話。医療機関・施設からの問い合わせを受け、受診申込か否かを判定した上で、受診申込は代表電話案内またはFAX案内、その他問い合わせは所属・氏名・患者情報・内容・連絡先を聴取して折り返し受付を自動化する。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "深川市立病院$地域連携_20260410"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → 非通知_アナウンス(TTS) → 完了フラグ_非通知(status=2) → 切断
+            ├─ 携帯 → saveContext2DB_smsFlag(smsFlag=1) → acceptance_times
+            ├─ 固定 → saveContext2DB_smsFlag(smsFlag=2) → acceptance_times
+            └─ その他 → saveContext2DB_smsFlag(smsFlag=2) → acceptance_times
+                          ├─ 時間外 → 時間外_アナウンス(TTS) → 完了フラグ_時間外(status=6) → 切断
+                          └─ 受付可 → 冒頭_アナウンス(TTS)
+                                        → 受診申込確認(TTS)
+                                        → 入力_受診申込(DTMF AmiVoice STT, max_dtmf_length=1)
+                                        → OpenAI_受診申込(generate_by_OpenAI)
+                                            ├─ はい（受診申込）→ 本日受診確認(TTS)
+                                            │     → 入力_本日受診(DTMF AmiVoice STT, max_dtmf_length=1)
+                                            │     → OpenAI_本日受診(generate_by_OpenAI)
+                                            │         ├─ 本日 → 完了フラグ_代表案内(status=2) → END_代表案内(TTS) → 切断
+                                            │         ├─ 明日以降 → 完了フラグ_予約フォーム(status=7) → END_予約フォーム(TTS) → 切断
+                                            │         └─ NO_RESULT → リトライ_本日受診
+                                            │                          ├─ Retry → 本日受診確認(TTS)
+                                            │                          └─ No more → 完了フラグ_聴取失敗(status=3) → END_聴取失敗(TTS) → 切断
+                                            ├─ いいえ（その他問合せ）→ 所属氏名聴取ルートへ
+                                            └─ NO_RESULT → リトライ_受診申込
+                                                             ├─ Retry → 受診申込確認(TTS)
+                                                             └─ No more → 完了フラグ_聴取失敗(status=3) → END_聴取失敗(TTS) → 切断
+
+      ─── その他問合せルート ───
+      所属氏名_聴取(TTS)
+        → 入力_所属氏名(AmiVoice STT)
+        → OpenAI_所属氏名(generate_by_OpenAI)
+            ├─ success → 患者問合せ確認(TTS)
+            │     → 入力_患者問合せ(DTMF AmiVoice STT, max_dtmf_length=1)
+            │     → OpenAI_患者問合せ(generate_by_OpenAI)
+            │         ├─ はい → 外来入院確認(TTS)
+            │         │     → 入力_外来入院(DTMF AmiVoice STT, max_dtmf_length=1)
+            │         │     → OpenAI_外来入院(generate_by_OpenAI)
+            │         │         ├─ 外来 or 入院 → 患者氏名_聴取(TTS)
+            │         │         │     → 入力_患者氏名(AmiVoice STT)
+            │         │         │     → OpenAI_患者氏名(generate_by_OpenAI)
+            │         │         │         └─ success → 患者生年月日_聴取(TTS)
+            │         │         │               → 入力_患者生年月日(DTMF AmiVoice STT, max_dtmf_length=8)
+            │         │         │               → OpenAI_患者生年月日(generate_by_OpenAI)
+            │         │         │                   └─ success → 内容_聴取(TTS) ──→ ★内容聴取合流
+            │         │         └─ NO_RESULT → リトライ_外来入院
+            │         │                          ├─ Retry → 外来入院確認(TTS)
+            │         │                          └─ No more → 内容_聴取(TTS) ──→ ★内容聴取合流
+            │         ├─ いいえ → 内容_聴取(TTS) ──→ ★内容聴取合流
+            │         └─ NO_RESULT → リトライ_患者問合せ
+            │                          ├─ Retry → 患者問合せ確認(TTS)
+            │                          └─ No more → 内容_聴取(TTS) ──→ ★内容聴取合流
+            └─ NO_RESULT → リトライ_所属氏名
+                             ├─ Retry → 所属氏名_聴取(TTS)
+                             └─ No more → 完了フラグ_聴取失敗(status=3) → END_聴取失敗(TTS) → 切断
+
+      ★内容聴取合流:
+      内容_聴取(TTS)
+        → 入力_内容(AmiVoice STT)
+        → OpenAI_内容(generate_by_OpenAI)
+            └─ success → サブフロー遷移_電話番号聴取(Custom Jump to Flow)
+                           → 完了フラグ_正常終話(status=1) → END_正常終話(TTS) → 切断
+
+      ─── 終話パターン一覧 ───
+      END_非通知(status=2, smsFlag=-1) → 切断
+      END_時間外(status=6, smsFlag=-1) → 切断
+      END_聴取失敗(status=3, smsFlag=-1) → 切断
+      END_代表案内(status=2, smsFlag=-1) → 切断
+      END_予約フォーム(status=7, smsFlag=-1) → 切断
+      END_正常終話(status=1, smsFlag=contextから参照) → 切断
+    notes: |
+      incoming-classifier後に携帯/固定で分岐し、saveContext2DBでsmsFlag固定値を保存。
+      携帯=smsFlag=1, 固定/その他=smsFlag=2。
+      受診申込ルートはstatus=2(代表案内)またはstatus=7(予約フォーム案内)で終話。
+      その他問合せルートは所属氏名→患者問合せ→外来入院→患者情報→内容→電話番号→status=1で終話。
+      患者問合せ=いいえの場合、外来/入院・患者氏名・患者生年月日をスキップして内容聴取に合流。
+      外来入院のリトライ失敗時も内容聴取に合流（スキップ）。
+
+  - flow_name: "深川市立病院$電話番号聴取_20260410"
+    diagram: |
+      ★★★ 完全コピー対象（CLAUDE.md Rule 9） ★★★
+      docs/reference/bivr/samples/json/電話番号聴取_復唱あり.json を完全コピーする。
+      フロー名プレフィックスのみ「深川市立病院$」に置換。構造・接続・スクリプトは一切変更不可。
+    notes: "CLAUDE.md Rule 9/10/11 準拠。電話番号聴取サブフロー（復唱あり）を完全コピー"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - order: "1"
+        value: "受診申込_本日"
+      - order: "2"
+        value: "受診申込_明日以降"
+      - order: "3"
+        value: "その他問合せ"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "受診申込（本日/明日以降）またはその他問合せの3分類"
+
+  - context_name: "DepartmentAndName"
+    context_name_jp: "所属と氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "発信者の所属施設名と氏名（フリーテキスト）"
+
+  - context_name: "patientOrNot"
+    context_name_jp: "患者問合せ"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "患者に関する問合せかどうか（はい/いいえ）"
+
+  - context_name: "hospitalizationCheck"
+    context_name_jp: "外来/入院"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "外来または入院の区分"
+
+  - context_name: "patientName"
+    context_name_jp: "患者氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "問合せ対象の患者氏名"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "患者生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "問合せ対象の患者生年月日"
+
+  - context_name: "details"
+    context_name_jp: "問い合わせ内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "問い合わせ内容（フリーテキスト）"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "聴取する電話番号（電話番号聴取サブフローで保存）"
+
+  - context_name: "smsFlag"
+    context_name_jp: "SMS送信フラグ"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "1=携帯着信（SMS送信あり）, 2=固定着信（SMS送信なし）。incoming-classifier分岐後にsaveContext2DBで固定値保存"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - order: "1"
+        value: "未処理"
+      - order: "2"
+        value: "代表案内"
+      - order: "3"
+        value: "聴取失敗"
+      - order: "6"
+        value: "時間外"
+      - order: "7"
+        value: "予約フォーム案内"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=未処理(正常終話) 2=代表案内(非通知/代表電話案内) 3=聴取失敗 6=時間外 7=予約フォーム案内"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "受電日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: true
+    notes: "通話ID自動格納"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "受診申込確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "DTMF 1=はい（受診申込）, 2=いいえ（その他問合せ）"
+
+  - order: 2
+    name: "本日受診確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "judge"
+    output_format: "label"
+    output_labels:
+      - "本日"
+      - "明日以降"
+    notes: "DTMF 1=本日, 2=明日以降。受診申込=はいの場合のみ到達"
+
+  - order: 3
+    name: "所属と氏名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "DepartmentAndName"
+    openai_processing: "none"
+    output_format: "free_text"
+    output_labels: []
+    notes: "フリーテキスト聴取。OpenAI分類なし。profile_words: 施設名辞書"
+
+  - order: 4
+    name: "患者問合せ確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "patientOrNot"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "DTMF 1=はい（患者に関する問合せ）, 2=いいえ"
+
+  - order: 5
+    name: "外来入院確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "hospitalizationCheck"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "外来"
+      - "入院"
+    notes: "DTMF 1=外来, 2=入院。患者問合せ=はいの場合のみ到達"
+
+  - order: 6
+    name: "患者氏名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientName"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "患者問合せ=はいの場合のみ到達。profile_words: 氏名辞書"
+
+  - order: 7
+    name: "患者生年月日"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 8
+    retry_count: 2
+    echo_back: false
+    save_to: "patientDateOfBirth"
+    openai_processing: "convert"
+    output_format: "date_text"
+    output_labels:
+      - "valid"
+      - "不正値"
+    notes: "患者問合せ=はいの場合のみ到達。復唱なし（メインフロー内聴取のため）。profile_words: 和暦辞書+month辞書+day辞書。DTMF対応表: 数字キー(0-9)で日付8桁(YYYYMMDD)を入力。例: 19850401=昭和60年4月1日"
+
+  - order: 8
+    name: "内容聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "details"
+    openai_processing: "none"
+    output_format: "free_text"
+    output_labels: []
+    notes: "フリーテキスト聴取。OpenAI分類なし"
+
+  - order: 9
+    name: "電話番号"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 11
+    retry_count: 2
+    echo_back: true
+    save_to: "additionalPhoneNumber"
+    openai_processing: "normalize"
+    output_format: "number"
+    output_labels: []
+    notes: "電話番号聴取サブフロー（復唱あり）。CLAUDE.md Rule 9準拠。DTMF対応表: 数字キー(0-9)で電話番号を入力。#キーで入力確定。max_dtmf_length=11"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "受診申込確認"
+    tts_announcement: "受診のお申し込みでしょうか。受診のお申し込みの場合は1を、それ以外のお問い合わせの場合は2を押してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「はい」「受診申込」「申し込み」等の肯定表現"
+          output: "はい"
+        - input: "DTMF 2 または「いいえ」「違います」「問い合わせ」等の否定表現"
+          output: "いいえ"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "classification"
+    next_step: "はい→本日受診確認, いいえ→所属氏名_聴取"
+    retry_failure: "end_failure"
+
+  - step_name: "本日受診確認"
+    tts_announcement: "本日の受診をご希望でしょうか。本日の場合は1を、明日以降の場合は2を押してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "本日"
+        - "明日以降"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「本日」「今日」「はい」等"
+          output: "本日"
+        - input: "DTMF 2 または「明日以降」「明日」「来週」等"
+          output: "明日以降"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "classification"
+    next_step: "本日→END_代表案内, 明日以降→END_予約フォーム"
+    retry_failure: "end_failure"
+
+  - step_name: "所属と氏名"
+    tts_announcement: "ご所属とお名前をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "DepartmentAndName"
+    next_step: "患者問合せ確認"
+    retry_failure: "end_failure"
+
+  - step_name: "患者問合せ確認"
+    tts_announcement: "患者さんに関するお問い合わせでしょうか。患者さんに関するお問い合わせの場合は1を、それ以外の場合は2を押してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「はい」「患者」等の肯定表現"
+          output: "はい"
+        - input: "DTMF 2 または「いいえ」「違います」等の否定表現"
+          output: "いいえ"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "patientOrNot"
+    next_step: "はい→外来入院確認, いいえ→内容_聴取"
+    retry_failure: "skip"
+
+  - step_name: "外来入院確認"
+    tts_announcement: "外来の患者さんですか、入院中の患者さんですか。外来の場合は1を、入院の場合は2を押してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "外来"
+        - "入院"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「外来」「通院」等"
+          output: "外来"
+        - input: "DTMF 2 または「入院」「入院中」等"
+          output: "入院"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "hospitalizationCheck"
+    next_step: "外来 or 入院→患者氏名_聴取"
+    retry_failure: "skip"
+
+  - step_name: "患者氏名"
+    tts_announcement: "患者さんのお名前をフルネームでお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "氏名テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "氏名テキスト（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "patientName"
+    next_step: "患者生年月日_聴取"
+    retry_failure: "skip"
+
+  - step_name: "患者生年月日"
+    tts_announcement: "患者さんの生年月日をお話しください。ダイヤルプッシュの場合は8桁で入力してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "valid"
+        - "不正値"
+        - "NO_RESULT"
+      mapping:
+        - input: "8桁の有効な日付"
+          output: "valid"
+        - input: "不正な形式・存在しない日付"
+          output: "不正値"
+        - input: "音声認識結果が空または解析不能"
+          output: "NO_RESULT"
+      no_result_condition: "音声認識結果が空または解析不能"
+    save_to: "patientDateOfBirth"
+    next_step: "内容_聴取"
+    retry_failure: "skip"
+
+  - step_name: "内容聴取"
+    tts_announcement: "お問い合わせ内容をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "details"
+    next_step: "サブフロー遷移_電話番号聴取"
+    retry_failure: "skip"
+
+  - step_name: "電話番号"
+    tts_announcement: "ご連絡先の電話番号をお話しください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "正規化済み電話番号"
+      mapping:
+        - input: "10〜11桁の数値（先頭0）"
+          output: "正規化済み電話番号"
+      no_result_condition: "電話番号として不正な形式"
+    save_to: "additionalPhoneNumber"
+    next_step: "END_正常終話"
+    retry_failure: "end_failure"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須 -- 削除禁止）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。深川市立病院地域連携室のAI電話受付です。ただいまの時間は受付時間外です。受付時間は平日の8時30分から16時までとなっております。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+  # --- 正常系 ---
+  - name: "END_代表案内"
+    condition: "受診申込=はい かつ 本日受診=本日"
+    tts_announcement: "本日の受診をご希望の場合は、恐れ入りますが深川市立病院の代表電話、0164-22-1101にお電話をお願いいたします。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_代表案内"
+  - name: "END_予約フォーム"
+    condition: "受診申込=はい かつ 本日受診=明日以降"
+    tts_announcement: "明日以降の受診をご希望の場合は、予約申込書をFAXにてお送りください。お電話ありがとうございました。"
+    status: "7"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_予約フォーム"
+  - name: "END_正常終話"
+    condition: "その他問合せルート全聴取完了"
+    tts_announcement: "お問い合わせを承りました。担当者から折り返しご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_正常終話"
+
+# smsFlag分岐設計
+# smsFlagはincoming-classifier後にsaveContext2DBで固定値保存する設計。
+# 終話パターンのsms_flagは全て"-1"（saveCompletionFlag2dbではsmsFlag制御しない）。
+# 実際のSMS送信制御はDr.JOY側でcontextのsmsFlag値を参照して行う。
+sms_flag_routing:
+  enabled: true
+  routing_keys:
+    - "smsFlag"
+  patterns:
+    - condition: "incoming-classifier → 携帯"
+      sms_flag: "1"
+      notes: "携帯着信時にsaveContext2DBでsmsFlag=1を保存"
+    - condition: "incoming-classifier → 固定/その他"
+      sms_flag: "2"
+      notes: "固定/その他着信時にsaveContext2DBでsmsFlag=2を保存"
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  # メインフロー
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。深川市立病院地域連携室のAI電話受付です。"
+
+  - module_name: "受診申込確認"
+    purpose: "受診申込確認"
+    announcement: "受診のお申し込みでしょうか。受診のお申し込みの場合は1を、それ以外のお問い合わせの場合は2を押してください。"
+
+  - module_name: "本日受診確認"
+    purpose: "本日受診確認"
+    announcement: "本日の受診をご希望でしょうか。本日の場合は1を、明日以降の場合は2を押してください。"
+
+  - module_name: "所属氏名_聴取"
+    purpose: "所属と氏名聴取案内"
+    announcement: "ご所属とお名前をお話しください。"
+
+  - module_name: "患者問合せ確認"
+    purpose: "患者問合せ確認"
+    announcement: "患者さんに関するお問い合わせでしょうか。患者さんに関するお問い合わせの場合は1を、それ以外の場合は2を押してください。"
+
+  - module_name: "外来入院確認"
+    purpose: "外来/入院確認"
+    announcement: "外来の患者さんですか、入院中の患者さんですか。外来の場合は1を、入院の場合は2を押してください。"
+
+  - module_name: "患者氏名_聴取"
+    purpose: "患者氏名聴取案内"
+    announcement: "患者さんのお名前をフルネームでお話しください。"
+
+  - module_name: "患者生年月日_聴取"
+    purpose: "患者生年月日聴取案内"
+    announcement: "患者さんの生年月日をお話しください。ダイヤルプッシュの場合は8桁で入力してください。"
+
+  - module_name: "内容_聴取"
+    purpose: "問い合わせ内容聴取案内"
+    announcement: "お問い合わせ内容をお話しください。"
+
+  - module_name: "時間外_アナウンス"
+    purpose: "時間外案内"
+    announcement: "お電話ありがとうございます。深川市立病院地域連携室のAI電話受付です。ただいまの時間は受付時間外です。受付時間は平日の8時30分から16時までとなっております。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知案内"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_代表案内"
+    purpose: "代表電話案内終話"
+    announcement: "本日の受診をご希望の場合は、恐れ入りますが深川市立病院の代表電話、0164-22-1101にお電話をお願いいたします。お電話ありがとうございました。"
+
+  - module_name: "END_予約フォーム"
+    purpose: "予約フォームFAX案内終話"
+    announcement: "明日以降の受診をご希望の場合は、予約申込書をFAXにてお送りください。お電話ありがとうございました。"
+
+  - module_name: "END_正常終話"
+    purpose: "正常終話"
+    announcement: "お問い合わせを承りました。担当者から折り返しご連絡いたします。お電話ありがとうございました。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ上限終話"
+    announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "受診申込確認"
+    words: |
+      はい はい
+      いいえ いいえ
+      受診 じゅしん
+      申し込み もうしこみ
+      問い合わせ といあわせ
+
+  - step_name: "本日受診確認"
+    words: |
+      本日 ほんじつ
+      今日 きょう
+      明日 あした
+      明日以降 あしたいこう
+
+  - step_name: "所属と氏名"
+    words: |
+      深川市包括支援センター ふかがわしほうかつしえんせんたー
+      旭川医大 あさひかわいだい
+      旭川医科大学 あさひかわいかだいがく
+      深川第一病院 ふかがわだいいちびょういん
+      留萌市立病院 るもいしりつびょういん
+      滝川市立病院 たきかわしりつびょういん
+      砂川市立病院 すながわしりつびょういん
+      北竜診療所 ほくりゅうしんりょうじょ
+      訪問看護ステーションいしずえ深川 ほうもんかんごすてーしょんいしずえふかがわ
+      深川市立病院 ふかがわしりつびょういん
+      旭川赤十字病院 あさひかわせきじゅうじびょういん
+      旭川厚生病院 あさひかわこうせいびょういん
+
+  - step_name: "患者問合せ確認"
+    words: |
+      はい はい
+      いいえ いいえ
+      患者 かんじゃ
+
+  - step_name: "外来入院確認"
+    words: |
+      外来 がいらい
+      入院 にゅういん
+      通院 つういん
+
+  - step_name: "患者氏名"
+    words: |
+      （氏名辞書を設定）
+
+  - step_name: "患者生年月日"
+    words: |
+      （和暦辞書 + month辞書 + day辞書を設定）
+
+  - step_name: "内容聴取"
+    words: |
+      紹介 しょうかい
+      紹介状 しょうかいじょう
+      転院 てんいん
+      退院 たいいん
+      検査 けんさ
+      予約 よやく
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "地域連携室専用フロー。発信者は医療機関・施設のスタッフが想定される"
+  - "受診申込ルートではフロー内で個人情報を聴取しない。代表電話案内またはFAX案内で終話する"
+  - "その他問合せルートでは所属・氏名→患者情報→内容→電話番号の順で聴取"
+  - "患者問合せ=いいえの場合、外来/入院・患者氏名・患者生年月日をスキップして内容聴取に合流"
+  - "外来入院のリトライ失敗時も内容聴取にスキップ（end_failureではない）"
+  - "smsFlagはsaveContext2DBで保存（incoming-classifier後の固定値保存）。saveCompletionFlag2dbのsms_flagは全て-1"
+  - "所属と氏名はフリーテキスト聴取。OpenAIは正規化のみ（分類なし）。DepartmentAndNameに一括保存"
+  - "電話番号聴取サブフロー（復唱あり）はCLAUD.md Rule 9準拠で完全コピー"
+  - "acceptance_times使用。祝日除く月〜金 8:30〜16:00"
+  - "代表電話番号: 0164-22-1101"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "office_id"
+    resolved: false
+  - item: "RAGサブフロー配置の要否（現在noneに設定。FAQ検索が必要な場合はパターン変更）"
+    resolved: false
+  - item: "予約フォームFAX案内の文言（FAX番号・送付先の詳細）"
+    resolved: false
+  - item: "smsFlag=1(携帯)/2(固定)のsaveContext2DB保存方式が正しいか"
+    resolved: false
+  - item: "時間外アナウンスの文言（デフォルトに施設名を追加した仮文言を設定済み）"
+    resolved: true
+  - item: "非通知アナウンスの文言（デフォルト文言を使用）"
+    resolved: true

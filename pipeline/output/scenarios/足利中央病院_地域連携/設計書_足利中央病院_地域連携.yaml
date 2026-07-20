@@ -1,0 +1,919 @@
+# ============================================================
+# 設計書: 足利中央病院 地域連携
+# 作業種別: Gen2→Gen3 移管
+# 元資料: docs/reference/customer_docs/【地域連携】：足利中央病院_20260417.md
+# 移管ノート: docs/migration/gen2_足利中央病院_地域連携.md
+# 生成日: 2026-04-20
+# 生成者: @director
+# ============================================================
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "足利中央病院"
+  group_name: "足利中央病院"
+  flow_name: "足利中央病院$地域連携"
+  target_facility: "足利中央病院（地域連携室）"
+  office_id: "TODO_要確認"
+  phone_number: "TODO_要確認"        # IVR着信番号。Brekeke設定時に設定
+  business_hours: "なし（24時間受付想定。Gen2 yaml に時間チェック記載なし）"
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "prod"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "足利中央病院$地域連携"
+      role: "main"
+      description: "医療機関の地域連携室スタッフからの問い合わせを受け、相談・紹介 / 日程調整 / その他の用件別に必要情報を聴取する"
+  subflows:
+    - name: "足利中央病院$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "入電番号が非通知以外の場合は「今おかけの番号でよろしいですか？」で確認、はい→着信番号流用。Gen2資料の電話番号_入電番号判定〜電話番号_復唱確認ブロック群に相当。標準サブフロー（個人情報サブフロー.bivr）を完全コピーし、プレフィックスのみ施設名に置換"
+    - name: "足利中央病院$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "患者氏名（カタカナ）。標準サブフローをそのまま使用。苗字のみ検知・下の名前追加聴取は標準サブフロー内で処理"
+    - name: "足利中央病院$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "DOB Re-confirmation 標準実装。西暦/和暦→YYYY-MM-DD正規化 + 復唱確認"
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  足利中央病院 地域連携室に対する紹介元医療機関からの問い合わせを自動応対する。
+  緊急案件は代表電話（0284-72-8401）へ即時転送し、通常案件は相談・紹介 / 日程調整 / その他の3分類で
+  必要情報（施設名・入電者氏名・連絡先電話番号・患者情報・病名・希望日時等）を聴取して担当者の折り返し
+  対応に引き継ぐ。当日予約希望は代表電話案内で終話する。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "足利中央病院$地域連携"
+    diagram: |
+      冒頭(wait 2000ms)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → END_非通知(TTS → 完了フラグ_非通知 → 切断)
+            └─ 通常   → 冒頭_アナウンス(TTS)
+                          → 緊急確認(hearing enum)
+                              ├─ はい → 緊急転送(call_transfer → 0284-72-8401)
+                              │           ├─ 成功 → END_転送成功 (status=3)
+                              │           └─ 失敗 → END_転送失敗 (status=9)
+                              └─ いいえ → 施設名聴取(hearing text)
+                                            → 入電者氏名聴取(hearing text)
+                                              → jump_電話番号聴取(subflow)
+                                                → 用件確認(hearing enum + echo_back)
+                                                    → 用件_分岐(context_match_router: classification)
+                                                        ├─ その他 → その他_内容聴取 → 最後の問い合わせ → END_完了
+                                                        └─ 相談・紹介/日程調整 → jump_氏名聴取(subflow)
+                                                                                  → jump_生年月日聴取(subflow)
+                                                                                    → 用件_分岐2(context_match_router: classification)
+                                                                                        ├─ 相談・紹介 → 病名聴取 → 相談_内容聴取 → 最後の問い合わせ → END_完了
+                                                                                        └─ 日程調整  → 日程_内容聴取 → 希望日時聴取(echo_back)
+                                                                                                        → 日程_当日判定(script: future_date)
+                                                                                                            ├─ 当日/過去 → END_電話案内
+                                                                                                            └─ 未来      → 返信期限確認 → 最後の問い合わせ → END_完了
+    notes: |
+      ・Gen2では用件_分岐と生年月日後の再分岐が1箇所に集約されていたが、相談・紹介/日程調整は個人情報聴取
+        （氏名→生年月日）を共通経由するため、用件_分岐（subflow前の1段）と用件_分岐2（subflow後の2段目）
+        の2段階 ContextMatchRouter を配置する。
+      ・"その他" は個人情報を聴取しないため用件_分岐で即座に内容聴取へ分岐。
+      ・営業時間チェックは無し（Gen2資料に時間制限記載なし）。
+      ・非通知は incoming-classifier で END_非通知 に送る。
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭ブロック ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: false
+    next: 冒頭_アナウンス
+
+  # --- 冒頭アナウンス ---
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 緊急確認
+
+  # --- 緊急確認（Pattern A: OpenAI直後分岐）---
+  - step: 緊急確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "はい"
+        next: 緊急転送
+      - match: "いいえ"
+        next: 施設名聴取
+
+  # --- 緊急転送（Call Transfer）---
+  # call_transfer ブロックは status=3(転送成功)/9(転送失敗) と END_転送成功/失敗 終話チェーンを scaffold が自動生成
+  - step: 緊急転送
+    type: call_transfer
+    transfer_type: "Blind Transfer"
+
+  # --- 施設名聴取（text。「明日は赤十字病院」→「足利赤十字病院」の特別正規化は profile_words と special_notes で対応）---
+  - step: 施設名聴取
+    type: hearing
+    output_format: text
+    next: 入電者氏名聴取
+
+  # --- 入電者氏名聴取 ---
+  - step: 入電者氏名聴取
+    type: hearing
+    output_format: text
+    next: jump_電話番号聴取
+
+  # --- 電話番号聴取サブフロー ---
+  - step: jump_電話番号聴取
+    type: subflow
+    flowname: "足利中央病院$電話番号聴取"
+    next: 用件確認
+
+  # --- 用件確認（Pattern B: echo_back + ContextMatchRouter で分岐）---
+  - step: 用件確認
+    type: hearing
+    output_format: enum
+    next: 用件_分岐
+
+  # --- 用件_分岐: その他 は個人情報聴取をスキップ ---
+  - step: 用件_分岐
+    type: context_match_router
+    reference_module: "classification"
+    conditions:
+      - match: "相談・紹介"
+        next: jump_氏名聴取
+      - match: "日程調整"
+        next: jump_氏名聴取
+      - match: "その他"
+        next: その他_内容聴取
+
+  # --- 氏名聴取サブフロー（相談・紹介/日程調整で共有）---
+  - step: jump_氏名聴取
+    type: subflow
+    flowname: "足利中央病院$氏名聴取"
+    next: jump_生年月日聴取
+
+  # --- 生年月日聴取サブフロー ---
+  - step: jump_生年月日聴取
+    type: subflow
+    flowname: "足利中央病院$生年月日聴取"
+    next: 用件_分岐2
+
+  # --- 用件_分岐2: 個人情報聴取後に相談・紹介/日程調整で分岐 ---
+  - step: 用件_分岐2
+    type: context_match_router
+    reference_module: "classification"
+    conditions:
+      - match: "相談・紹介"
+        next: 病名聴取
+      - match: "日程調整"
+        next: 日程_内容聴取
+
+  # --- 相談・紹介ルート ---
+  - step: 病名聴取
+    type: hearing
+    output_format: text
+    next: 相談_内容聴取
+
+  - step: 相談_内容聴取
+    type: hearing
+    output_format: text
+    next: 最後の問い合わせ
+
+  # --- 日程調整ルート ---
+  - step: 日程_内容聴取
+    type: hearing
+    output_format: text
+    next: 希望日時聴取
+
+  - step: 希望日時聴取
+    type: hearing
+    output_format: datetime
+    next: 日程_当日判定
+
+  # --- 当日判定スクリプト（今日→電話案内、未来→返信期限確認）---
+  - step: 日程_当日判定
+    type: script
+    script_template: future_date
+    reference_module: "OpenAI_希望日時聴取"
+    conditions:
+      - match: "FAIL"
+        next: END_電話案内
+      - match: "SUCCESS"
+        next: 返信期限確認
+
+  - step: 返信期限確認
+    type: hearing
+    output_format: text
+    next: 最後の問い合わせ
+
+  # --- その他ルート ---
+  - step: その他_内容聴取
+    type: hearing
+    output_format: text
+    next: 最後の問い合わせ
+
+  # --- 共通: 最後の問い合わせ ---
+  - step: 最後の問い合わせ
+    type: hearing
+    output_format: text
+    next: END_完了
+
+  # --- 終話 ---
+  - step: END_完了
+    type: termination
+    termination_ref: "END_完了"
+
+  - step: END_電話案内
+    type: termination
+    termination_ref: "END_電話案内"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - order: "1"
+        value: "相談・紹介"
+      - order: "2"
+        value: "日程調整"
+      - order: "3"
+        value: "その他"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "用件区分（Gen2 function enum と完全一致）"
+
+  - context_name: "patientName"
+    context_name_jp: "患者氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "患者氏名（カタカナ）"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "患者生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "患者生年月日（西暦正規化）"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "聴取した連絡先電話番号（入電者の折り返し先）"
+
+  - context_name: "hospitalName"
+    context_name_jp: "医療機関名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "入電者所属の医療機関名"
+
+  - context_name: "contactName"
+    context_name_jp: "入電者氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "電話をかけてきた担当者の氏名"
+
+  - context_name: "history"
+    context_name_jp: "緊急性確認"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "「緊急案件」または「通常」"
+
+  - context_name: "disease"
+    context_name_jp: "病名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "相談・紹介ルートのみ聴取"
+
+  - context_name: "details"
+    context_name_jp: "内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "相談内容 / 日程調整の内容 / その他の内容（3ルート共通）"
+
+  - context_name: "DesiredreservationDate"
+    context_name_jp: "希望日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "日程調整ルートのみ聴取。YYYY-MM-DD形式に正規化"
+
+  - context_name: "replyDeadline"
+    context_name_jp: "返信期限"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "日程調整ルートのみ聴取"
+
+  - context_name: "question"
+    context_name_jp: "最後の問い合わせ"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "終話前の追加問い合わせ内容"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - order: "1"
+        value: "未処理"
+      - order: "2"
+        value: "代表案内"
+      - order: "3"
+        value: "転送成功"
+      - order: "9"
+        value: "転送失敗"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "1=未処理(通話完了), 2=代表案内(当日予約等), 3=転送成功(緊急), 9=転送失敗"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "着信日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "通話ID自動格納"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "緊急確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "history"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "音声のみ（Gen2資料にDTMFタグなし）。「はい」→緊急転送、「いいえ」→施設名聴取へ。OpenAIプロンプトで history=\"緊急案件\"/\"通常\" を設定する想定"
+
+  - order: 2
+    name: "施設名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "hospitalName"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "音声のみ。「明日は赤十字病院」STT誤認識は profile_words で対応"
+
+  - order: 3
+    name: "入電者氏名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "contactName"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "音声のみ。カタカナで保存（Gen2ルール「氏名は漢字変換せずにカタカナで文字起こし」）"
+
+  - order: 4
+    name: "用件確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: true
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "相談・紹介"
+      - "日程調整"
+      - "その他"
+    notes: "DTMF 1=相談・紹介, 2=日程調整, 3=その他。復唱後「いいえ」で再聴取。同義語：「診察/印刷/定期/新薬/再診/最新/禁忌/診療」→ 日程調整または相談・紹介 に寄せる（OpenAIプロンプトで対応）"
+
+  - order: 5
+    name: "病名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "disease"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "相談・紹介ルートのみ聴取。音声のみ。復唱なし"
+
+  - order: 6
+    name: "相談_内容聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "details"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "相談・紹介ルート。音声のみ。復唱なし"
+
+  - order: 7
+    name: "日程_内容聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "details"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "日程調整ルート。音声のみ。復唱なし"
+
+  - order: 8
+    name: "希望日時聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: true
+    save_to: "DesiredreservationDate"
+    openai_processing: "convert"
+    output_format: "datetime"
+    output_labels: []
+    notes: "日程調整ルート。必須復唱。相対表現（明日/来週/来月等）を YYYY-MM-DD に変換。STT「2月」/「4月」誤認識補正（今日の日付基準）をOpenAIプロンプトに含める。10月以降に1-9月言及時は翌年"
+
+  - order: 9
+    name: "返信期限確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "replyDeadline"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "日程調整ルート。音声のみ。「特になし」等の曖昧回答も許容するため text"
+
+  - order: 10
+    name: "その他_内容聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "details"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "その他ルート。音声のみ。復唱なし"
+
+  - order: 11
+    name: "最後の問い合わせ"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "question"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "全ルート共通の最終ヒアリング。「特になし」等も許容"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "冒頭_アナウンス"
+    tts_announcement: "お電話ありがとうございます。足利中央病院の、地域連携室専用、AI電話です。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: ""
+    next_step: "緊急確認"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "緊急確認"
+    tts_announcement: "こちらのお電話は本日中に対応が必要な緊急案件になりますでしょうか。緊急の場合は、はい、違う場合は、いいえ、とお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+      mapping:
+        - input: "「はい」「緊急」「はい、緊急です」「急ぎ」など肯定を含む"
+          output: "はい"
+        - input: "「いいえ」「違う」「通常」「急ぎではない」など否定を含む"
+          output: "いいえ"
+      no_result_condition: "上記いずれにも該当しない、または無音/不明瞭"
+    save_to: "history"
+    next_step: "（分岐: はい→緊急転送 / いいえ→施設名聴取）"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "緊急転送"
+    tts_announcement: "担当者にお繋ぎいたしますので、このままお待ちください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: ""
+    next_step: "Call Transfer (0284-72-8401)"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "施設名聴取"
+    tts_announcement: "はじめに、施設名をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "「明日は赤十字病院」と聴取された場合"
+          output: "足利赤十字病院"
+      no_result_condition: ""
+    save_to: "hospitalName"
+    next_step: "入電者氏名聴取"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "入電者氏名聴取"
+    tts_announcement: "次に、お電話いただいている方の氏名をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "発話された氏名を漢字変換せずカタカナ表記で保存"
+          output: "ヤマダ タロウ（カタカナ）"
+      no_result_condition: ""
+    save_to: "contactName"
+    next_step: "jump_電話番号聴取"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "用件確認"
+    tts_announcement: "それでは、ご用件をお伺いいたします。次の3つのうち、いずれかでお話しください。1、相談・紹介に関して。2、日程調整に関して。3、その他お問い合わせに関して。それではお話しください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "相談・紹介"
+        - "日程調整"
+        - "その他"
+      mapping:
+        - input: "DTMF 1 / 「1」/ 「相談」/ 「紹介」/ 「相談・紹介」"
+          output: "相談・紹介"
+        - input: "DTMF 2 / 「2」/ 「日程」/ 「予約」/ 「薬」/ 「お薬」/ 「日程調整」"
+          output: "日程調整"
+        - input: "DTMF 3 / 「3」/ 「その他」/ 「診察」/ 「印刷」/ 「定期」/ 「新薬」/ 「再診」/ 「最新」/ 「禁忌」/ 「診療」"
+          output: "その他"
+      no_result_condition: "上記いずれにも該当しない場合"
+    save_to: "classification"
+    next_step: "用件_分岐 (context_match_router)"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "病名聴取"
+    tts_announcement: "次に、受診される方の病名をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "disease"
+    next_step: "相談_内容聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "相談_内容聴取"
+    tts_announcement: "本件の内容を簡潔にお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "details"
+    next_step: "最後の問い合わせ"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "日程_内容聴取"
+    tts_announcement: "本件の内容を簡潔にお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "details"
+    next_step: "希望日時聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "希望日時聴取"
+    tts_announcement: "予約希望日をお伺いいたします。ご都合の良い日付や曜日を、10月1日、10月上旬や、来週のようにお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "YYYY-MM-DD 形式の日付"
+      mapping:
+        - input: "「明日」「明後日」「来週の月曜」等の相対表現"
+          output: "着信日時基準で YYYY-MM-DD に変換"
+        - input: "「2月XX日」「4月XX日」（STT誤認識しやすい）"
+          output: "今日の日付を基準に補正（例: 今日4/15 + 「2月20日」→ 2026-04-20）"
+        - input: "10月以降に1-9月の日付を言われた場合"
+          output: "翌年の日付として解釈"
+        - input: "和暦"
+          output: "西暦に変換"
+      no_result_condition: "日付として解釈不可能な発話"
+    save_to: "DesiredreservationDate"
+    next_step: "日程_当日判定 (script)"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "日程_当日判定"
+    tts_announcement: ""
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "SUCCESS（未来日）"
+        - "FAIL（今日または過去）"
+      mapping:
+        - input: "DesiredreservationDate が今日以前"
+          output: "FAIL → END_電話案内（代表電話案内）"
+        - input: "DesiredreservationDate が明日以降"
+          output: "SUCCESS → 返信期限確認"
+      no_result_condition: ""
+    save_to: ""
+    next_step: "（分岐: FAIL→END_電話案内 / SUCCESS→返信期限確認）"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "返信期限確認"
+    tts_announcement: "返信期日のご希望がありましたらお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "replyDeadline"
+    next_step: "最後の問い合わせ"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "その他_内容聴取"
+    tts_announcement: "本件の内容を簡潔にお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "details"
+    next_step: "最後の問い合わせ"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "最後の問い合わせ"
+    tts_announcement: "そのほかに何かお問い合わせは有りませんか。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "question"
+    next_step: "END_完了"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須 — 削除禁止）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+  # --- 正常系 ---
+  - name: "END_完了"
+    condition: "全聴取完了（相談・紹介 / 日程調整 / その他の各ルートでの正常終了）"
+    tts_announcement: "ご依頼を承りました。3診療日以内に担当者から折り返しご連絡いたします。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_完了"
+  - name: "END_電話案内"
+    condition: "当日予約希望（日程_当日判定で今日の日付）"
+    tts_announcement: "当日の予約についてはAI電話ではご対応できませんので、代表電話の、0284-72-8401、におかけ直しください。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_電話案内"
+
+# smsFlag分岐設計（不要 — 単一パターン）
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+# 既定で RAG サブフローは省略（Gen2移管ノート方針）
+# FAQ本体が元資料に含まれていないため、Gen3ではFAQ不適合アナウンスも配置しない
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。足利中央病院の、地域連携室専用、AI電話です。"
+
+  - module_name: "緊急確認"
+    purpose: "緊急案件か否かを判定"
+    announcement: "こちらのお電話は本日中に対応が必要な緊急案件になりますでしょうか。緊急の場合は、はい、違う場合は、いいえ、とお話しください。"
+
+  - module_name: "緊急転送"
+    purpose: "緊急時の転送ガイダンス"
+    announcement: "担当者にお繋ぎいたしますので、このままお待ちください。"
+
+  - module_name: "施設名聴取"
+    purpose: "入電者所属施設名の聴取"
+    announcement: "はじめに、施設名をお話しください。"
+
+  - module_name: "入電者氏名聴取"
+    purpose: "入電者氏名の聴取"
+    announcement: "次に、お電話いただいている方の氏名をお話しください。"
+
+  - module_name: "用件確認"
+    purpose: "用件3分類の聴取"
+    announcement: "それでは、ご用件をお伺いいたします。次の3つのうち、いずれかでお話しください。1、相談・紹介に関して。2、日程調整に関して。3、その他お問い合わせに関して。それではお話しください。"
+
+  - module_name: "病名聴取"
+    purpose: "相談・紹介ルートの病名聴取"
+    announcement: "次に、受診される方の病名をお話しください。"
+
+  - module_name: "相談_内容聴取"
+    purpose: "相談・紹介ルートの相談内容聴取"
+    announcement: "本件の内容を簡潔にお話しください。"
+
+  - module_name: "日程_内容聴取"
+    purpose: "日程調整ルートの内容聴取"
+    announcement: "本件の内容を簡潔にお話しください。"
+
+  - module_name: "希望日時聴取"
+    purpose: "日程調整ルートの希望日時聴取"
+    announcement: "予約希望日をお伺いいたします。ご都合の良い日付や曜日を、10月1日、10月上旬や、来週のようにお話しください。"
+
+  - module_name: "返信期限確認"
+    purpose: "日程調整ルートの返信期限聴取"
+    announcement: "返信期日のご希望がありましたらお話しください。"
+
+  - module_name: "その他_内容聴取"
+    purpose: "その他ルートの内容聴取"
+    announcement: "本件の内容を簡潔にお話しください。"
+
+  - module_name: "最後の問い合わせ"
+    purpose: "追加問い合わせヒアリング"
+    announcement: "そのほかに何かお問い合わせは有りませんか。"
+
+  - module_name: "END_完了"
+    purpose: "通話完了時のアナウンス"
+    announcement: "ご依頼を承りました。3診療日以内に担当者から折り返しご連絡いたします。それでは失礼いたします。"
+
+  - module_name: "END_電話案内"
+    purpose: "当日予約不可の代表電話案内"
+    announcement: "当日の予約についてはAI電話ではご対応できませんので、代表電話の、0284-72-8401、におかけ直しください。"
+
+  - module_name: "END_非通知"
+    purpose: "非通知着信時のアナウンス（デフォルト）"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_時間外"
+    purpose: "受付時間外アナウンス（デフォルト）"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "聴取失敗時のアナウンス（デフォルト）"
+    announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "施設名聴取"
+    words: |
+      足利赤十字病院 あしかがせきじゅうじびょういん
+      足利赤十字病院 あしたはせきじゅうじびょういん
+      足利中央病院 あしかがちゅうおうびょういん
+  - step_name: "用件確認"
+    words: |
+      相談 そうだん
+      紹介 しょうかい
+      日程 にってい
+      その他 そのた
+      日程調整 にっていちょうせい
+  - step_name: "病名聴取"
+    words: ""
+  - step_name: "希望日時聴取"
+    words: |
+      来週 らいしゅう
+      上旬 じょうじゅん
+      中旬 ちゅうじゅん
+      下旬 げじゅん
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "【最重要】1回聴取禁止 / 再ヒアリング禁止。既取得 context は再質問しない。OpenAI各モジュールの prompt に「既取得 context の再質問禁止」「不足項目のみ質問」ルールを含めること（prompter）"
+  - "復唱する項目は以下の3項目のみ: (1) 用件確認（echo_back=true）、(2) 患者生年月日（生年月日サブフロー内蔵）、(3) 連絡先電話番号（電話番号サブフロー内蔵）、(4) 希望日時（echo_back=true）。他は一切復唱しない"
+  - "施設名聴取の特別正規化: STT 結果が「明日は赤十字病院」の場合、hospitalName=\"足利赤十字病院\" に固定正規化する。施設名聴取 OpenAI プロンプト（または profile_words）に明記"
+  - "入電者氏名・患者氏名は漢字変換せずカタカナで保存する。「カタカナで」と入電者に質問するのは禁止"
+  - "患者氏名聴取（氏名サブフロー内）: 苗字のみ発話時は「下のお名前もお伺いしてもよろしいですか？」と追加聴取する"
+  - "希望日時の正規化: STTは「2月」「4月」を誤認識しやすい。着信日時基準で補正すること。相対表現（明日/明後日/来週の月曜等）は YYYY-MM-DD に変換。10月以降に1-9月言及時は翌年として解釈"
+  - "緊急案件の即時転送: 緊急確認で「はい」の場合、Call Transfer で 0284-72-8401 に Blind Transfer する。history=\"緊急案件\"、status=3 が自動格納される"
+  - "口調ルール: 全て丁寧語。「かしこまりました」可。「ありがとうございます。」「お気軽に」「おっしゃってください」禁止。質問時は「お話ください」に統一。回答受領後に「ありがとうございます」は言わず即次へ進む"
+  - "再質問時の固定テンプレート（Retry モジュール TTS 固定）: 「申し訳ありません。うまく聞き取れませんでした。ゆっくり話すとAIがうまく聞き取れません。普通のスピードではっきりとお話しください。再度伺います。」+（元の固定質問文を厳密再提示）。ユーザー発話の挿入禁止"
+  - "読み仮名の固定ルール: 「直通」はチョクツウと読む（ナオミチ禁止）。TTSテキストで必要箇所をカタカナ固定する"
+  - "SSML 禁止: Gen2資料に <speak type=\"telephone\"> / <forward> / <dtmf/> 等のタグがあるが、Gen3では一切使用しない（memory: feedback_tts_ai_no_ssml）。電話番号読み上げは {tts_g:...} 内で通常テキスト。<forward> は call_transfer ブロックに変換済み"
+  - "営業時間チェック: Gen2資料に明示的な時間制限記載なし。24時間受付想定（use_acceptance_times: false）"
+  - "FAQ/RAG: Gen2資料にFAQ本体が含まれていないため、Gen3では RAG サブフロー省略。FAQ記載なし質問の特別分岐も配置しない"
+  - "Gen2 function required フィールドで本シナリオ未使用のもの（medicalCardNumber / reservationDate / reason / institution / introduction）は saveContextModel2DB に含めない。Dr.JOY画面の整理のため"
+  - "status=0（Gen2 の途中切断）は Gen3 では使用禁止。scaffold が自動生成する非通知/時間外/聴取失敗終話チェーンは status=2/6/3 に固定"
+
+# --- セクション12: 要確認事項 ---
+confirmation_items:
+  - item: "office_id（施設ID）— Dr.JOY 管理画面で確認。設計書には不要"
+    resolved: false
+  - item: "IVR着信電話番号（ARS番号）— Brekeke 設定時に設定。設計書には不要"
+    resolved: false
+  - item: "緊急時の転送先電話番号（0284-72-8401）は代表電話と同じで問題ないか確認（Gen2資料通り）"
+    resolved: false
+  - item: "SMS送信文面（smsFlag=1 時）— Dr.JOY 管理画面で設定。地域連携室宛の折り返し案内SMS内容を確認"
+    resolved: false
+  - item: "「最後の問い合わせ」（question）の扱い: 何か回答があった場合の後続処理（担当者への申し送り）は Dr.JOY 側で運用するか確認"
+    resolved: false
+  - item: "Gen2 の 1-4「FAQ不適合アナウンス」は Gen3 では RAG 不使用のため省略する方針で問題ないか確認（FAQ本体が提供されればパターン1または3での再設計を検討）"
+    resolved: false

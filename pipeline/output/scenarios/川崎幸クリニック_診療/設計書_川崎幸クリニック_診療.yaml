@@ -1,0 +1,1119 @@
+# 設計書 — 川崎幸クリニック 診療
+# 生成元: @director エージェント（Gen2→Gen3移管）
+# 生成日: 2026/04/20
+# 元資料: docs/reference/customer_docs/【診療1】：川崎幸クリニック.md
+# 移管ノート: docs/migration/gen2_川崎幸クリニック_診療.md
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "川崎幸クリニック"
+  group_name: "川崎幸クリニック"
+  flow_name: "川崎幸クリニック$診療"
+  target_facility: "川崎幸クリニック / 第二川崎幸クリニック"
+  office_id: "TODO_要確認"
+  phone_number: "044-511-2112"                    # 案内用代表番号（ARS 着信番号は Dr.JOY 側設定）
+  business_hours: "customer_doc に明記なし（Dr.JOY 側で設定）"
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "prod"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "川崎幸クリニック$診療"
+      role: "main"
+      description: |
+        川崎幸クリニック／第二川崎幸クリニック診療予約専用 AI 電話のメインフロー。
+        「予約の確認」と「明日以降のキャンセル」のみ自動受付する。
+        氏名→生年月日→電話番号→診察券番号→用件の順に聴取し、用件別（キャンセル/確認/内容聴取）に分岐。
+        キャンセル時は「当日 vs 明日以降」を Script(future_date) で判定し、当日なら代表番号 044-511-2112 を反復案内。
+  subflows:
+    - name: "川崎幸クリニック$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"                          # 復唱禁止項目
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: |
+        個人情報サブフロー.bivr の氏名聴取サンプルをそのまま使用。
+        カタカナ以外で格納された場合は再聴取（customer_doc 4-1 氏名カタカナエラー文言を properties 側で設定）。
+        苗字のみの場合は「下のお名前もお伺いしてもよろしいですか？」で追加聴取するサブステップを含む。
+    - name: "川崎幸クリニック$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"                          # DOB Re-confirmation 構成（2026/04/14 改訂で dtmf 追加）
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: |
+        西暦指定だが和暦入力も AI で西暦変換。DTMF 併用必須（customer_doc 改訂履歴 2026/04/14）。
+        肯定特殊語「いいです」「肺」は復唱 OpenAI プロンプトで肯定扱い（prompter 申送り）。
+    - name: "川崎幸クリニック$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"                          # 電話番号のみ復唱許可。ただし SSML <speak type="telephone"> は Gen3 不可
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: |
+        incoming-classifier で携帯/固定分岐。携帯（090/080/070/060/050 始まり）は着信番号を自動格納して
+        「今おかけいただいている番号でよろしいですか？」で確認。それ以外は DTMF 直接聴取→復唱確認。
+        10桁/11桁のみ受付、11桁は先頭3桁が 090/080/070/060/050 のいずれか必須。
+        9桁/10桁で頭0欠落は先頭0補完。復唱 TTS は {tts_g:...} 平文で「電話番号ですね」形式。
+    - name: "川崎幸クリニック$診察券番号聴取"
+      target: "診察券番号聴取"
+      recitation: "なし"                          # 復唱禁止
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: |
+        「わからない」発話を許可（必須聴取ではない）。数字が含まれない場合は再ヒアリング。
+        C→4、Sea→4、Go→5、Q→9 等の誤認識救済テーブルは STT profile_words と
+        OpenAI 正規化プロンプトで対応（customer_doc §1-9）。
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  川崎幸クリニック／第二川崎幸クリニックの診療予約に関する電話を受け付け、
+  「予約の確認」と「明日以降のキャンセル」のみを自動受付する。
+  新規予約・予約変更・本日の予約受付は AI 電話では対応せず、代表電話番号（044-511-2112）への
+  かけ直しを案内する。当日キャンセルも代表番号への電話案内で終話する。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "川崎幸クリニック$診療"
+    diagram: |
+      冒頭(wait)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → END_非通知(TTS) → 完了フラグ_非通知(status=2) → 切断
+            └─ 通常   → 営業時間チェック(acceptance_times)
+                          ├─ 時間外 → END_時間外(TTS) → 完了フラグ_時間外(status=6) → 切断
+                          └─ 受付可 → 冒頭_アナウンス(TTS, status=0/smsFlag=0 初期化)
+                                        → jump_氏名聴取(サブフロー)
+                                        → jump_生年月日聴取(サブフロー)
+                                        → jump_電話番号聴取(サブフロー)
+                                        → jump_診察券番号聴取(サブフロー)
+                                        → 用件確認(enum: キャンセル/確認/内容聴取[default])
+                                            ├─ キャンセル → キャンセル_診療科(enum,no_result=登録なし)
+                                            │                → 現在の予約日(datetime)
+                                            │                → 当日判定(script: future_date)
+                                            │                    ├─ SUCCESS(明日以降) → END_キャンセル完了(status=1,smsFlag=1)
+                                            │                    └─ FAIL(本日)       → END_当日キャンセル(status=2,smsFlag=0)
+                                            ├─ 確認       → 確認_診療科(enum,no_result=登録なし)
+                                            │                → 確認内容(text)
+                                            │                → END_確認完了(status=1,smsFlag=2)
+                                            └─ 内容聴取(default) → 内容聴取_不明時(text)
+                                                                    → END_内容聴取完了(status=1,smsFlag=2)
+    notes: |
+      - 受付対象は「予約の確認」と「明日以降のキャンセル」のみ。新規予約・変更・本日予約は受付不可。
+      - 当日キャンセルは代表番号 044-511-2112 を 3 回反復読み上げで案内。
+      - 復唱は電話番号のみ。氏名・生年月日・診察券番号・診療科・予約日・確認内容は復唱禁止。
+      - 用件 enum に一致しない発話はデフォルトで「内容聴取」扱い。
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭 ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: jump_氏名聴取
+    # 発話後 status=0 / smsFlag=0 を初期化（customer_doc §2）。
+    # scaffold の opening/announcement テンプレートに組込み済み想定。
+
+  # --- 個人情報聴取サブフロー（順序固定） ---
+  - step: jump_氏名聴取
+    type: subflow
+    flowname: "川崎幸クリニック$氏名聴取"
+    next: jump_生年月日聴取
+
+  - step: jump_生年月日聴取
+    type: subflow
+    flowname: "川崎幸クリニック$生年月日聴取"
+    next: jump_電話番号聴取
+
+  - step: jump_電話番号聴取
+    type: subflow
+    flowname: "川崎幸クリニック$電話番号聴取"
+    next: jump_診察券番号聴取
+
+  - step: jump_診察券番号聴取
+    type: subflow
+    flowname: "川崎幸クリニック$診察券番号聴取"
+    next: 用件確認
+
+  # --- 用件確認（Pattern A: OpenAI 直後 3 分岐。内容聴取は default）---
+  - step: 用件確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "キャンセル"
+        next: キャンセル_診療科
+      - match: "確認"
+        next: 確認_診療科
+      - match: "内容聴取"
+        next: 内容聴取_不明時
+
+  # --- キャンセルルート ---
+  - step: キャンセル_診療科
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    conditions:
+      - match: "default"
+        next: 現在の予約日
+
+  - step: 現在の予約日
+    type: hearing
+    output_format: datetime
+    next: 当日判定
+    retry_failure: end_failure
+
+  # --- 当日判定（Script future_date: 今日より未来なら SUCCESS）---
+  - step: 当日判定
+    type: script
+    script_template: future_date
+    reference_module: "OpenAI_現在の予約日"
+    template_params: {}
+    conditions:
+      - match: "SUCCESS"
+        next: END_キャンセル完了
+      - match: "FAIL"
+        next: END_当日キャンセル
+
+  # --- 確認ルート ---
+  - step: 確認_診療科
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    conditions:
+      - match: "default"
+        next: 確認内容
+
+  - step: 確認内容
+    type: hearing
+    output_format: text
+    next: END_確認完了
+    retry_failure: end_failure
+
+  # --- 内容聴取ルート（用件分類不能時の default） ---
+  - step: 内容聴取_不明時
+    type: hearing
+    output_format: text
+    next: END_内容聴取完了
+    retry_failure: end_failure
+
+  # --- 終話（正常系） ---
+  - step: END_キャンセル完了
+    type: termination
+    termination_ref: "END_キャンセル完了"
+
+  - step: END_当日キャンセル
+    type: termination
+    termination_ref: "END_当日キャンセル"
+
+  - step: END_確認完了
+    type: termination
+    termination_ref: "END_確認完了"
+
+  - step: END_内容聴取完了
+    type: termination
+    termination_ref: "END_内容聴取完了"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "キャンセル"
+      - id: "2"
+        order: "2"
+        value: "確認"
+      - id: "3"
+        order: "3"
+        value: "内容聴取"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "診療受付区分。新規予約・変更は AI 電話では受付対象外のため enum に含めない"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "全カタカナ。氏名サブフローで格納。苗字のみの場合は下の名前を追加聴取"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "「わからない」時は空欄。数字未含有時は再ヒアリング。C→4 等の誤認識救済"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "西暦 yyyy-MM-dd。和暦入力は AI で西暦変換。DTMF 併用"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "着信元電話番号を自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "10桁/11桁のみ受付。11桁は先頭3桁が 090/080/070/060/050 のいずれか必須"
+
+  - context_name: "phonetype"
+    context_name_jp: "電話種別"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "電話番号サブフロー内で '携帯' / 'その他' を saveContext2DB で設定"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "キャンセル/確認ルート共通。no_result 時は '登録なし' を格納（モジュール選定ガイド §2.5）"
+
+  - context_name: "reservationDate"
+    context_name_jp: "現在の予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: |
+      キャンセル用途。yyyy-MM-dd HH:MM 形式。
+      月日のみ発話時は着信年を補完。10-12月着信で1-9月指定は翌年扱い。
+
+  - context_name: "details"
+    context_name_jp: "詳細・問い合わせ内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "確認内容または内容聴取（用件分類不能）ルートで格納するフリーテキスト"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "聴取失敗"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "1=未処理(正常完了) 2=代表案内(当日キャンセル・非通知) 3=聴取失敗 6=時間外"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "用件確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "キャンセル"
+      - "確認"
+      - "内容聴取"
+    notes: |
+      Pattern A（OpenAI 直後分岐）。受付対象は「明日以降のキャンセル」と「予約の確認」のみ。
+      用語変換（customer_doc §1 用語の変換と表記統一）:
+        薬/お薬 → 予約、電気/でんき → 新規、予約を返答 → 予約を変更（いずれも本フローでは受付対象外）
+        やめる/取り消し/取消/やめたい/キャンセル → キャンセル
+        確認/予約の確認 → 確認
+        上記いずれにも該当しない自由発話 → 内容聴取（default）
+      音声のみ（DTMF 併用は customer_doc に指示なし）。
+
+  - order: 2
+    name: "キャンセル_診療科"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    no_result_default: "登録なし"
+    output_labels:
+      - "内科"
+      - "甲状腺外来"
+      - "呼吸器内科"
+      - "睡眠時無呼吸外来"
+      - "糖尿病内科"
+      - "腎臓病外来"
+      - "神経内科"
+      - "心療内科"
+      - "小児科"
+      - "皮膚科"
+      - "耳鼻咽喉科"
+      - "リウマチ外来"
+      - "整形外科"
+      - "訪問診療"
+      - "老年科"
+      - "女性科・漢方外来"
+      - "もの忘れ外来"
+      - "心理"
+      - "栄養相談"
+      - "消化器系総合診療科"
+      - "消化器内科"
+      - "外科"
+      - "食道外科"
+      - "呼吸器外科"
+      - "乳腺外科"
+      - "婦人科"
+      - "脳神経外科"
+      - "脊髄脊椎専門外来"
+      - "大動脈外科"
+      - "循環器内科"
+      - "心臓外科"
+      - "形成外科"
+      - "血管外科"
+      - "泌尿器科"
+      - "痛み外来"
+      - "漢方外来"
+      - "がん相談外来"
+      - "ペースメーカー外来"
+      - "弁膜症外来"
+      - "失神外来"
+      - "不整脈外来"
+      - "化学療法外来"
+      - "ストーマ外来"
+      - "心不全外来"
+      - "リンパ浮腫外来"
+      - "登録なし"
+    notes: |
+      キャンセル対象の診療科を聴取。customer_doc §3 の診療科リスト（約45科）を profile_words に反映。
+      用語変換: 「日々か → 耳鼻咽喉科」「ないか → 内科」（customer_doc §1 用語変換テーブル）。
+      該当診療科がリストにない場合は customer_doc §1-3 のレコメンド文言（「当院に〇〇はございませんが、
+      〇〇でしょうか？」）を OpenAI 側で実装する方針（prompter 申送り）。
+      分岐先は全て同じ（「現在の予約日」）のため conditions は default のみ。no_result 時は「登録なし」格納。
+
+  - order: 3
+    name: "現在の予約日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: |
+      キャンセル対象の既存予約日を聴取。月日のみ発話時は着信年を補完、
+      10-12月着信で1-9月指定は翌年扱い。datetime 出力で当日判定 Script(future_date) に渡す。
+      過去日付（今日より前）は未来日付として受け付けない（customer_doc §1-4）。
+
+  - order: 4
+    name: "確認_診療科"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    no_result_default: "登録なし"
+    output_labels:
+      - "内科"
+      - "甲状腺外来"
+      - "呼吸器内科"
+      - "睡眠時無呼吸外来"
+      - "糖尿病内科"
+      - "腎臓病外来"
+      - "神経内科"
+      - "心療内科"
+      - "小児科"
+      - "皮膚科"
+      - "耳鼻咽喉科"
+      - "リウマチ外来"
+      - "整形外科"
+      - "訪問診療"
+      - "老年科"
+      - "女性科・漢方外来"
+      - "もの忘れ外来"
+      - "心理"
+      - "栄養相談"
+      - "消化器系総合診療科"
+      - "消化器内科"
+      - "外科"
+      - "食道外科"
+      - "呼吸器外科"
+      - "乳腺外科"
+      - "婦人科"
+      - "脳神経外科"
+      - "脊髄脊椎専門外来"
+      - "大動脈外科"
+      - "循環器内科"
+      - "心臓外科"
+      - "形成外科"
+      - "血管外科"
+      - "泌尿器科"
+      - "痛み外来"
+      - "漢方外来"
+      - "がん相談外来"
+      - "ペースメーカー外来"
+      - "弁膜症外来"
+      - "失神外来"
+      - "不整脈外来"
+      - "化学療法外来"
+      - "ストーマ外来"
+      - "心不全外来"
+      - "リンパ浮腫外来"
+      - "登録なし"
+    notes: |
+      確認対象の診療科を聴取。キャンセル_診療科と同じ診療科リスト・profile_words を使用。
+      分岐先は全て同じ（「確認内容」）のため conditions は default のみ。no_result 時は「登録なし」格納。
+
+  - order: 5
+    name: "確認内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "details"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "確認ルートのフリーテキスト格納。OpenAI 正規化なし。そのまま details に保存して終話へ。"
+
+  - order: 6
+    name: "内容聴取_不明時"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "details"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: |
+      用件分類不能（キャンセル/確認のいずれにも該当しない発話）時のフリーテキスト格納。
+      FAQ 相当・独自問合せもここに集約して折り返し案内。RAG は使用しない（移管ノート §16）。
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "用件確認"
+    tts_announcement: "次に、ご用件を、「キャンセルする」「確認する」のいずれかでお話しください。それでは、お話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "キャンセル"
+        - "確認"
+        - "内容聴取"
+      mapping:
+        - input: "キャンセル/取り消し/取消/やめる/やめたい"
+          output: "キャンセル"
+        - input: "確認/予約の確認"
+          output: "確認"
+        - input: "上記いずれにも該当しない自由発話（新規/変更/問い合わせ 等）"
+          output: "内容聴取"
+      no_result_condition: "完全に無音 or 発話不明瞭（リトライへ）"
+    save_to: "classification"
+    next_step: "（enum で分岐。conditions 参照）"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "キャンセル_診療科"
+    tts_announcement: "キャンセルを希望される診療科を、診療科は内科です、のようにお話ください。分からない場合は、分からないとお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "内科"
+        - "甲状腺外来"
+        - "呼吸器内科"
+        - "睡眠時無呼吸外来"
+        - "糖尿病内科"
+        - "腎臓病外来"
+        - "神経内科"
+        - "心療内科"
+        - "小児科"
+        - "皮膚科"
+        - "耳鼻咽喉科"
+        - "リウマチ外来"
+        - "整形外科"
+        - "訪問診療"
+        - "老年科"
+        - "女性科・漢方外来"
+        - "もの忘れ外来"
+        - "心理"
+        - "栄養相談"
+        - "消化器系総合診療科"
+        - "消化器内科"
+        - "外科"
+        - "食道外科"
+        - "呼吸器外科"
+        - "乳腺外科"
+        - "婦人科"
+        - "脳神経外科"
+        - "脊髄脊椎専門外来"
+        - "大動脈外科"
+        - "循環器内科"
+        - "心臓外科"
+        - "形成外科"
+        - "血管外科"
+        - "泌尿器科"
+        - "痛み外来"
+        - "漢方外来"
+        - "がん相談外来"
+        - "ペースメーカー外来"
+        - "弁膜症外来"
+        - "失神外来"
+        - "不整脈外来"
+        - "化学療法外来"
+        - "ストーマ外来"
+        - "心不全外来"
+        - "リンパ浮腫外来"
+        - "登録なし"
+      mapping:
+        - input: "ないか → 内科、日々か → 耳鼻咽喉科、こうじょうせん → 甲状腺外来（customer_doc §1 用語変換）"
+          output: "正規の診療科名"
+        - input: "「わからない」発話 or リスト外診療科"
+          output: "登録なし"
+      no_result_condition: "診療科として解釈不能（saveContext2DB で '登録なし' 格納してリトライ）"
+    save_to: "clinicalDepartment"
+    next_step: "現在の予約日"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "現在の予約日"
+    tts_announcement: "現在の予約日を「4月1日」のように日付でお話ください。わからない場合は「わからない」のようにお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "YYYY-MM-DD HH:MM 形式（半角）"
+      mapping:
+        - input: "4月15日 / 来週の火曜日 / 明日 等の日付表現"
+          output: "YYYY-MM-DD 00:00 形式に正規化"
+        - input: "月日のみ（例: 5月20日）"
+          output: "着信年を補完。10-12月着信で1-9月指定は翌年"
+      no_result_condition: "日付として解釈不能（過去日付・非日付発話はリトライ）"
+    save_to: "reservationDate"
+    next_step: "当日判定"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "確認_診療科"
+    tts_announcement: "確認する診療科を、診療科は内科です、のようにお話ください。分からない場合は、分からないとお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "内科"
+        - "甲状腺外来"
+        - "呼吸器内科"
+        - "睡眠時無呼吸外来"
+        - "糖尿病内科"
+        - "腎臓病外来"
+        - "神経内科"
+        - "心療内科"
+        - "小児科"
+        - "皮膚科"
+        - "耳鼻咽喉科"
+        - "リウマチ外来"
+        - "整形外科"
+        - "訪問診療"
+        - "老年科"
+        - "女性科・漢方外来"
+        - "もの忘れ外来"
+        - "心理"
+        - "栄養相談"
+        - "消化器系総合診療科"
+        - "消化器内科"
+        - "外科"
+        - "食道外科"
+        - "呼吸器外科"
+        - "乳腺外科"
+        - "婦人科"
+        - "脳神経外科"
+        - "脊髄脊椎専門外来"
+        - "大動脈外科"
+        - "循環器内科"
+        - "心臓外科"
+        - "形成外科"
+        - "血管外科"
+        - "泌尿器科"
+        - "痛み外来"
+        - "漢方外来"
+        - "がん相談外来"
+        - "ペースメーカー外来"
+        - "弁膜症外来"
+        - "失神外来"
+        - "不整脈外来"
+        - "化学療法外来"
+        - "ストーマ外来"
+        - "心不全外来"
+        - "リンパ浮腫外来"
+        - "登録なし"
+      mapping:
+        - input: "ないか → 内科、日々か → 耳鼻咽喉科 等（customer_doc §1 用語変換）"
+          output: "正規の診療科名"
+        - input: "「わからない」発話 or リスト外診療科"
+          output: "登録なし"
+      no_result_condition: "診療科として解釈不能（saveContext2DB で '登録なし' 格納してリトライ）"
+    save_to: "clinicalDepartment"
+    next_step: "確認内容"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "確認内容"
+    tts_announcement: "確認内容をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "OpenAI 不要（output_format: text でそのまま保存）"
+    save_to: "details"
+    next_step: "END_確認完了"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "内容聴取_不明時"
+    tts_announcement: "申し訳ございません。AIがうまく聞き取りできませんでした。お伝えしたい内容を自由にお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "OpenAI 不要（output_format: text でそのまま保存）"
+    save_to: "details"
+    next_step: "END_内容聴取完了"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系（customer_doc §4-1 アナウンス一覧から転記）---
+  - name: "END_キャンセル完了"
+    condition: "用件=キャンセル かつ 予約日>今日（明日以降）"
+    tts_announcement: "かしこまりました。予約キャンセルの申し込みを受付いたしました。必要がある場合のみ、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_キャンセル完了"
+
+  - name: "END_確認完了"
+    condition: "用件=確認"
+    tts_announcement: "申し込みを受付いたしました。この後、ショートメールが届きますので申し込み内容のご確認をお願いいたします。3診療日以内に担当者からショートメール、もしくは折り返し電話にてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "2"
+    completion_flag_name: "完了フラグ_確認完了"
+
+  - name: "END_内容聴取完了"
+    condition: "用件=内容聴取（用件分類不能時の default）"
+    tts_announcement: "申し込みを受付いたしました。この後、ショートメールが届きますので申し込み内容のご確認をお願いいたします。3診療日以内に担当者からショートメール、もしくは折り返し電話にてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "2"
+    completion_flag_name: "完了フラグ_内容聴取完了"
+
+  - name: "END_当日キャンセル"
+    condition: "用件=キャンセル かつ 予約日=今日"
+    tts_announcement: "申し訳ございません。本日の診療予約のキャンセルはAI電話では受け付けておりません。電話予約センターへおかけ直しください。電話番号は、044-511-2112です。電話番号は、044-511-2112です。電話番号は、044-511-2112です。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_当日キャンセル"
+
+# smsFlag 分岐設計（用件＋当日判定の組み合わせで決定）
+sms_flag_routing:
+  enabled: true
+  routing_keys:
+    - "classification"
+    - "reservationDate"
+  patterns:
+    - condition: "classification=キャンセル かつ reservationDate>今日"
+      sms_flag: "1"
+      notes: "END_キャンセル完了（SMS 送信あり）"
+    - condition: "classification=キャンセル かつ reservationDate=今日"
+      sms_flag: "0"
+      notes: "END_当日キャンセル（初期値保持。SMS 送信なし、代表番号案内のみ）"
+    - condition: "classification=確認"
+      sms_flag: "2"
+      notes: "END_確認完了（SMS 送信あり）"
+    - condition: "classification=内容聴取"
+      sms_flag: "2"
+      notes: "END_内容聴取完了（SMS 送信あり）"
+
+# --- セクション8b: RAG/FAQ 検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+  # 移管ノート §16: customer_doc §1-2 に FAQ 記述はあるが、
+  # 「AI電話ではご対応できませんので、折り返しでご確認」で必ず逃がす設計のため RAG 未使用。
+  # FAQ 相当の問合せは内容聴取_不明時 ルートで details に集約する。
+
+# --- セクション9: TTS モジュール一覧 ---
+# メインフロー側 TTS のみ。サブフロー内部 TTS は各サブフロー側 properties で管理。
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内 + status=0/smsFlag=0 初期化"
+    announcement: "こちらは、川崎幸クリニック。第二川崎幸クリニック診療予約専用AI電話です。こちらでは、診療予約の確認と、明日以降のキャンセルのみ対応しております。本日の診療に関することや、その他のご用件は電話予約センターへおかけ直しください。"
+
+  - module_name: "用件確認"
+    purpose: "用件問いかけ"
+    announcement: "次に、ご用件を、「キャンセルする」「確認する」のいずれかでお話しください。それでは、お話しください。"
+
+  - module_name: "キャンセル_診療科"
+    purpose: "キャンセル対象の診療科聴取"
+    announcement: "キャンセルを希望される診療科を、診療科は内科です、のようにお話ください。分からない場合は、分からないとお話ください。"
+
+  - module_name: "確認_診療科"
+    purpose: "確認対象の診療科聴取"
+    announcement: "確認する診療科を、診療科は内科です、のようにお話ください。分からない場合は、分からないとお話ください。"
+
+  - module_name: "現在の予約日"
+    purpose: "キャンセル対象の既存予約日聴取"
+    announcement: "現在の予約日を「4月1日」のように日付でお話ください。わからない場合は「わからない」のようにお話ください。"
+
+  - module_name: "確認内容"
+    purpose: "確認内容のフリーテキスト聴取"
+    announcement: "確認内容をお話ください。"
+
+  - module_name: "内容聴取_不明時"
+    purpose: "用件分類不能時のフリーテキスト聴取"
+    announcement: "申し訳ございません。AIがうまく聞き取りできませんでした。お伝えしたい内容を自由にお話しください。"
+
+  - module_name: "END_非通知"
+    purpose: "非通知終話"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_時間外"
+    purpose: "時間外終話"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ上限到達終話"
+    announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_キャンセル完了"
+    purpose: "明日以降のキャンセル完了終話（SMS 送信あり）"
+    announcement: "かしこまりました。予約キャンセルの申し込みを受付いたしました。必要がある場合のみ、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_確認完了"
+    purpose: "予約確認完了終話（SMS 送信あり）"
+    announcement: "申し込みを受付いたしました。この後、ショートメールが届きますので申し込み内容のご確認をお願いいたします。3診療日以内に担当者からショートメール、もしくは折り返し電話にてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_内容聴取完了"
+    purpose: "内容聴取完了終話（SMS 送信あり）"
+    announcement: "申し込みを受付いたしました。この後、ショートメールが届きますので申し込み内容のご確認をお願いいたします。3診療日以内に担当者からショートメール、もしくは折り返し電話にてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_当日キャンセル"
+    purpose: "当日キャンセル（代表番号 044-511-2112 を 3 回反復案内、status=2）"
+    announcement: "申し訳ございません。本日の診療予約のキャンセルはAI電話では受け付けておりません。電話予約センターへおかけ直しください。電話番号は、044-511-2112です。電話番号は、044-511-2112です。電話番号は、044-511-2112です。それでは失礼いたします。"
+
+# --- セクション10: AmiVoice 辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "用件確認"
+    words: |
+      キャンセル きゃんせる
+      取り消し とりけし
+      取消 とりけし
+      やめる やめる
+      やめたい やめたい
+      確認 かくにん
+      予約の確認 よやくのかくにん
+      内容 ないよう
+      相談 そうだん
+      問い合わせ といあわせ
+
+  # キャンセル_診療科 / 確認_診療科 で共通使用する診療科辞書（customer_doc §3）
+  - step_name: "キャンセル_診療科"
+    words: |
+      内科 ないか
+      甲状腺外来 こうじょうせんないか
+      甲状腺外来 こうじょうせん
+      甲状腺外来 こうじょう
+      呼吸器内科 こきゅうきないか
+      睡眠時無呼吸外来 すいみんじむこきゅうがいらい
+      睡眠時無呼吸外来 すいみん
+      睡眠時無呼吸外来 すいみんじ
+      睡眠時無呼吸外来 むこきゅう
+      睡眠時無呼吸外来 すいみんじむこきゅう
+      糖尿病内科 とうにょうびょうないか
+      糖尿病内科 とうにょうびょう
+      糖尿病内科 とうにょう
+      腎臓病外来 じんぞうないか
+      腎臓病外来 じんぞうびょう
+      神経内科 しんけいないか
+      神経内科 しんけい
+      心療内科 しんりょうないか
+      心療内科 しんりょう
+      小児科 しょうにか
+      小児科 しょうに
+      皮膚科 ひふか
+      皮膚科 ひふ
+      耳鼻咽喉科 じびいんこうか
+      耳鼻咽喉科 じび
+      耳鼻咽喉科 いんこう
+      耳鼻咽喉科 じびか
+      リウマチ外来 りうまちか
+      リウマチ外来 りうまち
+      リウマチ外来 りゅうまち
+      整形外科 せいけいげか
+      整形外科 せいけい
+      訪問診療 ほうもんしんりょう
+      訪問診療 ほうもん
+      訪問診療 おうしん
+      老年科 ろうねんか
+      老年科 ろうねん
+      女性科・漢方外来 じょせいかかんぽうがいらい
+      女性科・漢方外来 かんぽう
+      女性科・漢方外来 かんぽうがいらい
+      女性科・漢方外来 じょせいかんぽう
+      もの忘れ外来 ものわすれがいらい
+      もの忘れ外来 ものわすれ
+      もの忘れ外来 にんちしょう
+      心理 かうんせりんぐ
+      心理 しんりそうだん
+      心理 しんり
+      心理 しんりし
+      栄養相談 えいようそうだん
+      栄養相談 えいようし
+      消化器系総合診療科 しょうかきけいそうごうしんりょうか
+      消化器系総合診療科 いちょうか
+      消化器系総合診療科 しょうそう
+      消化器系総合診療科 しょうかきそうしん
+      消化器内科 しょうかきないか
+      消化器内科 しょうない
+      消化器内科 しょうかき
+      消化器内科 しょうかきか
+      外科 げか
+      外科 いっぱんげか
+      外科 かんたんすい
+      外科 かんぞうげか
+      外科 げんりょうげかがいらい
+      外科 げんりょうげか
+      外科 げんりょう
+      外科 だいえっと
+      外科 ぎゃくりゅうせいしょうくどうえんがいらい
+      外科 ぎゃくりゅうせいしょくどうえん
+      食道外科 しょくどうげか
+      食道外科 しょくどう
+      食道外科 しょくげ
+      呼吸器外科 こきゅうきげか
+      呼吸器外科 こげ
+      乳腺外科 にゅうせんげか
+      乳腺外科 にゅうせんか
+      乳腺外科 にゅうせん
+      乳腺外科 にゅうせんがいらい
+      乳腺外科 ぶれすとせんたー
+      乳腺外科 にゅうぼう
+      婦人科 ふじんか
+      婦人科 さんふじんか
+      婦人科 ぎね
+      脳神経外科 のうしんけいげか
+      脳神経外科 のうげ
+      脳神経外科 のうけっかんちりょう
+      脳神経外科 のうけっかん
+      脳神経外科 のうげか
+      脳神経外科 しんけいげか
+      脳神経外科 のうけっかんちりょうか
+      脳神経外科 ずつう
+      脳神経外科 ずつうがいらい
+      脊髄脊椎専門外来 せきついせきずいがいらい
+      脊髄脊椎専門外来 せきつい
+      脊髄脊椎専門外来 せきずい
+      大動脈外科 かわさきだいどうみゃくせんたー
+      大動脈外科 だいどうみゃくげか
+      大動脈外科 だいどうみゃく
+      大動脈外科 だいどうみゃくせんたー
+      大動脈外科 だいげ
+      大動脈外科 しんぞうけっかんげか
+      循環器内科 じゅんかんきないか
+      循環器内科 じゅんない
+      循環器内科 じゅんかんきか
+      循環器内科 じゅんかんきけい
+      循環器内科 じゅんかん
+      循環器内科 じゅんかんき
+      循環器内科 しんぞう
+      循環器内科 じゅんかんきけいそうごうしんりょうか
+      心臓外科 しんぞうげか
+      心臓外科 しんぞうびょう
+      心臓外科 しんげ
+      心臓外科 しんげがいらい
+      形成外科 けいせいげかびようげかせんたー
+      形成外科 けいせいげか
+      形成外科 びようげか
+      形成外科 けいせい
+      形成外科 びよう
+      形成外科 びようせいけい
+      形成外科 れーざー
+      血管外科 けっかんげかかしじょうみゃくせんたー
+      血管外科 けっかんげか
+      血管外科 かしじょうみゃくりゅう
+      血管外科 かしじょうみゃく
+      血管外科 じょうみゃくりゅう
+      泌尿器科 ひにょうきか
+      泌尿器科 ひにょうき
+      泌尿器科 ひにょう
+      泌尿器科 だんせいこうねんき
+      泌尿器科 うろ
+      泌尿器科 ひにょうか
+      泌尿器科 じょせいひにょうきか
+      痛み外来 いたみがいらい
+      痛み外来 いたみ
+      痛み外来 ぺいん
+      痛み外来 ぺいんがいらい
+      漢方外来 かんぽうがいらい
+      漢方外来 かんぽう
+      漢方外来 ころなこういしょう
+      漢方外来 ふみん
+      がん相談外来 がんそうだんがいらい
+      がん相談外来 がん
+      がん相談外来 そうだんがいらい
+      ペースメーカー外来 ぺーすめーかーがいらい
+      ペースメーカー外来 ぺーすめーかー
+      弁膜症外来 べんまくしょうがいらい
+      弁膜症外来 べんまくしょう
+      失神外来 しっしんがいらい
+      失神外来 しっしん
+      不整脈外来 ふせいみゃくがいらい
+      不整脈外来 ふせいみゃく
+      化学療法外来 かがくりょうほうがいらい
+      化学療法外来 かがくりょうほう
+      化学療法外来 がんかがくりょうほう
+      化学療法外来 けも
+      ストーマ外来 すとーまがいらい
+      ストーマ外来 すとーま
+      ストーマ外来 じんこうこうもん
+      心不全外来 しんふぜんがいらい
+      心不全外来 しんふぜん
+      リンパ浮腫外来 りんぱふしゅ
+      リンパ浮腫外来 りんぱ
+      リンパ浮腫外来 むくみがいらい
+      リンパ浮腫外来 りんぱふしゅがいらい
+
+  - step_name: "確認_診療科"
+    words: |
+      # キャンセル_診療科と同一の辞書を適用（customer_doc §3 全45科）。
+      # scaffold/properties 側で「キャンセル_診療科」の words を共有参照する想定。
+      # 重複記述を避けるため内容は割愛（キャンセル_診療科を参照）。
+
+  - step_name: "現在の予約日"
+    words: |
+      今日 きょう
+      明日 あした
+      明後日 あさって
+      来週 らいしゅう
+      再来週 さらいしゅう
+      月 がつ
+      日 にち
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "【受付範囲】受付対象は『予約の確認』と『明日以降のキャンセル』のみ。新規予約・予約変更・本日予約は一切受付不可（用件 enum に含めない）。本日キャンセルは代表番号 044-511-2112 を 3 回反復案内して status=2 で終話。"
+  - "【当日判定】Script(future_date) で reservationDate > 今日 を判定。SUCCESS=明日以降（smsFlag=1）、FAIL=当日（smsFlag=0, status=2）。OpenAI の日付比較は不安定なため Script を使用（モジュール選定ガイド §3.8）。"
+  - "【復唱ポリシー】電話番号のみ復唱許可。氏名・生年月日・診察券番号・診療科・予約日・確認内容は復唱禁止。一度聴取した情報は再度聞き直さない（customer_doc 冒頭『絶対的な聞き直し禁止』）。"
+  - "【電話番号復唱の TTS 形式】customer_doc は `<speak type=\"telephone\" breakc=\"300ms\">{}</speak>ですね` だが Gen3 では SSML 禁止。{tts_g:...} の平文で「...でよろしいですか」形式に置換する（移管ノート §47）。"
+  - "【生年月日】西暦指定が基本だが和暦入力も AI で西暦変換可。DTMF 併用必須（customer_doc 改訂履歴 2026/04/14）。"
+  - "【連絡先電話番号】10桁/11桁のみ受付。11桁は先頭3桁が 090/080/070/060/050 のいずれか必須。9桁/10桁で頭0欠落時は先頭0補完。着信番号が携帯なら自動格納→確認、それ以外は DTMF 直接聴取→正規化→復唱確認。"
+  - "【診察券番号】『わからない』を許可（必須聴取ではない）。数字含まない発話は再ヒアリング。誤認識救済: C/Sea→4、Go→5、Q→9 等（customer_doc §1-9）。"
+  - "【氏名】カタカナ以外で格納された場合は『うまく聞き取りができませんでした、ゆっくり話すとAIが聞き取れません。普通のスピードではっきりと発話してください。』で再聴取ループ。苗字のみの場合は『下のお名前もお伺いしてもよろしいですか？』で下の名前を追加聴取するサブステップを氏名サブフロー内に設ける。"
+  - "【肯定特殊語】『いいです』『肺』を肯定扱い（customer_doc §4 冒頭）。電話番号復唱 OpenAI プロンプトおよび生年月日復唱 OpenAI プロンプトに反映（prompter 申送り）。"
+  - "【smsFlag 初期化】冒頭アナウンス時に status=0 / smsFlag=0 を更新値として設定（customer_doc §2、移管ノート §42）。"
+  - "【冒頭アナウンス後の barge-in 抑制】冒頭アナウンスの発話後、次の質問を出力するまではマイクを置くことを厳禁（customer_doc §2 特記）。opening ブロックで barge-in 抑制／連続発話する構成にする。"
+  - "【予約日正規化】月日のみ発話時は着信年で補完。10-12月着信で1-9月指定は翌年扱い。過去日付は未来日付のみ受付（customer_doc §1-4）。予約日（reservationDate=DATE型）と予約希望日（フリーワード）を混同しない。"
+  - "【診療科レコメンド】該当診療科がリストにない場合は customer_doc §1-3『当院に〇〇はございませんが、〇〇でしょうか？』と近しい診療科をレコメンドし、回答待ち（customer_doc §1-5『回答を待つような返答をした場合は、返答があるまでは次の質問はしない』）。OpenAI 側で実装（prompter 申送り）。"
+  - "【用語変換】customer_doc §1 用語変換テーブル: 基礎研修員→基礎健診、印刷/定期/新薬/再診/最新/禁忌→診察、薬/お薬→予約、電気/でんき→新規、日々か→耳鼻咽喉科、ないか→内科、予約を返答→予約を変更。用件確認 OpenAI および診療科 OpenAI のプロンプトに必須反映（prompter 申送り）。"
+  - "【数字正規化】customer_doc §1-7/1-9 の数字キーワード表（いち→1、ひー→1、よん/しー/し/C/Sea→4、ご/いつ/Go→5 等）を診察券番号・連絡先電話番号 OpenAI プロンプトに反映（prompter 申送り）。"
+  - "【FAQ】customer_doc §1-2 に FAQ 記述はあるが、AI 電話では回答せず『ご質問いただいた内容はAI電話ではご対応できませんので、折り返しでご確認させていただきます。』と案内して内容聴取_不明時 ルートで details に集約（RAG は未使用）。"
+  - "【転送】customer_doc §11『転送は行いません』。call_transfer ブロック未配置。"
+  - "【健診ブランチとの差異】同一施設の別シナリオ『健診』と並走。氏名/生年月日/電話番号/診察券番号サブフローは健診側と共通化前提。ただし classification 値（診療=3値、健診=別値）・終話分岐は診療独自で別構造のため、健診 bivr の該当分岐をコピー流用しないこと。"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "office_id（Dr.JOY 管理画面で設定）"
+    resolved: false
+  - item: "ARS 着信番号（Brekeke 設定時に付与）"
+    resolved: false
+  - item: "営業時間スケジュール（曜日・時間帯。customer_doc に明記なし → Dr.JOY 側設定）"
+    resolved: false
+  - item: "Dr.JOY 側: SMS 文面（smsFlag=1 キャンセル完了用 / smsFlag=2 確認・内容聴取完了用）"
+    resolved: false
+  - item: "Dr.JOY 側: 認証設定優先順位（生年月日／電話番号／診察券番号）"
+    resolved: false
+  - item: "Dr.JOY 側: 画面表示設定（確認画面表示 ○/×）"
+    resolved: false
+  - item: "氏名サブフローの『苗字のみ→下の名前追加聴取』サブステップ実装（個人情報サブフローテンプレートに組込み済みか要確認）"
+    resolved: false
+  - item: "肯定特殊語『いいです』『肺』の電話番号/生年月日復唱 OpenAI プロンプト反映（prompter 担当）"
+    resolved: false
+  - item: "診療科レコメンド文言『当院に〇〇はございませんが、〇〇でしょうか？』の OpenAI プロンプト実装（prompter 担当）"
+    resolved: false

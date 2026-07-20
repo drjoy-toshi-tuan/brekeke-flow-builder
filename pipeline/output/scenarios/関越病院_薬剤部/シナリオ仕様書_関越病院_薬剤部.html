@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>シナリオ仕様書 — 関越病院</title>
+<style>
+  :root {
+    --primary: #2563eb; --primary-light: #eff6ff;
+    --success: #16a34a; --success-light: #f0fdf4;
+    --warning: #d97706; --warning-light: #fffbeb;
+    --danger: #dc2626; --danger-light: #fef2f2;
+    --gray-50: #f9fafb; --gray-100: #f3f4f6; --gray-200: #e5e7eb;
+    --gray-300: #d1d5db; --gray-500: #6b7280; --gray-700: #374151; --gray-900: #111827;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI','Hiragino Sans','Yu Gothic UI',sans-serif; background: var(--gray-50); color: var(--gray-900); line-height: 1.7; }
+  .header { background: linear-gradient(135deg, #1e40af, #3b82f6); color: white; padding: 2.5rem 2rem; text-align: center; }
+  .header h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 0.5rem; }
+  .header .meta { opacity: 0.85; font-size: 0.9rem; }
+  .container { max-width: 900px; margin: 0 auto; padding: 1.5rem; }
+  .overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+  .overview-card { background: white; border-radius: 12px; padding: 1.2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); text-align: center; }
+  .overview-card .num { font-size: 2rem; font-weight: 700; color: var(--primary); }
+  .overview-card .label { font-size: 0.85rem; color: var(--gray-500); margin-top: 0.2rem; }
+  .flow-overview { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin: 1.5rem 0; }
+  .flow-chain { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.3rem; padding: 1rem 0; }
+  .flow-node { background: var(--primary-light); border: 2px solid var(--primary); border-radius: 8px; padding: 0.5rem 1rem; font-size: 0.85rem; font-weight: 600; color: var(--primary); white-space: nowrap; }
+  .flow-node.start { background: var(--success-light); border-color: var(--success); color: var(--success); }
+  .flow-node.end { background: var(--danger-light); border-color: var(--danger); color: var(--danger); }
+  .flow-node.branch { background: var(--warning-light); border-color: var(--warning); color: var(--warning); }
+  .flow-arrow { font-size: 1.2rem; color: var(--gray-300); }
+  .section { margin: 1.5rem 0; }
+  .section-title { font-size: 1.3rem; font-weight: 700; color: var(--gray-900); padding-bottom: 0.5rem; border-bottom: 2px solid var(--primary); margin-bottom: 1rem; }
+  .block { background: white; border-radius: 12px; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); overflow: hidden; }
+  .block-header { background: var(--gray-100); padding: 0.8rem 1.2rem; cursor: pointer; display: flex; align-items: center; gap: 0.8rem; user-select: none; transition: background 0.2s; }
+  .block-header:hover { background: var(--gray-200); }
+  .block-header .icon { font-size: 1.3rem; }
+  .block-header .title { font-weight: 600; flex: 1; }
+  .block-header .badge { font-size: 0.75rem; padding: 0.15rem 0.6rem; border-radius: 999px; font-weight: 600; }
+  .badge-blue { background: var(--primary-light); color: var(--primary); }
+  .badge-green { background: var(--success-light); color: var(--success); }
+  .badge-orange { background: var(--warning-light); color: var(--warning); }
+  .badge-red { background: var(--danger-light); color: var(--danger); }
+  .badge-purple { background: #f3e8ff; color: #7c3aed; }
+  .badge-gray { background: var(--gray-100); color: var(--gray-500); }
+  .block-header .chevron { transition: transform 0.3s; font-size: 0.8rem; color: var(--gray-500); }
+  .block.open .block-header .chevron { transform: rotate(90deg); }
+  .block-body { display: none; padding: 1.2rem; }
+  .block.open .block-body { display: block; }
+  .speech { background: var(--primary-light); border-left: 4px solid var(--primary); border-radius: 0 8px 8px 0; padding: 0.8rem 1rem; margin: 0.5rem 0 0.5rem 2rem; font-size: 0.9rem; position: relative; }
+  .speech::before { content: '\1F50A'; position: absolute; left: -2rem; top: 0.7rem; font-size: 1rem; }
+  .speech .label { font-size: 0.75rem; color: var(--gray-500); font-weight: 600; margin-bottom: 0.3rem; }
+  .branch-table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; font-size: 0.9rem; }
+  .branch-table th { background: var(--gray-100); padding: 0.5rem 0.8rem; text-align: left; font-weight: 600; font-size: 0.8rem; color: var(--gray-500); }
+  .branch-table td { padding: 0.5rem 0.8rem; border-bottom: 1px solid var(--gray-200); }
+  .steps { list-style: none; padding: 0; }
+  .steps li { padding: 0.6rem 0 0.6rem 2.5rem; position: relative; border-left: 2px solid var(--gray-200); margin-left: 0.8rem; }
+  .steps li::before { content: attr(data-num); position: absolute; left: -0.85rem; top: 0.5rem; width: 1.5rem; height: 1.5rem; border-radius: 50%; background: var(--primary); color: white; font-size: 0.75rem; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+  .steps li:last-child { border-left-color: transparent; }
+  .step-title { font-weight: 600; }
+  .step-desc { font-size: 0.85rem; color: var(--gray-500); margin-top: 0.2rem; }
+  .info-box { background: var(--warning-light); border-left: 4px solid var(--warning); padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-size: 0.85rem; }
+  .error-box { background: var(--danger-light); border-left: 4px solid var(--danger); padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-size: 0.85rem; }
+  .collect-table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; }
+  .collect-table th { background: var(--gray-100); padding: 0.6rem 1rem; text-align: left; font-size: 0.85rem; }
+  .collect-table td { padding: 0.6rem 1rem; border-bottom: 1px solid var(--gray-200); font-size: 0.9rem; }
+  .footer { text-align: center; color: var(--gray-500); font-size: 0.8rem; padding: 2rem 0; }
+  /* 縦型ツリー図 */
+  .tree-section { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin: 1.5rem 0; overflow-x: auto; }
+  .vtree { display: flex; flex-direction: column; align-items: center; gap: 0; }
+  .vtree-node { background: var(--primary-light); border: 2px solid var(--primary); border-radius: 8px; padding: 0.35rem 1rem; font-size: 0.8rem; font-weight: 600; color: var(--primary); white-space: nowrap; text-align: center; min-width: 100px; }
+  .vtree-node.t-opening { background: var(--success-light); border-color: var(--success); color: var(--success); }
+  .vtree-node.t-announcement { background: #e0f2fe; border-color: #0284c7; color: #0284c7; }
+  .vtree-node.t-hearing { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
+  .vtree-node.t-subflow { background: #f3e8ff; border-color: #7c3aed; color: #7c3aed; }
+  .vtree-node.t-context_match_router, .vtree-node.t-script, .vtree-node.t-date_of_call_classifier { background: var(--warning-light); border-color: var(--warning); color: var(--warning); }
+  .vtree-node.t-call_transfer { background: #fce7f3; border-color: #db2777; color: #db2777; }
+  .vtree-node.t-termination { background: var(--danger-light); border-color: var(--danger); color: var(--danger); }
+  .vtree-arrow { color: var(--gray-300); font-size: 0.9rem; line-height: 1; text-align: center; padding: 2px 0; }
+  .vtree-branches { display: flex; justify-content: center; gap: 0.8rem; margin: 0.3rem 0; }
+  .vtree-branch { display: flex; flex-direction: column; align-items: center; gap: 0; border: 1px solid var(--gray-200); border-radius: 10px; padding: 0.5rem; background: var(--gray-50); }
+  .vtree-branch-label { font-size: 0.7rem; font-weight: 700; color: var(--gray-500); background: white; border-radius: 4px; padding: 0.1rem 0.5rem; margin-bottom: 0.2rem; border: 1px solid var(--gray-200); }
+  .vtree-merge { text-align: center; font-size: 0.75rem; color: var(--gray-500); padding: 0.2rem 0; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>シナリオ仕様書</h1>
+  <div class="meta">関越病院 | 作成日: 2026年04月16日</div>
+</div>
+<div class="container">
+
+<div class="overview">
+  <div class="overview-card"><div class="num">19</div><div class="label">総ブロック数</div></div>
+  <div class="overview-card"><div class="num">0</div><div class="label">用件メニュー</div></div>
+  <div class="overview-card"><div class="num">4</div><div class="label">サブフロー</div></div>
+  <div class="overview-card"><div class="num">3</div><div class="label">分岐ブロック</div></div>
+  <div class="overview-card"><div class="num">6</div><div class="label">終話パターン</div></div>
+</div>
+
+<div class="tree-section">
+  <h3 style="margin-bottom:0.8rem;color:var(--gray-700);">通話の全体フロー（樹形図）</h3>
+  <div class="vtree"><div class="vtree-node t-opening">冒頭</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">薬局名</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">用件確認</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">担当者名</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_診察券番号聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_氏名聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">用件分岐1</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">その他問合せ</div><div class="vtree-node t-hearing">問い合わせ内容_その他</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_RAG検索</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_折返し不要</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-hearing">診療科</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">用件分岐2</div></div></div></div>
+</div>
+
+<div style="background:white;border-radius:12px;padding:1rem 1.5rem;box-shadow:0 1px 3px rgba(0,0,0,0.08);margin:1.5rem 0;display:flex;flex-wrap:wrap;gap:1.5rem;align-items:center;">
+  <span style="font-weight:600;color:var(--gray-700);font-size:0.9rem;">処理方式の凡例:</span>
+  <span style="display:flex;align-items:center;gap:0.4rem;"><span class="badge badge-gray">音声認識のみ</span><span style="font-size:0.8rem;color:var(--gray-500);">患者の発話をそのまま記録</span></span>
+  <span style="display:flex;align-items:center;gap:0.4rem;"><span class="badge badge-purple">AI判定</span><span style="font-size:0.8rem;color:var(--gray-500);">AIが発話内容を分類・変換して分岐</span></span>
+</div>
+<div class="section">
+<div class="section-title">1. 着信～用件選択</div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F500;</span><span class="title">用件確認</span><span class="badge badge-orange">分岐</span><span class="badge badge-purple">AI判定</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">AIが話す内容</div>ご用件を、次の3つのうち、いずれかでお話ください。1、疑義照会。2、報告。3、その他問合せ。それでは、お話しください。</div>
+<div class="error-box">&#x1F504; 聞き取れなかった場合: 最大<strong>2回</strong>再質問</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">2. 個人情報聴取（共通サブフロー）</div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F464;</span><span class="title">聴取する項目</span><span class="badge badge-blue">4項目</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th>順序</th><th>項目</th><th>入力方法</th></tr>
+<tr><td>1</td><td><strong>氏名聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>2</td><td><strong>診察券番号聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>3</td><td><strong>電話番号聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>4</td><td><strong>RAG検索</strong></td><td>音声 / プッシュ</td></tr>
+</table>
+<div class="info-box">&#x1F4F1; <strong>携帯電話からの着信の場合</strong>: 電話番号は着信番号を復唱確認</div>
+<div class="error-box">&#x1F504; 各項目とも聞き取れなかった場合は最大<strong>2回</strong>再質問</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">3. ブロック構成（技術仕様）</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F9E9;</span><span class="title">全ブロック一覧（19ブロック）</span><span class="badge badge-blue">19件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th style="width:5%">#</th><th style="width:25%">ブロック名</th><th style="width:15%">タイプ</th><th style="width:25%">接続先</th><th style="width:30%">詳細</th></tr>
+<tr><td>1</td><td>&#x1F3E0; <strong>冒頭</strong></td><td><span class="badge badge-green">冒頭</span></td><td style="font-size:0.8rem">薬局名</td><td style="font-size:0.8rem">営業時間チェックあり</td></tr>
+<tr><td>2</td><td>&#x1F3A4; <strong>薬局名</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">用件確認</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>3</td><td>&#x1F3A4; <strong>用件確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">担当者名</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>4</td><td>&#x1F3A4; <strong>担当者名</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">jump_診察券番号聴取</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>5</td><td>&#x1F517; <strong>jump_診察券番号聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">jump_氏名聴取</td><td style="font-size:0.8rem">flow: 関越病院$診察券番号聴取</td></tr>
+<tr><td>6</td><td>&#x1F517; <strong>jump_氏名聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">用件分岐1</td><td style="font-size:0.8rem">flow: 関越病院$氏名聴取</td></tr>
+<tr><td>7</td><td>&#x1F500; <strong>用件分岐1</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">問い合わせ内容_その他 / 診療科</td><td style="font-size:0.8rem">ref: classification</td></tr>
+<tr><td>8</td><td>&#x1F3A4; <strong>診療科</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">用件分岐2</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>9</td><td>&#x1F500; <strong>用件分岐2</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">問い合わせ内容_疑義照会 / 問い合わせ内容_報告</td><td style="font-size:0.8rem">ref: classification</td></tr>
+<tr><td>10</td><td>&#x1F3A4; <strong>問い合わせ内容_疑義照会</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">END_折返し不要</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>11</td><td>&#x1F3A4; <strong>問い合わせ内容_報告</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">折返し有無</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>12</td><td>&#x1F3A4; <strong>折返し有無</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">jump_電話番号聴取 / END_折返し不要</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>13</td><td>&#x1F517; <strong>jump_電話番号聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">終話分岐_電話種別</td><td style="font-size:0.8rem">flow: 関越病院$電話番号聴取</td></tr>
+<tr><td>14</td><td>&#x1F500; <strong>終話分岐_電話種別</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">END_折返しあり_入電番号 / END_折返しあり_聴取番号</td><td style="font-size:0.8rem">ref: phonetype</td></tr>
+<tr><td>15</td><td>&#x1F3A4; <strong>問い合わせ内容_その他</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">jump_RAG検索</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>16</td><td>&#x1F517; <strong>jump_RAG検索</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">END_折返し不要</td><td style="font-size:0.8rem">flow: 関越病院$RAG検索</td></tr>
+<tr><td>17</td><td>&#x1F6D1; <strong>END_折返し不要</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_折返し不要</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>18</td><td>&#x1F6D1; <strong>END_折返しあり_入電番号</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_折返しあり_入電番号</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>19</td><td>&#x1F6D1; <strong>END_折返しあり_聴取番号</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_折返しあり_聴取番号</td><td style="font-size:0.8rem">—</td></tr>
+</table>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">4. エラー・例外時の挙動</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x26A0;&#xFE0F;</span><span class="title">エラー時の対応一覧</span><span class="badge badge-red">重要</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th>状況</th><th>対応</th></tr>
+<tr><td>非通知着信</td><td>恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td>受付時間外</td><td>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td>リトライ上限到達</td><td>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td>疑義照会完了 / 報告(折返し不要)完了 / その他問合せ完了</td><td>かしこまりました。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td>報告(折返し必要)完了 かつ phonetype=携帯</td><td>かしこまりました。お伺いした番号に折り返しいたします。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td>報告(折返し必要)完了 かつ phonetype=その他</td><td>かしこまりました。お掛けいただいた番号に折り返しいたします。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+</table>
+<div class="speech"><div class="label">聞き取り失敗時の切断アナウンス</div>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">5. 終話パターン一覧</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F6AA;</span><span class="title">全終話パターンの発話テキスト</span><span class="badge badge-red">6件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">END_非通知</div>恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_時間外</div>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_聴取失敗</div>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_折返し不要</div>かしこまりました。お電話ありがとうございました。それでは失礼いたします。</div>
+<div class="speech"><div class="label">END_折返しあり_入電番号</div>かしこまりました。お伺いした番号に折り返しいたします。お電話ありがとうございました。それでは失礼いたします。</div>
+<div class="speech"><div class="label">END_折返しあり_聴取番号</div>かしこまりました。お掛けいただいた番号に折り返しいたします。お電話ありがとうございました。それでは失礼いたします。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">6. 発話テキスト全文一覧</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F4DD;</span><span class="title">全発話テキスト（18件）</span><span class="badge badge-blue">18件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th style="width:30%">ステップ名</th><th>発話テキスト</th></tr>
+<tr><td><strong>冒頭_アナウンス</strong></td><td>お電話ありがとうございます。関越病院の疑義紹介専用、AI電話です。</td></tr>
+<tr><td><strong>薬局名</strong></td><td>まず初めに、薬局名をお話ください。</td></tr>
+<tr><td><strong>用件確認</strong></td><td>ご用件を、次の3つのうち、いずれかでお話ください。1、疑義照会。2、報告。3、その他問合せ。それでは、お話しください。</td></tr>
+<tr><td><strong>担当者名</strong></td><td>担当者名をお話ください。</td></tr>
+<tr><td><strong>診療科</strong></td><td>診療科をお話ください。</td></tr>
+<tr><td><strong>問い合わせ内容_疑義照会</strong></td><td>疑義の内容をお話ください。</td></tr>
+<tr><td><strong>問い合わせ内容_報告</strong></td><td>報告の内容をお話ください。</td></tr>
+<tr><td><strong>問い合わせ内容_その他</strong></td><td>問い合わせ内容をお話ください。</td></tr>
+<tr><td><strong>折返し有無</strong></td><td>当院からの、折り返しの連絡は必要ですか？</td></tr>
+<tr><td><strong>END_折返し不要</strong></td><td>かしこまりました。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_折返しあり_入電番号</strong></td><td>かしこまりました。お伺いした番号に折り返しいたします。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_折返しあり_聴取番号</strong></td><td>かしこまりました。お掛けいただいた番号に折り返しいたします。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>非通知_アナウンス</strong></td><td>恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>時間外_アナウンス</strong></td><td>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>聴取失敗_アナウンス</strong></td><td>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_非通知</strong></td><td>恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_時間外</strong></td><td>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_聴取失敗</strong></td><td>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。</td></tr>
+</table>
+</div></div>
+</div>
+
+</div>
+<div class="footer">自動生成: VoiceBot Flow Builder | 関越病院 | 2026年04月16日</div>
+<script>
+document.querySelectorAll('.block-header').forEach(function(el){
+  el.addEventListener('click', function(){});
+});
+</script>
+</body>
+</html>

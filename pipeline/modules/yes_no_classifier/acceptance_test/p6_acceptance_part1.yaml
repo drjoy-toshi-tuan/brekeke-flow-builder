@@ -1,0 +1,202 @@
+# Pattern 6 (テストフロー) — yes_no_classifier 受入テスト engine v3 【part1/2: Y+N+E = 136ケース】
+#
+# ★分割理由: Brekeke は 1 コール Module.exec() 累計 1000 回でハード停止（設計バジェット 900）。
+#   251 ケース×4 実行/case ≈ 1004+overhead で超過するため part1(136)/part2(115) に分割し別コールで流す。
+#   ケースの正本は acceptance_test/cases.tsv（oracle.py が全 PASS を保証）。part1∪part2 == cases.tsv（251・disjoint）。
+#   ※#279②(Y279)・#290(Y290) デルタは part2 に収録（現行 spec_hash 946a7f65 を実機で踏む）。
+#   part1 実行回数 ≈ 3 + 136×4 + 2 ≈ 549（< 900 安全）。
+#
+# 検証対象は modules/yes_no_classifier/script.js（デプロイ正本）を script_test_matrix が
+# sidecar 読込＝バイト一致で全ケース実機（Nashorn）検証（部品 DoD#4）。
+# 実機判定＝通話後の Brekeke ログで "[TEST FAIL]" 件数 0（pass/fail とも次 case へ進む）。
+#
+# 生成: python3 tools/build_part_acceptance_bivr.py yes_no_classifier \
+#         --spec modules/yes_no_classifier/acceptance_test/p6_acceptance_part1.yaml \
+#         --out  output/acceptance/yes_no_classifier/yes_no_classifier_p6_part1.bivr
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$はいいいえ判定v3_part1"
+  flow_name: "テスト$はいいいえ判定v3_part1"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$はいいいえ判定v3_part1"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("=================================================");
+      $runner.getLogger().info("[TEST START] yes_no_classifier engine v3 受入 part1 (Y+N+E = 136 cases)");
+      $runner.getLogger().info("=================================================");
+      $runner.setResult("ok");
+    next: YESNO_TEST
+
+  - step: YESNO_TEST
+    type: script_test_matrix
+    script_file: "../script.js"
+    input_placeholder: "__SOURCE_MODULE__"
+    wiring:                 # v4: 表示ラベル wiring を既定 肯定/否定 で充填し、受入出力を内部enumと一致させる（#270）
+      __YES_LABEL__: "肯定"
+      __NO_LABEL__: "否定"
+    final_next: 結果_完了
+    cases:
+      # --- Y* 肯定（本番頻度 + 合成）---
+      - {id: Y001, input: "はいそうです。", expected: "肯定"}
+      - {id: Y002, input: "はい", expected: "肯定"}
+      - {id: Y003, input: "はい、そうです。", expected: "肯定"}
+      - {id: Y004, input: "そうです。", expected: "肯定"}
+      - {id: Y005, input: "はいあります。", expected: "肯定"}
+      - {id: Y006, input: "はい、あります。", expected: "肯定"}
+      - {id: Y007, input: "はい。", expected: "肯定"}
+      - {id: Y008, input: "はい、お願いします。", expected: "肯定"}
+      - {id: Y009, input: "あります。", expected: "肯定"}
+      - {id: Y010, input: "はいはい", expected: "肯定"}
+      - {id: Y011, input: "はい希望します。", expected: "肯定"}
+      - {id: Y012, input: "はいそうです", expected: "肯定"}
+      - {id: Y013, input: "はい、そうです", expected: "肯定"}
+      - {id: Y014, input: "はい、希望します。", expected: "肯定"}
+      - {id: Y015, input: "はいお願いします", expected: "肯定"}
+      - {id: Y016, input: "はい、そうです。はいそうです。", expected: "肯定"}
+      - {id: Y017, input: "はい、いいです。", expected: "肯定"}
+      - {id: Y018, input: "はい、当てはまります。", expected: "肯定"}
+      - {id: Y019, input: "通院していましたはい。", expected: "肯定"}
+      - {id: Y020, input: "そうです。愛称熱", expected: "肯定"}
+      - {id: Y021, input: "はいそうです。自信だよ。", expected: "肯定"}
+      - {id: Y022, input: "弁当あります。はい。", expected: "肯定"}
+      - {id: Y023, input: "対象です。はい。", expected: "肯定"}
+      - {id: Y024, input: "JR全日空ホテルはい。", expected: "肯定"}
+      - {id: Y025, input: "はい当てはまります。", expected: "肯定"}
+      - {id: Y026, input: "つまりはい、そうです。", expected: "肯定"}
+      - {id: Y027, input: "はい、受信します。", expected: "肯定"}
+      - {id: Y028, input: "はい1ヶ月以内にあの診察を受けました。", expected: "肯定"}
+      - {id: Y029, input: "頑張れはい。できます。", expected: "肯定"}
+      - {id: Y030, input: "はいそうですね。", expected: "肯定"}
+      - {id: Y031, input: "スカイツリーはいそうです。", expected: "肯定"}
+      - {id: Y032, input: "合いそうです。", expected: "肯定"}
+      - {id: Y033, input: "緊急です。お願いします。", expected: "肯定"}
+      - {id: Y034, input: "そうです", expected: "肯定"}
+      - {id: Y035, input: "ない。はい、そうです。", expected: "肯定"}
+      - {id: Y036, input: "展開そうです。", expected: "肯定"}
+      - {id: Y037, input: "はいそうです。はいそうです。", expected: "肯定"}
+      - {id: Y038, input: "はい音声案内", expected: "肯定"}
+      - {id: Y039, input: "はいそうですか。", expected: "肯定"}
+      - {id: Y040, input: "うん", expected: "肯定"}
+      - {id: Y041, input: "会社ですかいそうです。", expected: "肯定"}
+      - {id: Y042, input: "はいお願いします。", expected: "肯定"}
+      - {id: Y043, input: "はいはい、そうです。", expected: "肯定"}
+      - {id: Y044, input: "そうです。はい。", expected: "肯定"}
+      - {id: Y045, input: "はい、そうです。お願いします。", expected: "肯定"}
+      - {id: Y046, input: "おはよう。お願いします。", expected: "肯定"}
+      - {id: Y047, input: "はいはいそうです。", expected: "肯定"}
+      - {id: Y048, input: "はい1", expected: "肯定"}
+      - {id: Y049, input: "はいそれ", expected: "肯定"}
+      - {id: Y050, input: "はいいよ", expected: "肯定"}
+      - {id: Y051, input: "希望します。", expected: "肯定"}
+      - {id: Y052, input: "はいはい。", expected: "肯定"}
+      - {id: Y053, input: "です。はい、そうです。", expected: "肯定"}
+      - {id: Y054, input: "はい、はい", expected: "肯定"}
+      - {id: Y055, input: "ええ", expected: "肯定"}
+      - {id: Y056, input: "大丈夫です", expected: "肯定"}
+      - {id: Y057, input: "オッケー", expected: "肯定"}
+      - {id: Y058, input: "OK", expected: "肯定"}
+      - {id: Y059, input: "1", expected: "肯定"}
+      - {id: Y060, input: "いち", expected: "肯定"}
+      - {id: Y061, input: "ございます。", expected: "肯定"}
+      - {id: Y062, input: "問題ありません。", expected: "肯定"}
+      - {id: Y063, input: "問題ないです", expected: "肯定"}
+      - {id: Y064, input: "構いません", expected: "肯定"}
+      - {id: Y065, input: "います。", expected: "肯定"}
+      - {id: Y066, input: "はいそうです。もう危ないよ。", expected: "肯定"}
+      # --- N* 否定 ---
+      - {id: N001, input: "いいえ違います。", expected: "否定"}
+      - {id: N002, input: "いいえ", expected: "否定"}
+      - {id: N003, input: "いいえ、違います。", expected: "否定"}
+      - {id: N004, input: "違います。", expected: "否定"}
+      - {id: N005, input: "いえ違います。", expected: "否定"}
+      - {id: N006, input: "いいえ、ありません。", expected: "否定"}
+      - {id: N007, input: "いいえありません。", expected: "否定"}
+      - {id: N008, input: "ありません。", expected: "否定"}
+      - {id: N009, input: "いえ、違います。", expected: "否定"}
+      - {id: N010, input: "家はありません。", expected: "否定"}
+      - {id: N011, input: "いや違います。", expected: "否定"}
+      - {id: N012, input: "家ありません。", expected: "否定"}
+      - {id: N013, input: "いやありません。", expected: "否定"}
+      - {id: N014, input: "いえ、ありません。", expected: "否定"}
+      - {id: N015, input: "いいえ。", expected: "否定"}
+      - {id: N016, input: "いいえ違います", expected: "否定"}
+      - {id: N017, input: "何もありません違います。", expected: "否定"}
+      - {id: N018, input: "違います", expected: "否定"}
+      - {id: N019, input: "いいえ、受信してないです。", expected: "否定"}
+      - {id: N020, input: "モバゲーいいえ。", expected: "否定"}
+      - {id: N021, input: "駄目だね", expected: "否定"}
+      - {id: N022, input: "P違います。", expected: "否定"}
+      - {id: N023, input: "抜粋いいえありません。", expected: "否定"}
+      - {id: N024, input: "言ってありません。", expected: "否定"}
+      - {id: N025, input: "豊子がいいえ", expected: "否定"}
+      - {id: N026, input: "何だろう、それじゃありません。", expected: "否定"}
+      - {id: N027, input: "おやついいえ違います。", expected: "否定"}
+      - {id: N028, input: "やっぱいいえ。", expected: "否定"}
+      - {id: N029, input: "大きい違います。", expected: "否定"}
+      - {id: N030, input: "禁煙ありません。", expected: "否定"}
+      - {id: N031, input: "いえありません。", expected: "否定"}
+      - {id: N032, input: "2、違います。", expected: "否定"}
+      - {id: N033, input: "いいえゲーム", expected: "否定"}
+      - {id: N034, input: "いいえつけます。", expected: "否定"}
+      - {id: N035, input: "いいえっ違います。", expected: "否定"}
+      - {id: N036, input: "すごい天気ですね。いいえ。違います。", expected: "否定"}
+      - {id: N037, input: "4月にいいえ違います。", expected: "否定"}
+      - {id: N038, input: "えっ違います。", expected: "否定"}
+      - {id: N039, input: "だいぶ違います。", expected: "否定"}
+      - {id: N040, input: "いえ", expected: "否定"}
+      - {id: N041, input: "いや違う。", expected: "否定"}
+      - {id: N042, input: "違う。", expected: "否定"}
+      - {id: N043, input: "いよね違います。", expected: "否定"}
+      - {id: N044, input: "いいえ、違います", expected: "否定"}
+      - {id: N045, input: "2", expected: "否定"}
+      - {id: N046, input: "に", expected: "否定"}
+      - {id: N047, input: "だめ", expected: "否定"}
+      - {id: N048, input: "間違いです", expected: "否定"}
+      - {id: N049, input: "やり直し", expected: "否定"}
+      - {id: N050, input: "もう一度", expected: "否定"}
+      - {id: N051, input: "いません。", expected: "否定"}
+      - {id: N052, input: "言えないです。", expected: "否定"}
+      - {id: N053, input: "当てはまりません。", expected: "否定"}
+      - {id: N054, input: "いいえ違います。だから", expected: "否定"}
+      - {id: N055, input: "集まらないかいいえ違います。", expected: "否定"}
+      - {id: N056, input: "ラーメン交換代金いいえ違います。", expected: "否定"}
+      - {id: N057, input: "いいえ違います消化器内科になりたいと思ってます。", expected: "否定"}
+      - {id: N058, input: "石破首相いいえ、違います。", expected: "否定"}
+      - {id: N059, input: "違うか。電話に出ることができません。", expected: "否定"}
+      - {id: N060, input: "いいえ、誓います。", expected: "否定"}
+      # --- E* 肯定否定混在（否定優先）---
+      - {id: E001, input: "はい違います。", expected: "否定"}
+      - {id: E002, input: "いいありません。", expected: "否定"}
+      - {id: E003, input: "ないそうです。", expected: "否定"}
+      - {id: E004, input: "ですよね。はい、ありません。", expected: "否定"}
+      - {id: E005, input: "いいえ、ございます。", expected: "否定"}
+      - {id: E006, input: "あります。違います。", expected: "否定"}
+      - {id: E007, input: "じゃあ何か他に言うことありますか。はい。ないです。ありません。", expected: "否定"}
+      - {id: E008, input: "駄目じゃん。はい、そうです。", expected: "否定"}
+      - {id: E009, input: "いえ違います。やんのはいそうです。", expected: "否定"}
+      - {id: E010, input: "だって仕事がないそうです。", expected: "否定"}
+
+  - step: 結果_完了
+    type: announcement
+    prompt: "{tts_g:part1 のテストが完了しました。ログでTEST FAILが0件であることを確認してください。}"
+    next: 切断
+
+  - step: 切断
+    type: termination

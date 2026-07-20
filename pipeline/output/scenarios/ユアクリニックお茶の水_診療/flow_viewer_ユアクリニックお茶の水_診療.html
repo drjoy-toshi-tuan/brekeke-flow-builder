@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>ユアCLお茶水 診療 フロー ビューア</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI','Yu Gothic UI',sans-serif;background:#0f1419;color:#e7e9ea;overflow:hidden}
+#header{background:#1a1f2e;padding:10px 20px;display:flex;align-items:center;gap:16px;border-bottom:1px solid #2d3748;z-index:100;position:relative}
+#header h1{font-size:16px;color:#60a5fa;white-space:nowrap}
+.stats{font-size:12px;color:#8899a6}
+#controls{display:flex;gap:8px;align-items:center;margin-left:auto}
+#controls button,#controls select{background:#2d3748;color:#e7e9ea;border:1px solid #4a5568;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px}
+#controls button:hover{background:#4a5568}
+#search{background:#2d3748;color:#e7e9ea;border:1px solid #4a5568;padding:4px 8px;border-radius:4px;font-size:12px;width:180px}
+#sidebar{position:fixed;left:0;top:45px;bottom:0;width:260px;background:#1a1f2e;border-right:1px solid #2d3748;overflow-y:auto;z-index:50;font-size:12px}
+.flow-tab{display:flex;border-bottom:1px solid #2d3748}
+.flow-tab button{flex:1;padding:6px 4px;background:transparent;border:none;color:#8899a6;cursor:pointer;font-size:11px;border-bottom:2px solid transparent}
+.flow-tab button.active{color:#60a5fa;border-bottom-color:#3b82f6}
+#module-list{padding:4px}
+.mod-item{padding:4px 8px;cursor:pointer;border-radius:3px;display:flex;align-items:center;gap:6px}
+.mod-item:hover{background:#2d3748}
+.mod-item.selected{background:#1e3a5f}
+.mod-item .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.mod-item .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+#canvas-wrap{position:fixed;left:260px;top:45px;right:0;bottom:0;overflow:hidden}
+canvas{display:block}
+#detail{position:fixed;right:0;top:45px;width:320px;background:#1a1f2e;border-left:1px solid #2d3748;height:calc(100vh - 45px);overflow-y:auto;padding:12px;font-size:12px;transform:translateX(320px);transition:transform 0.2s;z-index:50}
+#detail.open{transform:translateX(0)}
+#detail h3{color:#60a5fa;margin-bottom:8px;font-size:14px}
+.field{margin-bottom:6px}
+.field .label{color:#8899a6}
+.field .value{color:#e7e9ea}
+.conn{padding:3px 6px;background:#2d3748;border-radius:3px;margin:2px 0;cursor:pointer}
+.conn:hover{background:#4a5568}
+.legend{position:fixed;bottom:10px;right:10px;background:#1a1f2ee0;padding:8px 12px;border-radius:6px;font-size:11px;z-index:50;border:1px solid #2d3748}
+.legend div{display:flex;align-items:center;gap:6px;margin:2px 0}
+.legend .sw{width:12px;height:12px;border-radius:2px}
+</style>
+</head>
+<body>
+<div id="header">
+  <h1>ユアCLお茶水 診療</h1>
+  <span class="stats" id="stats"></span>
+  <div id="controls">
+    <input type="text" id="search" placeholder="モジュール検索...">
+    <button id="btn-fit">全体表示</button>
+    <button id="btn-reset">リセット</button>
+    <select id="hl-type">
+      <option value="">ハイライト: なし</option>
+      <option value="Text to speech">TTS</option>
+      <option value="generate_by_OpenAI">OpenAI</option>
+      <option value="DTMF AmiVoice STT Input">DTMF入力</option>
+      <option value="Speech to Text">STT</option>
+      <option value="saveContext2DB">コンテキスト保存</option>
+      <option value="saveCompletionFlag2db">完了フラグ</option>
+      <option value="Custom Jump to Flow">サブフロー呼出</option>
+      <option value="Disconnect">切断</option>
+      <option value="Speech Retry Counter">リトライ</option>
+    </select>
+  </div>
+</div>
+<div id="sidebar">
+  <div class="flow-tab" id="flow-tabs"></div>
+  <div id="module-list"></div>
+</div>
+<div id="canvas-wrap"><canvas id="canvas"></canvas></div>
+<div id="detail"></div>
+<div class="legend">
+  <div><span class="sw" style="background:#3b82f6"></span>TTS / アナウンス</div>
+  <div><span class="sw" style="background:#10b981"></span>OpenAI / AI判定</div>
+  <div><span class="sw" style="background:#f59e0b"></span>DTMF / STT入力</div>
+  <div><span class="sw" style="background:#8b5cf6"></span>保存 / コンテキスト</div>
+  <div><span class="sw" style="background:#ef4444"></span>切断 / 完了</div>
+  <div><span class="sw" style="background:#06b6d4"></span>サブフロー / 制御</div>
+  <div><span class="sw" style="background:#6b7280"></span>その他</div>
+</div>
+<script>
+const D={"main": {"name": "ユアCLお茶水$診療", "start": "冒頭_wait", "modules": {"冒頭_wait": {"type": "wait", "category": "", "next": [{"label": "Next Module", "target": "コンテキスト設定"}], "subs": [], "x": 500, "y": 0}, "コンテキスト設定": {"type": "saveContextModel2DB", "category": "Persistence", "next": [{"label": "next", "target": "着信電話番号分類"}], "subs": [], "x": 500, "y": 200}, "着信電話番号分類": {"type": "incoming-classifier", "category": "Incoming", "next": [{"label": "非通知", "target": "非通知_アナウンス"}, {"label": "海外", "target": "非通知_アナウンス"}, {"label": "固定", "target": "受付時間判定"}, {"label": "携帯", "target": "受付時間判定"}, {"label": "その他", "target": "受付時間判定"}], "subs": [], "x": 500, "y": 400}, "非通知_アナウンス": {"type": "Text to speech", "category": "Text To Speech", "next": [{"label": "Next Module", "target": "完了フラグ_非通知"}], "subs": [{"label": "save-非通知", "target": "save-非通知"}], "x": 0, "y": 600}, "save-非通知": {"type": "save2db", "category": "Persistence", "next": [], "subs": [], "x": -280, "y": 600}, "完了フラグ_非通知": {"type": "saveCompletionFlag2db", "category": "Persistence", "next": [{"label": "next", "target": "切断_非通知"}], "subs": [], "x": 0, "y": 800}, "切断_非通知": {"type": "Disconnect", "category": "", "next": [], "subs": [], "x": 0, "y": 1000}, "受付時間判定": {"type": "acceptance_times", "category": "External Integration", "next": [{"label": "timeout", "target": "時間外_アナウンス"}, {"label": "error", "target": "時間外_アナウンス"}, {"label": "rejected", "target": "時間外_アナウンス"}, {"label": "転送時間帯", "target": "転送_アナウンス"}, {"label": "acceptable", "target": "冒頭_アナウンス"}], "subs": [], "x": 500, "y": 600}, "時間外_アナウンス": {"type": "Text to speech", "category": "Text To Speech", "next": [{"label": "Next Module", "target": "saveCtx_時間外ON"}], "subs": [{"label": "save-時間外", "target": "save-時間外"}], "x": 200, "y": 800}, "save-時間外": {"type": "save2db", "category": "Persistence", "next": [], "subs": [], "x": -80, "y": 800}, "saveCtx_時間外ON": {"type": "saveContext2DB", "category": "Persistence", "next": [{"label": "next", "target": "問い合わせ内容_聴取"}], "subs": [], "x": 200, "y": 1000}, "冒頭_アナウンス": {"type": "Text to speech", "category": "Text To Speech", "next": [{"label": "Next Module", "target": "saveCtx_時間外OFF"}], "subs": [{"label": "save-冒頭", "target": "save-冒頭"}], "x": 500, "y": 800}, "save-冒頭": {"type": "save2db", "category": "Persistence", "next": [], "subs": [], "x": 220, "y": 800}, "saveCtx_時間外OFF": {"type": "saveContext2DB", "category": "Persistence", "next": [{"label": "next", "target": "問い合わせ内容_聴取"}], "subs": [], "x": 500, "y": 1000}, "問い合わせ内容_聴取": {"type": "Text to speech", "category": "Text To Speech", "next": [{"label": "Next Module", "target": "入力_問い合わせ内容"}], "subs": [{"label": "save-問い合わせ", "target": "save-問い合わせ"}], "x": 500, "y": 1200}, "save-問い合わせ": {"type": "save2db", "category": "Persistence", "next": [], "subs": [], "x": 220, "y": 1200}, "入力_問い合わせ内容": {"type": "Speech to Text", "category": "AmiVoice", "next": [{"label": "timeout", "target": "リトライ_問い合わせ内容"}, {"label": "error", "target": "リトライ_問い合わせ内容"}, {"label": "no_result", "target": "リトライ_問い合わせ内容"}, {"label": "success", "target": "OpenAI_問い合わせ内容"}], "subs": [{"label": "save-問い合わせ", "target": "save-問い合わせ"}], "x": 500, "y": 1350}, "リトライ_問い合わせ内容": {"type": "Speech Retry Counter", "category": "Text To Speech", "next": [{"label": "Retry", "target": "問い合わせ内容_聴取"}, {"label": "No more", "target": "終話_上限エラー"}], "subs": [{"label": "save-問い合わせ", "target": "save-問い合わせ"}], "x": 220, "y": 1350}, "OpenAI_問い合わせ内容": {"type": "generate_by_OpenAI", "category": "External Integration", "next": [{"label": "timeout", "target": "リトライ_問い合わせ内容"}, {"label": "error", "target": "リトライ_問い合わせ内容"}, {"label": "no_result", "target": "リトライ_問い合わせ内容"}, {"label": "success", "target": "saveCtx_用件"}], "subs": [], "x": 500, "y": 1500}, "saveCtx_用件": {"type": "saveContext2DB", "category": "Persistence", "next": [{"label": "next", "target": "氏名_遷移前"}], "subs": [], "x": 500, "y": 1650}, "氏名_遷移前": {"type": "Text to speech", "category": "Text To Speech", "next": [{"label": "Next Module", "target": "Jump_氏名聴取"}], "subs": [{"label": "save-氏名遷移前", "target": "save-氏名遷移前"}], "x": 500, "y": 1800}, "save-氏名遷移前": {"type": "save2db", "category": "Persistence", "next": [], "subs": [], "x": 220, "y": 1800}, "Jump_氏名聴取": {"type": "Custom Jump to Flow", "category": "Custom Module", "next": [{"label": "Jump 1", "target": "電話番号_遷移前"}], "subs": [], "x": 500, "y": 1950}, "電話番号_遷移前": {"type": "Text to speech", "category": "Text To Speech", "next": [{"label": "Next Module", "target": "Jump_電話番号聴取"}], "subs": [{"label": "save-電話遷移前", "target": "save-電話遷移前"}], "x": 500, "y": 2150}, "save-電話遷移前": {"type": "save2db", "category": "Persistence", "next": [], "subs": [], "x": 220, "y": 2150}, "Jump_電話番号聴取": {"type": "Custom Jump to Flow", "category": "Custom Module", "next": [{"label": "Jump 1", "target": "script_終話分岐"}], "subs": [], "x": 500, "y": 2300}, "script_終話分岐": {"type": "Script", "category": "", "next": [{"label": "営業時間内", "target": "終話_受付完了"}, {"label": "時間外", "target": "終話_時間外受付完了"}, {"label": "その他", "target": "終話_受付完了"}], "subs": [], "x": 500, "y": 2450}, "終話_受付完了": {"type": "Text to speech", "category": "Text To Speech", "next": [{"label": "Next Module", "target": "完了フラグ_受付完了"}], "subs": [{"label": "save-終話_受付完了", "target": "save-終話_受付完了"}], "x": 500, "y": 2650}, "save-終話_受付完了": {"type": "save2db", "category": "Persistence", "next": [], "subs": [], "x": 220, "y": 2650}, "完了フラグ_受付完了": {"type": "saveCompletionFlag2db", "category": "Persistence", "next": [{"label": "next", "target": "切断_受付完了"}], "subs": [], "x": 500, "y": 2800}, "切断_受付完了": {"type": "Disconnect", "category": "", "next": [], "subs": [], "x": 500, "y": 2950}, "終話_時間外受付完了": {"type": "Text to speech", "category": "Text To Speech", "next": [{"label": "Next Module", "target": "完了フラグ_時間外受付完了"}], "subs": [{"label": "save-終話_時間外", "target": "save-終話_時間外"}], "x": 1100, "y": 2650}, "save-終話_時間外": {"type": "save2db", "category": "Persistence", "next": [], "subs": [], "x": 820, "y": 2650}, "完了フラグ_時間外受付完了": {"type": "saveCompletionFlag2db", "category": "Persistence", "next": [{"label": "next", "target": "切断_時間外受付完了"}], "subs": [], "x": 1100, "y": 2800}, "切断_時間外受付完了": {"type": "Disconnect", "category": "", "next": [], "subs": [], "x": 1100, "y": 2950}, "転送_アナウンス": {"type": "Text to speech", "category": "Text To Speech", "next": [{"label": "Next Module", "target": "代表電話_転送"}], "subs": [{"label": "save-転送", "target": "save-転送"}], "x": -400, "y": 1800}, "save-転送": {"type": "save2db", "category": "Persistence", "next": [], "subs": [], "x": -680, "y": 1800}, "代表電話_転送": {"type": "Call Transfer", "category": "", "next": [{"label": "success", "target": "完了フラグ_転送"}, {"label": "failed", "target": "転送失敗_アナウンス"}], "subs": [], "x": -400, "y": 1950}, "完了フラグ_転送": {"type": "saveCompletionFlag2db", "category": "Persistence", "next": [{"label": "next", "target": "切断_転送"}], "subs": [], "x": -400, "y": 2100}, "切断_転送": {"type": "Disconnect", "category": "", "next": [], "subs": [], "x": -400, "y": 2250}, "転送失敗_アナウンス": {"type": "Text to speech", "category": "Text To Speech", "next": [{"label": "Next Module", "target": "完了フラグ_転送失敗"}], "subs": [{"label": "save-転送失敗", "target": "save-転送失敗"}], "x": -800, "y": 2100}, "save-転送失敗": {"type": "save2db", "category": "Persistence", "next": [], "subs": [], "x": -1080, "y": 2100}, "完了フラグ_転送失敗": {"type": "saveCompletionFlag2db", "category": "Persistence", "next": [{"label": "next", "target": "切断_転送失敗"}], "subs": [], "x": -800, "y": 2250}, "切断_転送失敗": {"type": "Disconnect", "category": "", "next": [], "subs": [], "x": -800, "y": 2400}, "終話_上限エラー": {"type": "Text to speech", "category": "Text To Speech", "next": [{"label": "Next Module", "target": "完了フラグ_上限エラー"}], "subs": [{"label": "save-上限エラー", "target": "save-上限エラー"}], "x": 2200, "y": 1350}, "save-上限エラー": {"type": "save2db", "category": "Persistence", "next": [], "subs": [], "x": 1920, "y": 1350}, "完了フラグ_上限エラー": {"type": "saveCompletionFlag2db", "category": "Persistence", "next": [{"label": "next", "target": "切断_上限エラー"}], "subs": [], "x": 2200, "y": 1550}, "切断_上限エラー": {"type": "Disconnect", "category": "", "next": [], "subs": [], "x": 2200, "y": 1750}}}, "subflows": []};
+const TC={"Text to speech":"#3b82f6","generate_by_OpenAI":"#10b981","DTMF AmiVoice STT Input":"#f59e0b","Speech to Text":"#f59e0b","saveContextModel2DB":"#8b5cf6","saveContext2DB":"#8b5cf6","save2db":"#8b5cf6","saveCompletionFlag2db":"#ef4444","Disconnect":"#ef4444","Custom Jump to Flow":"#06b6d4","Speech Retry Counter":"#06b6d4","incoming-classifier":"#06b6d4","acceptance_times":"#06b6d4","Wait":"#6b7280","Script":"#06b6d4","ContextMatchRouter":"#06b6d4"};
+function gc(t){return TC[t]||"#6b7280"}
+let flows=[D.main,...D.subflows],cfi=0,nodes=[],edges=[],cam={x:0,y:0,z:1},sel=null,hov=null,drag=false,ds={x:0,y:0},cs={x:0,y:0};
+const cv=document.getElementById("canvas"),cx=cv.getContext("2d"),NW=160,NH=36,NR=6;
+
+function build(fl){
+  nodes=[];edges=[];
+  const ms=fl.modules,ns=Object.keys(ms),ni={};
+  // BFS levels
+  const lv={},vis=new Set();
+  let q=[fl.start];lv[fl.start]=0;vis.add(fl.start);
+  while(q.length){
+    const c=q.shift(),m=ms[c];if(!m)continue;
+    m.next.forEach(e=>{if(ms[e.target]&&!vis.has(e.target)){vis.add(e.target);lv[e.target]=(lv[c]||0)+1;q.push(e.target)}});
+  }
+  ns.forEach(n=>{if(lv[n]===undefined)lv[n]=999});
+  const lvs={};ns.forEach(n=>{const l=lv[n];if(!lvs[l])lvs[l]=[];lvs[l].push(n)});
+  const sl=Object.keys(lvs).map(Number).sort((a,b)=>a-b);
+  const CG=210,RG=52;
+  sl.forEach((l,li)=>{lvs[l].forEach((n,gi)=>{
+    ni[n]=nodes.length;
+    nodes.push({name:n,type:ms[n].type,color:gc(ms[n].type),x:li*CG,y:gi*RG,w:NW,h:NH,next:ms[n].next,subs:ms[n].subs,cat:ms[n].category});
+  })});
+  ns.forEach(n=>{const m=ms[n];
+    m.next.forEach(e=>{if(ni[e.target]!==undefined)edges.push({f:ni[n],t:ni[e.target],lb:e.label,tp:"n"})});
+    m.subs.forEach(e=>{if(ni[e.target]!==undefined)edges.push({f:ni[n],t:ni[e.target],lb:e.label,tp:"s"})});
+  });
+}
+
+function rsz(){cv.width=cv.parentElement.clientWidth;cv.height=cv.parentElement.clientHeight;dr()}
+function ts(x,y){return{x:(x-cam.x)*cam.z+cv.width/2,y:(y-cam.y)*cam.z+cv.height/2}}
+function tw(sx,sy){return{x:(sx-cv.width/2)/cam.z+cam.x,y:(sy-cv.height/2)/cam.z+cam.y}}
+
+function rr(x,y,w,h,r){cx.beginPath();cx.moveTo(x+r,y);cx.lineTo(x+w-r,y);cx.arcTo(x+w,y,x+w,y+r,r);cx.lineTo(x+w,y+h-r);cx.arcTo(x+w,y+h,x+w-r,y+h,r);cx.lineTo(x+r,y+h);cx.arcTo(x,y+h,x,y+h-r,r);cx.lineTo(x,y+r);cx.arcTo(x,y,x+r,y,r);cx.closePath()}
+
+function dr(){
+  cx.clearRect(0,0,cv.width,cv.height);
+  const hl=document.getElementById("hl-type").value;
+  // Edges
+  edges.forEach(e=>{
+    const fn=nodes[e.f],tn=nodes[e.t];
+    const p1=ts(fn.x+fn.w,fn.y+fn.h/2),p2=ts(tn.x,tn.y+tn.h/2);
+    let col=e.tp==="s"?"#f59e0b44":"#4a556844";
+    if(sel!==null&&(e.f===sel||e.t===sel))col=e.tp==="s"?"#f59e0bcc":"#60a5facc";
+    cx.strokeStyle=col;cx.lineWidth=sel!==null&&(e.f===sel||e.t===sel)?2:1;
+    cx.beginPath();
+    const cx1=p1.x+(p2.x-p1.x)*0.4,cx2=p1.x+(p2.x-p1.x)*0.6;
+    cx.moveTo(p1.x,p1.y);cx.bezierCurveTo(cx1,p1.y,cx2,p2.y,p2.x,p2.y);cx.stroke();
+    if(cam.z>0.3){const a=Math.atan2(p2.y-(p2.y+p1.y)/2,p2.x-(p2.x+p1.x)/2);cx.fillStyle=col;cx.beginPath();cx.moveTo(p2.x,p2.y);cx.lineTo(p2.x-6*Math.cos(a-0.4),p2.y-6*Math.sin(a-0.4));cx.lineTo(p2.x-6*Math.cos(a+0.4),p2.y-6*Math.sin(a+0.4));cx.fill()}
+    if(cam.z>0.5&&e.lb&&e.lb!=="Next Module"&&e.lb!=="next"){const mx=(p1.x+p2.x)/2,my=(p1.y+p2.y)/2-6;cx.fillStyle="#8899a6";cx.font=Math.max(8,9*cam.z)+"px sans-serif";cx.textAlign="center";cx.fillText(e.lb,mx,my)}
+  });
+  // Nodes
+  nodes.forEach((n,i)=>{
+    const p=ts(n.x,n.y),w=n.w*cam.z,h=n.h*cam.z;
+    let al=1;
+    if(hl&&n.type!==hl)al=0.15;
+    if(sel!==null&&sel!==i){const cn=edges.some(e=>(e.f===sel&&e.t===i)||(e.t===sel&&e.f===i));if(!cn)al=Math.min(al,0.25)}
+    cx.globalAlpha=al;
+    rr(p.x,p.y,w,h,NR*cam.z);
+    cx.fillStyle=i===sel?n.color:(i===hov?n.color+"cc":n.color+"33");cx.fill();
+    cx.strokeStyle=n.color;cx.lineWidth=i===sel?2:1;cx.stroke();
+    if(cam.z>0.25){cx.fillStyle=i===sel?"#fff":"#e7e9ea";const fs=Math.max(8,11*cam.z);cx.font=fs+"px sans-serif";cx.textAlign="left";cx.textBaseline="middle";const mc=Math.floor(w/(fs*0.55));let lb=n.name.length>mc?n.name.substring(0,mc-1)+"\u2026":n.name;cx.fillText(lb,p.x+6*cam.z,p.y+h/2)}
+    cx.globalAlpha=1;
+  });
+}
+
+function ht(mx,my){const w=tw(mx,my);for(let i=nodes.length-1;i>=0;i--){const n=nodes[i];if(w.x>=n.x&&w.x<=n.x+n.w&&w.y>=n.y&&w.y<=n.y+n.h)return i}return null}
+
+function fa(){
+  if(!nodes.length)return;
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  nodes.forEach(n=>{x0=Math.min(x0,n.x);y0=Math.min(y0,n.y);x1=Math.max(x1,n.x+n.w);y1=Math.max(y1,n.y+n.h)});
+  cam.x=(x0+x1)/2;cam.y=(y0+y1)/2;
+  cam.z=Math.min(cv.width/(x1-x0+100),cv.height/(y1-y0+100),1.5);dr();
+}
+
+function sd(idx){
+  const p=document.getElementById("detail");
+  if(idx===null){p.classList.remove("open");return}
+  const n=nodes[idx];
+  const inc=edges.filter(e=>e.t===idx),out=edges.filter(e=>e.f===idx);
+  let h="<h3>"+n.name+"</h3>";
+  h+='<div class="field"><span class="label">タイプ: </span><span class="value" style="color:'+n.color+'">'+n.type+"</span></div>";
+  if(n.cat)h+='<div class="field"><span class="label">カテゴリ: </span><span class="value">'+n.cat+"</span></div>";
+  if(out.length){h+='<div class="field" style="margin-top:10px"><span class="label">出力 ('+out.length+"):</span></div>";out.forEach(e=>{const tn=nodes[e.t];h+='<div class="conn" data-i="'+e.t+'" style="border-left:3px solid '+tn.color+'">'+(e.lb&&e.lb!=="Next Module"?"<b>"+e.lb+"</b> \u2192 ":"\u2192 ")+tn.name+"</div>"})}
+  if(inc.length){h+='<div class="field" style="margin-top:10px"><span class="label">入力 ('+inc.length+"):</span></div>";inc.forEach(e=>{const fn=nodes[e.f];h+='<div class="conn" data-i="'+e.f+'" style="border-left:3px solid '+fn.color+'">'+fn.name+(e.lb&&e.lb!=="Next Module"?" <b>["+e.lb+"]</b>":"")+"</div>"})}
+  p.innerHTML=h;p.classList.add("open");
+  p.querySelectorAll(".conn").forEach(el=>{el.addEventListener("click",()=>{const i=parseInt(el.dataset.i);sn(i);co(i)})});
+}
+
+function sn(i){sel=i;sd(i);ml();dr()}
+function co(i){const n=nodes[i];cam.x=n.x+n.w/2;cam.y=n.y+n.h/2;cam.z=Math.max(cam.z,0.8);dr()}
+
+function ml(){
+  const ls=document.getElementById("module-list"),sv=document.getElementById("search").value.toLowerCase();
+  let h="";nodes.forEach((n,i)=>{if(sv&&!n.name.toLowerCase().includes(sv)&&!n.type.toLowerCase().includes(sv))return;h+='<div class="mod-item'+(i===sel?" selected":"")+'" data-i="'+i+'"><span class="dot" style="background:'+n.color+'"></span><span class="name">'+n.name+"</span></div>"});
+  ls.innerHTML=h;
+  ls.querySelectorAll(".mod-item").forEach(el=>{el.addEventListener("click",()=>{const i=parseInt(el.dataset.i);sn(i);co(i)})});
+}
+
+function bt(){
+  const tb=document.getElementById("flow-tabs");let h="";
+  flows.forEach((f,i)=>{const lb=f.name.split("$")[1]||f.name;h+='<button class="'+(i===cfi?"active":"")+'" data-i="'+i+'">'+lb+"</button>"});
+  tb.innerHTML=h;
+  tb.querySelectorAll("button").forEach(b=>{b.addEventListener("click",()=>{cfi=parseInt(b.dataset.i);sel=null;hov=null;build(flows[cfi]);bt();ml();document.getElementById("stats").textContent=flows[cfi].name+" | "+Object.keys(flows[cfi].modules).length+" modules";fa()})});
+}
+
+cv.addEventListener("mousedown",e=>{const h=ht(e.offsetX,e.offsetY);if(h!==null){sn(h)}else{drag=true;ds={x:e.offsetX,y:e.offsetY};cs={x:cam.x,y:cam.y};sel=null;sd(null);dr()}});
+cv.addEventListener("mousemove",e=>{if(drag){cam.x=cs.x-(e.offsetX-ds.x)/cam.z;cam.y=cs.y-(e.offsetY-ds.y)/cam.z;dr()}else{const h=ht(e.offsetX,e.offsetY);if(h!==hov){hov=h;cv.style.cursor=h!==null?"pointer":"grab";dr()}}});
+cv.addEventListener("mouseup",()=>{drag=false});
+cv.addEventListener("wheel",e=>{e.preventDefault();const f=e.deltaY>0?0.9:1.1,w=tw(e.offsetX,e.offsetY);cam.z*=f;cam.z=Math.max(0.05,Math.min(3,cam.z));cam.x=w.x-(e.offsetX-cv.width/2)/cam.z;cam.y=w.y-(e.offsetY-cv.height/2)/cam.z;dr()});
+
+document.getElementById("btn-fit").addEventListener("click",fa);
+document.getElementById("btn-reset").addEventListener("click",()=>{cam={x:0,y:0,z:1};sel=null;hov=null;sd(null);dr()});
+document.getElementById("search").addEventListener("input",ml);
+document.getElementById("hl-type").addEventListener("change",dr);
+window.addEventListener("resize",rsz);
+
+build(flows[0]);
+document.getElementById("stats").textContent=flows[0].name+" | "+Object.keys(flows[0].modules).length+" modules";
+bt();rsz();fa();ml();
+</script>
+</body>
+</html>

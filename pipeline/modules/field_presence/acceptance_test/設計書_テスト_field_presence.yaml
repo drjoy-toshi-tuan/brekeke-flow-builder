@@ -1,0 +1,131 @@
+# Pattern 6 (テストフロー) — field_presence (L1 答え取得判定) 単体受入テスト
+#
+# 検証対象: docs/brekeke/script_templates/field_presence.js（このモジュールの正本テンプレート）
+#   KIND が config（フロー上は 6 インスタンスが各 KIND 固定）のため、kind ごとに正本を
+#   コピーし `var KIND` のみ解決した script_<kind>.js を script_file に指定（KIND 以外は 1 文字も変えない）。
+#   input_placeholder "{{INPUT_MODULE}}" を case ごとの <id>_in に置換。{{CONTEXT_FIELD}} は未解決でも
+#   テストでは context が無く getModuleResult(<id>_in) にフォールバックする（=入力注入値を読む）。
+#
+# 狙い: Python オラクル (test_oracle.py 33/33) と同一ケース（name 以外の 32）を 5 KIND の matrix で
+#   Brekeke 実機 (Nashorn/ES5.1) 単体実行し、オラクル↔実機のパリティを確証する。
+#   ※ name は production の KIND ではない（氏名は L1 省略）ため P6 対象外。
+#
+# 実機確認: Brekeke ログを grep "[TEST FAIL]" して 0 件なら全 PASS。"[TEST DONE]" 到達で完走。
+# モジュール数: 32×5 + matrix dispatch 5 + frame 4 = 169（1コール上限内）。
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$field_presence"
+  flow_name: "テスト$field_presence"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$field_presence"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] field_presence 単体受入テスト (32 ケース・5 KIND)");
+      $runner.getLogger().info("対象: docs/brekeke/script_templates/field_presence.js / オラクル 33/33 PASS 済");
+      $runner.getLogger().info("grep [TEST FAIL] = 0 なら実機も全 PASS");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: matrix_dept
+
+  # --- KIND=department ---
+  - step: matrix_dept
+    type: script_test_matrix
+    script_file: "script_department.js"
+    input_placeholder: "{{INPUT_MODULE}}"
+    final_next: matrix_date
+    cases:
+      - {id: dep01, input: "内科でお願いします", expected: "PRESENT"}
+      - {id: dep02, input: "整形外科を受診したいです", expected: "PRESENT"}
+      - {id: dep03, input: "循環器でお願いします", expected: "PRESENT"}
+      - {id: dep04, input: "心療内科です", expected: "PRESENT"}
+      - {id: dep05, input: "駐車場はありますか", expected: "ABSENT"}
+      - {id: dep06, input: "ちょっとわからないです", expected: "ABSENT"}
+      - {id: dep07, input: "内科でお願いします、あと駐車場ありますか", expected: "PRESENT"}
+
+  # --- KIND=date ---
+  - step: matrix_date
+    type: script_test_matrix
+    script_file: "script_date.js"
+    input_placeholder: "{{INPUT_MODULE}}"
+    final_next: matrix_phone
+    cases:
+      - {id: dat01, input: "来週の月曜日でお願いします", expected: "PRESENT"}
+      - {id: dat02, input: "6月20日がいいです", expected: "PRESENT"}
+      - {id: dat03, input: "明日でお願いします", expected: "PRESENT"}
+      - {id: dat04, input: "3日にお願いします", expected: "PRESENT"}
+      - {id: dat05, input: "2026年7月1日", expected: "PRESENT"}
+      - {id: dat06, input: "何時までやってますか", expected: "ABSENT"}
+      - {id: dat07, input: "まだ決めてないです", expected: "ABSENT"}
+      - {id: dat08, input: "来週でお願いします、ところで駐車場は", expected: "PRESENT"}
+
+  # --- KIND=phone ---
+  - step: matrix_phone
+    type: script_test_matrix
+    script_file: "script_phone.js"
+    input_placeholder: "{{INPUT_MODULE}}"
+    final_next: matrix_bday
+    cases:
+      - {id: phn01, input: "090-1234-5678です", expected: "PRESENT"}
+      - {id: phn02, input: "08012345678", expected: "PRESENT"}
+      - {id: phn03, input: "ゼロ九〇は読めない普通の文", expected: "ABSENT"}
+      - {id: phn04, input: "電話番号は分かりません", expected: "ABSENT"}
+      - {id: phn05, input: "09012345678です、折り返しはいつ頃ですか", expected: "PRESENT"}
+
+  # --- KIND=birthday ---
+  - step: matrix_bday
+    type: script_test_matrix
+    script_file: "script_birthday.js"
+    input_placeholder: "{{INPUT_MODULE}}"
+    final_next: matrix_card
+    cases:
+      - {id: bd01, input: "昭和60年4月1日です", expected: "PRESENT"}
+      - {id: bd02, input: "1985年4月1日生まれです", expected: "PRESENT"}
+      - {id: bd03, input: "平成2年12月3日", expected: "PRESENT"}
+      - {id: bd04, input: "生年月日は秘密です", expected: "ABSENT"}
+      - {id: bd05, input: "ちょっと待ってください", expected: "ABSENT"}
+
+  # --- KIND=card ---
+  - step: matrix_card
+    type: script_test_matrix
+    script_file: "script_card.js"
+    input_placeholder: "{{INPUT_MODULE}}"
+    final_next: ログ_終了
+    cases:
+      - {id: cd01, input: "診察券番号は12345です", expected: "PRESENT"}
+      - {id: cd02, input: "67890", expected: "PRESENT"}
+      - {id: cd03, input: "持っていません", expected: "PRESENT"}
+      - {id: cd04, input: "ありません", expected: "PRESENT"}
+      - {id: cd05, input: "わかりません", expected: "PRESENT"}
+      - {id: cd06, input: "それはどこに書いてありますか", expected: "ABSENT"}
+      - {id: cd07, input: "12345です、ところで予約は変更できますか", expected: "PRESENT"}
+
+  - step: ログ_終了
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST DONE] field_presence 単体受入テスト 32 ケース 完走");
+      $runner.getLogger().info("Brekeke ログを grep [TEST FAIL] で件数確認 (0 なら全 PASS)");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: 終了
+
+  - step: 終了
+    type: termination

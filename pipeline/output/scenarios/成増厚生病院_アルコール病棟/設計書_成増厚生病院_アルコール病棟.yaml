@@ -1,0 +1,609 @@
+# 設計書 -- 成増厚生病院 アルコール病棟
+# 生成元: @director エージェント
+# 生成日: 2026/04/13
+# 確認レポート: docs/designs/確認レポート_成増厚生病院_アルコール病棟_20260413.md
+# ベースパターン: 本人確認型（個人情報聴取メイン）+ 用件分岐
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "成増厚生病院"
+  group_name: "な_成増厚生病院"
+  flow_name: "な_成増厚生病院$アルコール病棟_20260413"
+  target_facility: "成増厚生病院 東京アルコール医療総合センター"
+  office_id: "TODO_要確認"
+  phone_number: "050-1725-6865"
+  business_hours: "TODO_要確認"
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "demo"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "な_成増厚生病院$アルコール病棟_20260413"
+      role: "main"
+      description: "アルコール病棟専用AI電話。電話番号→電話口氏名→患者本人確認→(患者名)→受診歴→用件→(新規/継続 or 問い合わせ)→RAG→終話"
+  subflows:
+    - name: "な_成増厚生病院$アルコール病棟_電話番号聴取_20260413"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9準拠。電話番号聴取_復唱あり.json を完全コピー。フロー名プレフィックスのみ「な_成増厚生病院$アルコール病棟_」に置換。"
+    - name: "な_成増厚生病院$アルコール病棟_RAG検索_20260413"
+      target: "RAG検索"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 16準拠。RAG検索.json を完全コピー。フロー名プレフィックスのみ「な_成増厚生病院$アルコール病棟_」に置換。パターン3: 問い合わせルート + 全終話前で2箇所から呼び出す。"
+
+# --- セクション3: フローの目的 ---
+purpose: >
+  成増厚生病院 東京アルコール医療総合センター専用のAI電話受付。
+  入電者の連絡先電話番号・電話口氏名・患者本人確認・受診歴入院歴・用件（入院相談/継続中/問い合わせ）を聴取し、
+  折り返し連絡の受付を自動化する。
+  既存の診療フロー（な_成増厚生病院$診療1）からアルコール相談として案内された入電を受ける専用フロー。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "な_成増厚生病院$アルコール病棟_20260413"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → 非通知_アナウンス(TTS) → 完了フラグ_非通知(status=2, smsFlag=-1) → 切断
+            └─ 通常 → acceptance_times
+                        ├─ 時間外 → 時間外_アナウンス(TTS) → 完了フラグ_時間外(status=6, smsFlag=-1) → 切断
+                        └─ 受付可 → 冒頭_アナウンス(TTS)
+                            → サブフロー遷移_電話番号聴取(Custom Jump to Flow → .*で次へ)
+                            → 電話口氏名(TTS) → 入力_電話口氏名(AmiVoice STT) → OpenAI_電話口氏名
+                                ├─ success → 患者本人確認(TTS)
+                                └─ NO_RESULT → リトライ_電話口氏名
+                                    ├─ Retry → 電話口氏名(TTS)
+                                    └─ No more → 完了フラグ_聴取失敗 → END_聴取失敗(TTS) → 切断
+                            → 患者本人確認(TTS) → 入力_患者本人確認(DTMF AmiVoice STT, max=1)
+                                → OpenAI_患者本人確認
+                                    ├─ 本人 → 受診歴入院歴(TTS)
+                                    ├─ 代理人 → 患者名(TTS) → 入力_患者名(AmiVoice STT)
+                                    │   → OpenAI_患者名
+                                    │       ├─ success → 受診歴入院歴(TTS)
+                                    │       └─ NO_RESULT → リトライ_患者名
+                                    │           ├─ Retry → 患者名(TTS)
+                                    │           └─ No more → 受診歴入院歴(TTS)
+                                    └─ NO_RESULT → リトライ_患者本人確認
+                                        ├─ Retry → 患者本人確認(TTS)
+                                        └─ No more → 完了フラグ_聴取失敗 → END_聴取失敗(TTS) → 切断
+                            → 受診歴入院歴(TTS) → 入力_受診歴入院歴(DTMF AmiVoice STT, max=1)
+                                → OpenAI_受診歴入院歴
+                                    ├─ success → 用件確認(TTS)
+                                    └─ NO_RESULT → リトライ_受診歴入院歴
+                                        ├─ Retry → 受診歴入院歴(TTS)
+                                        └─ No more → 用件確認(TTS)
+                            → 用件確認(TTS) → 入力_用件確認(DTMF AmiVoice STT, max=1)
+                                → OpenAI_用件確認
+                                    ├─ 入院治療 → 新規継続(TTS)
+                                    │   → 入力_新規継続(DTMF AmiVoice STT, max=1)
+                                    │   → OpenAI_新規継続
+                                    │       ├─ 入院相談 → サブフロー遷移_RAG検索(pre_termination)
+                                    │       │   → smsFlag分岐
+                                    │       ├─ 継続中 → サブフロー遷移_RAG検索(pre_termination)
+                                    │       │   → smsFlag分岐
+                                    │       └─ NO_RESULT → リトライ_新規継続
+                                    │           ├─ Retry → 新規継続(TTS)
+                                    │           └─ No more → 完了フラグ_聴取失敗
+                                    │               → END_聴取失敗(TTS) → 切断
+                                    ├─ 問い合わせ → saveContext_classification(問い合わせ)
+                                    │   → サブフロー遷移_RAG検索(inquiry)
+                                    │   → smsFlag分岐
+                                    └─ NO_RESULT → リトライ_用件確認
+                                        ├─ Retry → 用件確認(TTS)
+                                        └─ No more → 完了フラグ_聴取失敗
+                                            → END_聴取失敗(TTS) → 切断
+                            → smsFlag分岐(ContextMatchRouter: phoneType)
+                                ├─ 携帯 → 完了フラグ_受付完了(status=1, smsFlag=1)
+                                │   → END_受付完了(TTS) → 切断
+                                └─ その他 → 完了フラグ_受付完了_SMS無し(status=1, smsFlag=-1)
+                                    → END_受付完了(TTS) → 切断
+    notes: |
+      incoming-classifier → acceptance_times → 冒頭アナウンス の標準冒頭チェーン。
+      電話番号聴取は標準サブフロー(復唱あり)。
+      患者本人確認で分岐: 本人→受診歴、代理人→患者名→受診歴。
+      用件確認で分岐: 入院治療→新規/継続、問い合わせ→RAG。
+      問い合わせルートはsaveContext2DB(classification=問い合わせ)で固定値保存。
+      新規継続ルートはOpenAI出力で入院相談/継続中をclassificationに保存。
+      smsFlag分岐: 電話番号サブフローのphoneType結果で携帯/その他を判定。
+
+  - flow_name: "な_成増厚生病院$アルコール病棟_電話番号聴取_20260413"
+    diagram: |
+      --- 完全コピー対象（CLAUDE.md Rule 9）---
+      docs/reference/bivr/samples/json/電話番号聴取_復唱あり.json を完全コピーする。
+      フロー名プレフィックスのみ「な_成増厚生病院$アルコール病棟_」に置換。
+      構造・接続・スクリプトは一切変更不可。
+    notes: >
+      CLAUDE.md Rule 9/10/11準拠。
+      incoming-classifier → 携帯/固定分岐 → Phone Normalization → Re-confirmation。
+      携帯パスは着信番号をそのまま復唱確認。固定パスは連絡先番号を聴取。
+      script_携帯判別で携帯/その他を判定し、script_結果返却でメインフローに返却。
+
+  - flow_name: "な_成増厚生病院$アルコール病棟_RAG検索_20260413"
+    diagram: |
+      --- 完全コピー対象（CLAUDE.md Rule 16）---
+      docs/reference/bivr/samples/json/RAG検索.json を完全コピーする。
+      フロー名プレフィックスのみ「な_成増厚生病院$アルコール病棟_」に置換。
+      構造・接続・スクリプトは一切変更不可。
+    notes: >
+      CLAUDE.md Rule 16準拠。
+      RAGサブフローのTTS文言はプロパティで制御。
+      パターン3のため2箇所から呼び出される。
+      問い合わせルート: 初回TTS「お問い合わせ内容をご自由におっしゃってください。」
+      全終話前: 初回TTS「何かご質問はございますか？」
+      ループ時: TTS「その他に何かご質問はございますか？ない場合は「ありません」のようにお話しください。」
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "入院相談"
+      - id: "2"
+        order: "2"
+        value: "継続中"
+      - id: "3"
+        order: "3"
+        value: "問い合わせ"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件区分。入院治療ルート: 新規=入院相談、継続=継続中。その他=問い合わせ。"
+
+  - context_name: "person"
+    context_name_jp: "電話口氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "電話口の方の氏名。本人の場合は患者名と同一。"
+
+  - context_name: "patientName"
+    context_name_jp: "患者氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "患者氏名。代理人の場合のみ聴取。本人の場合はpersonと同一（Scriptモジュールによるコピー推奨）。"
+
+  - context_name: "history"
+    context_name_jp: "受診歴入院歴"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "当院の受診歴・入院歴（あり/なし）"
+
+  - context_name: "question"
+    context_name_jp: "問い合わせ内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "問い合わせ用件の場合の質問内容。RAGサブフローで聴取される。"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "電話番号聴取サブフローで聴取。"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号_着信"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "非通知"
+      - id: "3"
+        order: "3"
+        value: "聴取失敗"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=未処理(通話完了) 2=非通知 3=聴取失敗 6=時間外"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "受電日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: true
+    notes: "通話ID自動格納"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "電話口氏名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "person"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "音声のみ。profile_words: 氏名辞書。Gen2ではcallerNameだがGen2 functionのpersonフィールドに保存。"
+
+  - order: 2
+    name: "患者本人確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: null
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "本人"
+      - "代理人"
+    notes: "DTMF 1=本人, 2=代理人。分岐用のみ。contextへの保存なし。"
+
+  - order: 3
+    name: "患者名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientName"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "音声のみ。代理人の場合のみ聴取（条件分岐）。profile_words: 氏名辞書。リトライ失敗時はスキップして次へ。"
+
+  - order: 4
+    name: "受診歴入院歴"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "history"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "あり"
+      - "なし"
+    notes: "DTMF 1=あり, 2=なし。リトライ失敗時はスキップして次へ。"
+
+  - order: 5
+    name: "用件確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: null
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "入院治療"
+      - "問い合わせ"
+    notes: "DTMF 1=入院治療, 2=問い合わせ。分岐用。問い合わせルートではsaveContext2DB(classification=問い合わせ)を配置。"
+
+  - order: 6
+    name: "新規継続"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "入院相談"
+      - "継続中"
+    notes: "DTMF 1=新規(入院相談), 2=継続(継続中)。入院治療ルートのみ到達。"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "電話口氏名"
+    tts_announcement: "お電話口の方のお名前を、フルネームでお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "氏名テキスト（カタカナ）"
+        - "NO_RESULT"
+      mapping:
+        - input: "音声認識結果が氏名として解釈可能"
+          output: "カタカナ氏名テキスト（例: ヤマダタロウ）"
+        - input: "音声認識結果が氏名として解釈不可、空、ノイズのみ"
+          output: "NO_RESULT"
+      no_result_condition: "音声認識結果が空またはノイズのみ"
+    save_to: "person"
+    next_step: "患者本人確認"
+    retry_failure: "end_failure"
+
+  - step_name: "患者本人確認"
+    tts_announcement: "お電話口の方は患者様ご本人ですか？"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "本人"
+        - "代理人"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「はい」「本人」「自分」を含む"
+          output: "本人"
+        - input: "DTMF 2 または「いいえ」「違います」「代理」「家族」を含む"
+          output: "代理人"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "はい/いいえのいずれにも分類できない"
+    save_to: null
+    next_step: "本人→受診歴入院歴 / 代理人→患者名"
+    retry_failure: "end_failure"
+
+  - step_name: "患者名"
+    tts_announcement: "患者さんのお名前を、フルネームでお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "氏名テキスト（カタカナ）"
+        - "NO_RESULT"
+      mapping:
+        - input: "音声認識結果が氏名として解釈可能"
+          output: "カタカナ氏名テキスト（例: ヤマダタロウ）"
+        - input: "音声認識結果が氏名として解釈不可、空、ノイズのみ"
+          output: "NO_RESULT"
+      no_result_condition: "音声認識結果が空またはノイズのみ"
+    save_to: "patientName"
+    next_step: "受診歴入院歴"
+    retry_failure: "skip"
+
+  - step_name: "受診歴入院歴"
+    tts_announcement: "当院に受診歴や入院歴はありますか？"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "あり"
+        - "なし"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「はい」「あります」「ある」「受診した」「入院した」を含む"
+          output: "あり"
+        - input: "DTMF 2 または「いいえ」「ありません」「ない」「初めて」を含む"
+          output: "なし"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "あり/なしのいずれにも分類できない"
+    save_to: "history"
+    next_step: "用件確認"
+    retry_failure: "skip"
+
+  - step_name: "用件確認"
+    tts_announcement: "本日のご用件は、入院治療に関するご相談でしょうか？お問い合わせでしょうか？"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "入院治療"
+        - "問い合わせ"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「入院」「相談」「治療」を含む"
+          output: "入院治療"
+        - input: "DTMF 2 または「問い合わせ」「質問」「聞きたい」を含む"
+          output: "問い合わせ"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "入院治療/問い合わせのいずれにも分類できない"
+    save_to: null
+    next_step: "入院治療→新規継続 / 問い合わせ→saveContext_classification(問い合わせ)→RAGサブフロー"
+    retry_failure: "end_failure"
+
+  - step_name: "新規継続"
+    tts_announcement: "新規のご相談ですか？継続中のご相談ですか？"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "入院相談"
+        - "継続中"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「新規」「新しい」「初めて」を含む"
+          output: "入院相談"
+        - input: "DTMF 2 または「継続」「続き」「前から」「通院中」を含む"
+          output: "継続中"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "新規/継続のいずれにも分類できない"
+    save_to: "classification"
+    next_step: "RAGサブフロー(pre_termination) → smsFlag分岐 → END_受付完了"
+    retry_failure: "end_failure"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+  # --- 正常系 ---
+  - name: "END_受付完了"
+    condition: "全聴取完了かつ携帯"
+    tts_announcement: "相談員から折り返しご連絡させていただきます。平日10時から17時の間に折り返します。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了"
+  - name: "END_受付完了_SMS無し"
+    condition: "全聴取完了かつ固定電話またはその他"
+    tts_announcement: "相談員から折り返しご連絡させていただきます。平日10時から17時の間に折り返します。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_受付完了_SMS無し"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: true
+  routing_keys: ["phoneType"]
+  patterns:
+    - condition: "携帯"
+      sms_flag: "1"
+      notes: "電話番号サブフローのphoneType=携帯の場合。ContextMatchRouterで分岐。"
+    - condition: ".*"
+      sms_flag: "-1"
+      notes: "固定電話・その他はSMS送信なし"
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "3"
+  inquiry_insertion_point: "用件確認_問い合わせ分岐後（saveContext_classification(問い合わせ)の次）"
+  pre_termination: true
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  # --- メインフロー ---
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。成増厚生病院東京アルコール医療総合センターです。この電話はAI電話で対応させていただきます。ご用件をお伺いしたあと、折り返しご連絡させていただきます。"
+  - module_name: "電話口氏名"
+    purpose: "電話口氏名聴取案内"
+    announcement: "お電話口の方のお名前を、フルネームでお話しください。"
+  - module_name: "患者本人確認"
+    purpose: "患者本人確認"
+    announcement: "お電話口の方は患者様ご本人ですか？"
+  - module_name: "患者名"
+    purpose: "患者名聴取案内（代理人の場合のみ）"
+    announcement: "患者さんのお名前を、フルネームでお話しください。"
+  - module_name: "受診歴入院歴"
+    purpose: "受診歴入院歴確認"
+    announcement: "当院に受診歴や入院歴はありますか？"
+  - module_name: "用件確認"
+    purpose: "用件確認（入院治療/問い合わせ）"
+    announcement: "本日のご用件は、入院治療に関するご相談でしょうか？お問い合わせでしょうか？"
+  - module_name: "新規継続"
+    purpose: "新規/継続確認（入院治療ルートのみ）"
+    announcement: "新規のご相談ですか？継続中のご相談ですか？"
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知案内"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+  - module_name: "時間外_アナウンス"
+    purpose: "時間外案内"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+  - module_name: "END_受付完了"
+    purpose: "受付完了終話"
+    announcement: "相談員から折り返しご連絡させていただきます。平日10時から17時の間に折り返します。お電話ありがとうございました。それでは失礼いたします。"
+  - module_name: "END_聴取失敗"
+    purpose: "聴取失敗終話"
+    announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+  # --- サブフロー TTS（プロパティで制御）---
+  # 電話番号聴取サブフロー・RAG検索サブフローのTTSモジュールは
+  # docs/specs/subflow_property_templates.json に定義済み。
+  # @properties が自動的にプロパティファイルに追記する。
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "電話口氏名"
+    words: |
+      （氏名辞書を設定）
+  - step_name: "患者本人確認"
+    words: |
+      はい はい
+      いいえ いいえ
+      本人 ほんにん
+      代理人 だいりにん
+      家族 かぞく
+  - step_name: "患者名"
+    words: |
+      （氏名辞書を設定）
+  - step_name: "受診歴入院歴"
+    words: |
+      はい はい
+      いいえ いいえ
+      あります あります
+      ありません ありません
+      受診歴 じゅしんれき
+      入院歴 にゅういんれき
+      初めて はじめて
+  - step_name: "用件確認"
+    words: |
+      入院 にゅういん
+      入院治療 にゅういんちりょう
+      相談 そうだん
+      問い合わせ といあわせ
+      質問 しつもん
+  - step_name: "新規継続"
+    words: |
+      新規 しんき
+      継続 けいぞく
+      継続中 けいぞくちゅう
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "Gen2→Gen3移管。Gen2プロンプトの施設名: 成増厚生病院 東京アルコール医療総合センター。"
+  - "本人確認で「本人」の場合、personフィールドの値をpatientNameにも格納する処理を推奨。Scriptモジュール（$runner.getModuleResult で person の OpenAI 結果を取得 → $runner.setResult で patientName に保存）で実現可能。generatorは可能であれば実装すること。"
+  - "Gen2では復唱確認（echo-back）が患者本人確認・受診歴入院歴・用件確認にあったが、Gen3では1発話1意図の原則に従い復唱ステップは除去。電話番号のみ標準サブフローのRe-confirmationで対応。"
+  - "Gen2の口調指示: 「ありがとうございます」は使用禁止（終話の「お電話ありがとうございました」は例外）。「おっしゃってください」ではなく「お話しください」を使用。TTS文言に反映済み。"
+  - "Gen2では用件不明時のデフォルトが「問い合わせ」だったが、Gen3ではNO_RESULT→リトライ→上限到達時END_聴取失敗とする。"
+  - "Gen2 function propertiesのうち本フローで未使用の12フィールド（medicalCardNumber, clinicalDepartment, clinicalDepartment2, reservationDate, DesiredreservationDate, reason, patientDateOfBirth, symptoms, institution, introduction, disease, details）はcontext_fieldsに含めない。Gen2 functionの汎用テンプレートに含まれていたが本フローの聴取ステップで使用されていないため。"
+  - "Gen2のendpoint/smsFlag/checkoutはsaveContextModel2DBに含めず。endpointとsmsFlagはsaveCompletionFlag2dbのパラメータとして終話パターンに記載。checkoutはGen2固有の途中切断追跡でGen3には相当する概念がないため除外。"
+  - "既存の診療フロー（な_成増厚生病院$診療1）で「アルコールの相談」は050-1725-6865を案内して終話している。本フローがその受電先として機能するため、転送モジュールは不要。"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+# 詳細は確認レポート（docs/designs/確認レポート_成増厚生病院_アルコール病棟_20260413.md）を参照。
+confirmation_items:
+  - item: "office_id"
+    resolved: false
+  - item: "営業時間（受付可能時間帯）。Gen2終話文言の「平日10時から17時」は折り返し時間帯であり、受付時間とは異なる可能性あり。"
+    resolved: false
+  - item: "受電番号（050-1725-6865）が本フローの受電番号として正しいか。既存診療フローの転送先番号から仮設定。"
+    resolved: false
+  - item: "RAGナレッジベースの有無。未構築の場合はrag_subflow.patternをnoneに変更。"
+    resolved: false
+  - item: "smsFlag分岐方式（phoneTypeベース: 携帯=1, その他=-1）。Gen2では一律smsFlag=1だった。"
+    resolved: false

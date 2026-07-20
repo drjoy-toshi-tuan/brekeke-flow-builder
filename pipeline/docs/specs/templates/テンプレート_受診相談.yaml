@@ -1,0 +1,242 @@
+# =============================================================================
+# シナリオテンプレート: 受診相談
+# =============================================================================
+# 用途: draw.io でシナリオを起こすための雛形 YAML。
+#   コピー → {施設名} 等を置換 → yaml_to_drawio.py で drawio 化 → diagrams.net で確認。
+# 設計方針（前例なしの新規設計 / 浜口さん指示 2026-05-27）:
+#   冒頭ブロックの直下にヒアリングブロックを1つ置き、そこでフリー発話により
+#   「相談内容・氏名・連絡先」を可能な限り一括回収する（=「相談」聴取）。
+#   回収しきれなかった場合のみ、後段で個人情報（氏名・連絡先）を個別に補足聴取する。
+# ポイント:
+#   - 相談内容聴取は OpenAI で summarize し、氏名/連絡先が取れたかも判定させる。
+#   - 情報充足判定（script）で「充足」→そのまま終話 / 「不足」→補足聴取に分岐。
+# =============================================================================
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "{施設名}"
+  scenario_name: "受診相談"
+  group_name: "{施設名}_受診相談_{YYYYMMDD}"   # 末尾に作業日。日付はグループ名のみに付ける（naming_convention.md）
+  flow_name: "{施設名}_受診相談_{YYYYMMDD}$受診相談"   # $ より前は group_name と完全一致（T-2d）
+  target_facility: "{施設名}"
+  office_id: "TODO_要確認"
+  phone_number: "{代表電話番号}"
+  business_hours: "祝日除く月〜金 9:00〜17:00"
+  flow_type: "subflow"
+  work_type: "new"
+  environment: "demo"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "{施設名}$受診相談"
+      role: "main"
+      description: "フリー発話で相談内容・氏名・連絡先を一括回収 → 不足時のみ個人情報を補足聴取 → 折り返し受付"
+  subflows:
+    - name: "{施設名}$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "相談内容聴取で氏名が取れなかった場合のみ呼び出す"
+    - name: "{施設名}$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "相談内容聴取で連絡先が取れなかった場合のみ呼び出す"
+
+# --- セクション3: フローの目的 ---
+purpose: >
+  {施設名} への受診に関する相談電話を AI が受付する。まずフリー発話で相談内容・お名前・
+  ご連絡先をまとめてお話しいただき、一度に可能な限り情報を回収する。回収しきれなかった項目が
+  ある場合のみ、後段で氏名・連絡先を個別に聴取する。聴取結果は Dr.JOY に登録し、担当者・看護師が
+  折り返し対応する。
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+# 営業時間判定が必要な施設 (曜日別営業時間 / 祝日休 / 固定休 / 年末年始 等):
+# script_template: business_hour_classifier を script ブロックで使用可能。
+# 曜日別営業時間 + 祝日 (Brekeke Note `drjoy.holidays` 連携) + 固定休を 1 ブロックで判定し、
+# 営業中/営業時間外/定休日/祝日/固定休/ERROR の 6 分岐に仕分ける。
+# 使用例: docs/brekeke/script_templates/README.md、詳細仕様: modules/business_hour_classifier/REQUIREMENTS.md
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 相談内容聴取
+
+  # フリー発話で相談内容・氏名・連絡先を一括回収。OpenAI が内容を要約し
+  # 氏名/連絡先が取れたかを判定して consultationDetail / 充足フラグに保存。
+  - step: 相談内容聴取
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 情報充足判定
+
+  # 氏名・連絡先が一括回収で揃ったか判定。揃っていれば終話、不足なら補足聴取へ。
+  - step: 情報充足判定
+    type: script
+    reference_module: "OpenAI_相談内容聴取"
+    conditions:
+      - match: "充足"
+        next: END_受付完了
+      - match: "不足"
+        next: 氏名聴取
+
+  # 補足聴取（不足時のみ）
+  - step: 氏名聴取
+    type: subflow
+    flowname: "{施設名}$氏名聴取"
+    next: 電話番号聴取
+
+  - step: 電話番号聴取
+    type: subflow
+    flowname: "{施設名}$電話番号聴取"
+    next: END_受付完了
+
+  - step: END_受付完了
+    type: termination
+    termination_ref: "END_受付完了"
+
+# --- セクション5: コンテキストフィールド一覧（抜粋）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "受診相談"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本フローは受診相談固定"
+  - context_name: "consultationDetail"
+    context_name_jp: "相談内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "フリー発話の要約（症状・希望・経緯など）"
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "相談内容聴取で取得、不足時は氏名聴取サブフローで補足"
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "相談内容聴取で取得、不足時は電話番号聴取サブフローで補足"
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "転送"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "システム自動取得"
+
+# --- セクション7: ステップ詳細（TTS 発話文言）---
+step_details:
+  - step_name: "冒頭_アナウンス"
+    tts_announcement: "お電話ありがとうございます。{施設名}の受診相談AI電話です。"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "相談内容聴取"
+    retry_failure: "skip"
+  - step_name: "相談内容聴取"
+    tts_announcement: "ご相談の内容と、お名前、日中つながるお電話番号を、続けてお話しください。たとえば「山田太郎、090-1234-5678、3日前から熱が下がらず受診したい」のようにお話しいただけます。"
+    input_method: "voice_only"
+    save_to: "consultationDetail"
+    next_step: "情報充足判定"
+    retry_failure: "skip"
+    openai_rules:
+      output_values:
+        - "充足"
+        - "不足"
+      mapping:
+        - input: "相談内容に加え、氏名と連絡先（または着信番号でよい旨）が聞き取れた"
+          output: "充足"
+        - input: "相談内容は取れたが、氏名または連絡先が不足している"
+          output: "不足"
+      no_result_condition: "相談内容自体が聞き取れない"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # 異常系（デフォルト必須 — 削除禁止）
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+  # 正常系
+  - name: "END_受付完了"
+    condition: "相談内容と連絡先の聴取完了"
+    tts_announcement: "ご相談を承りました。担当者または看護師から折り返しご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了"
+
+# --- セクション8b: RAG/FAQ 検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false

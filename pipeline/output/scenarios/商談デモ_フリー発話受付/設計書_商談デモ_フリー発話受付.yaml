@@ -1,0 +1,291 @@
+version: "1.0"
+
+# =====================================================================
+#  商談デモ用シナリオ — 「フリー発話 → 用件種別で分岐 → 不足項目の順次回収 → 終話」
+#  （新パターン: 冒頭で用件分類せず、自由発話から複数スロットを一括抽出。
+#    用件種別を 新規予約 / 変更・取消 / 問い合わせのみ の3分岐に振り分け、
+#    予約系は各々の予約スロットを回収した後、全パス共通の個人情報セット
+#    （氏名 → 連絡先 → 生年月日 → 診察券番号）の不足分だけを順次回収して合流する。
+#    質問への回答は各聴取に仕込んだ横断FAQ（決定論）が担い、専用の RAG/問い合わせパスは持たない。
+#    予約意図のない「問い合わせのみ」の通話は予約分岐に進めないため、個人情報を取って終話する受け皿に流す。）
+# =====================================================================
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "商談デモ"
+  scenario_name: "フリー発話受付"
+  group_name: "商談デモ_フリー発話受付_20260604"   # 末尾 _YYYYMMDD は作業日
+  flow_name: "商談デモ_フリー発話受付_20260604$フリー発話受付"
+  target_facility: "デモ環境"
+  office_id: "TODO_要確認"
+  phone_number: ""
+  business_hours: "祝日除く 月〜金 9:00〜17:00（デモ想定）"
+  flow_type: "subflow"
+  work_type: "new"
+  environment: "demo"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  患者からの電話を受け、最初に「ご用件」を自由発話で丸ごと聴取する。
+  その1回の発話から 用件種別 / 診療科 / 予約希望日 / 予約日時 / 氏名 / 連絡先 / 生年月日 / 診察券番号 を抽出し、
+  用件種別（新規予約 / 変更・取消 / 問い合わせのみ）で分岐させる。
+  予約系（新規 / 変更・取消）は各々の予約スロットを回収した後、全パス共通の個人情報セット
+  （氏名 → 連絡先 → 生年月日 → 診察券番号）のうち抽出できなかったものだけを順次回収して合流する。
+  内容を復唱し、未回答の質問があったか否かで終話を出し分けて終了する。
+  質問への回答は各聴取に組み込んだ横断FAQ（決定論 FAQ Matcher）が担い、専用の RAG/問い合わせパスは持たない。
+  予約意図のない「問い合わせのみ」の通話は、予約分岐に進めないため個人情報を聴取して終話する受け皿に流す。
+
+# --- セクション8b: 横断FAQ（質問検知）---
+# 本シナリオの FAQ は標準パターン(1/2/3)と異なる「横断FAQ（質問検知）」方式:
+#   個人情報入力以外の全聴取（用件フリー聴取 / 各 聴取_◯◯）で、回答の代わりに「質問形式」の発話が
+#   来たら FAQ検索→回答→元の聴取に復帰する。専用の問い合わせパス（旧 jump_RAG検索）は廃止した。
+#   実装は決定論 FAQ Matcher モジュール（modules/faq_matcher/、OpenAI/embedding 不使用・
+#   NFKC+2-gram+BM25+coverage gate）。各聴取の script に同モジュールを仕込み、出力4分岐で振り分ける。
+#   2026-06-05 に oracle 24/24＋Brekeke 実機 32/32 PASS でモジュール認定済み（modules/README.md 登録）。
+#   ※ 横断FAQは「各聴取から共通FAQへ飛んで呼び出し元へ戻る復帰ループ」のため scaffold/yaml-to-drawio の
+#      標準ブロックでは自動表現できない。drawio では手動の注記レイヤーで表現（YAML再生成では消える）。
+rag_subflow:
+  pattern: "custom_cross_cutting"               # 標準 none|1|2|3 ではない独自方式
+  inquiry_insertion_point: "なし（専用問い合わせパスは廃止。質問は横断FAQで処理）"
+  pre_termination: false
+  cross_cutting:
+    enabled: true
+    trigger: "聴取応答が回答ではなく質問形式と判定されたとき"
+    on_answer: "FAQ検索で回答後、元の聴取ステップに復帰（聞きたかった項目を再度促す）"
+    applies_to: "個人情報入力以外の聴取（用件フリー聴取 / 聴取_診療科 / 聴取_予約希望日 / 聴取_予約日時）。個人情報サブフロー（氏名・連絡先・生年月日・診察券番号）には置かない（番号の読み上げ等での誤検知を避けるため）。"
+    implementation: "決定論 FAQ Matcher モジュール（modules/faq_matcher/）。OpenAI/embedding 不使用、NFKC+2-gram+BM25+coverage gate。各聴取の script に組み込む。"
+    module_status: "認定済み（2026-06-05: oracle 24/24＋Brekeke 実機 32/32 PASS、modules/README.md 登録、demo/shodan-free-speech-intake に push 済）"
+    branches:                       # faq_matcher の出力4分岐（faq_matcher/REQUIREMENTS.md §12）
+      - "^ERROR$ / ^NOT_FOUND$ → 未回答フラグを立てて次へ（横断では転送せず通常処理へ進む）"
+      - "^NO_QUESTION$ → 制御発話（質問でない: 特にありません/大丈夫です 等）→ 元の聴取/次へ復帰"
+      - "^.+$（答え本文）→ #data# で回答発話 → 元の聴取に復帰"
+    cross_cutting_wiring_note: "横断側の配線差: 各聴取では患者の正常なスロット回答（例『内科』）も FAQ 未登録のため NOT_FOUND が返る。横断では NOT_FOUND を『転送』ではなく『スロット回答として通常処理へ進む』に向ける。実 Brekeke 配線時に確定する。"
+    termination_signal: "横断FAQが NOT_FOUND（答えられない質問）を返したら context フラグ『未回答質問あり』を立て、末尾の『終話判定』CMR が END_問い合わせ折り返し / END_受付完了 を決定論で出し分ける（OpenAI不使用）。"
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # ---- 冒頭 ----
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 用件フリー聴取
+
+  # ---- ① 用件を自由発話で一括聴取 ----
+  - step: 用件フリー聴取
+    type: hearing            # AmiVoice_STT / 自由発話（output_format: text）
+    output_format: text
+    next: 用件抽出
+
+  # ---- ② 1発話から複数スロット抽出（用件種別＋診療科/予約希望日/予約日時/氏名/連絡先/生年月日/診察券番号）----
+  - step: 用件抽出
+    type: script             # 発話テキストを解析し各スロット値と取得有無フラグを save
+    reference_module: "用件フリー聴取"
+    next: 用件種別分岐
+
+  # ---- ③ 用件種別で3分岐 ----
+  - step: 用件種別分岐
+    type: context_match_router
+    reference_module: "用件抽出"
+    conditions:
+      - match: "新規予約"
+        next: チェック_診療科
+      - match: "変更・取消"
+        next: チェック_予約日時
+      - match: "問い合わせのみ"     # 予約意図なしの受け皿。予約系スロットを飛ばして共通個人情報回収へ直行
+        next: チェック_氏名
+
+  # =================================================================
+  #  パスA: 新規予約 — 診療科 → 予約希望日（予約系スロット）→ 共通個人情報回収へ合流
+  # =================================================================
+  - step: チェック_診療科
+    type: context_match_router
+    reference_module: "用件抽出"
+    conditions:
+      - match: "未取得"
+        next: 聴取_診療科
+      - match: "取得済"
+        next: チェック_予約希望日
+  - step: 聴取_診療科
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    next: チェック_予約希望日
+
+  - step: チェック_予約希望日
+    type: context_match_router
+    reference_module: "用件抽出"
+    conditions:
+      - match: "未取得"
+        next: 聴取_予約希望日
+      - match: "取得済"
+        next: チェック_氏名
+  - step: 聴取_予約希望日
+    type: hearing
+    output_format: datetime
+    next: チェック_氏名
+
+  # =================================================================
+  #  パスB: 変更・取消 — 予約日時（予約系スロット）→ 共通個人情報回収へ合流
+  # =================================================================
+  - step: チェック_予約日時
+    type: context_match_router
+    reference_module: "用件抽出"
+    conditions:
+      - match: "未取得"
+        next: 聴取_予約日時
+      - match: "取得済"
+        next: チェック_氏名
+  - step: 聴取_予約日時
+    type: hearing
+    output_format: datetime
+    next: チェック_氏名
+
+  # =================================================================
+  #  共通: 個人情報セット回収（氏名 → 連絡先 → 生年月日 → 診察券番号）
+  #  ※ 新規予約 / 変更・取消 / 問い合わせのみ の全パスがここに合流
+  #  ※ チェックは抽出の取得有無フラグを参照し、取得済はスキップして次のチェックへ
+  #  ※ 各 jump は個人情報サブフローの完全コピー。ここには横断FAQは置かない
+  # =================================================================
+  - step: チェック_氏名
+    type: context_match_router
+    reference_module: "用件抽出"
+    conditions:
+      - match: "未取得"
+        next: jump_氏名
+      - match: "取得済"
+        next: チェック_連絡先
+  - step: jump_氏名
+    type: subflow            # 個人情報サブフロー（氏名聴取 / PatientName）
+    flowname: "{group}$氏名聴取"
+    next: チェック_連絡先
+
+  - step: チェック_連絡先
+    type: context_match_router
+    reference_module: "用件抽出"
+    conditions:
+      - match: "未取得"
+        next: jump_連絡先
+      - match: "取得済"
+        next: チェック_生年月日
+  - step: jump_連絡先
+    type: subflow            # 個人情報サブフロー（電話番号聴取）
+    flowname: "{group}$電話番号聴取"
+    next: チェック_生年月日
+
+  - step: チェック_生年月日
+    type: context_match_router
+    reference_module: "用件抽出"
+    conditions:
+      - match: "未取得"
+        next: jump_生年月日
+      - match: "取得済"
+        next: チェック_診察券番号
+  - step: jump_生年月日
+    type: subflow            # 個人情報サブフロー（生年月日聴取 / 生年月日復唱モジュール）
+    flowname: "{group}$生年月日聴取"
+    next: チェック_診察券番号
+
+  - step: チェック_診察券番号
+    type: context_match_router
+    reference_module: "用件抽出"
+    conditions:
+      - match: "未取得"
+        next: jump_診察券番号
+      - match: "取得済"
+        next: 最終確認_復唱
+  - step: jump_診察券番号
+    type: subflow            # 個人情報サブフロー（診察券番号聴取）
+    flowname: "{group}$診察券番号聴取"
+    next: 最終確認_復唱
+
+  # ---- 共通: 復唱 → 終話判定 ----
+  - step: 最終確認_復唱
+    type: announcement
+    next: 終話判定
+
+  # ---- 終話判定: 横断FAQの未回答フラグで出し分け（決定論・OpenAI不使用）----
+  - step: 終話判定
+    type: context_match_router
+    reference_module: "横断FAQ（未回答質問フラグ）"
+    conditions:
+      - match: "未回答質問あり"
+        next: END_問い合わせ折り返し
+      - match: "なし"
+        next: END_受付完了
+
+  # ---- 終話 ----
+  - step: END_受付完了
+    type: termination
+    termination_ref: "END_受付完了"
+  - step: END_問い合わせ折り返し
+    type: termination
+    termination_ref: "END_問い合わせ折り返し"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # 正常系
+  - name: "END_受付完了"
+    condition: "予約系（新規/変更・取消）または問い合わせのみで、未回答の質問なく必要項目が揃った"
+    tts_announcement: "ご用件を承りました。担当者より折り返しご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了"
+  - name: "END_問い合わせ折り返し"
+    condition: "横断FAQで答えられなかった質問があり、個人情報を取得して折り返し対応に回す"
+    tts_announcement: "お調べできなかったご質問は、担当者に申し伝え、折り返しご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_問い合わせ折り返し"
+  # 異常系（デフォルト必須）
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-2"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-2"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-2"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+# --- セクション7: ステップ詳細（アナウンス文言。drawio タブ2 アナウンス一覧で使用）---
+step_details:
+  - step_name: 冒頭_アナウンス
+    tts_announcement: "お電話ありがとうございます。AI受付がご用件をお伺いします。"
+  - step_name: 用件フリー聴取
+    tts_announcement: "ご用件を、できるだけ詳しくお話しください。ご予約・ご変更・お問い合わせなど、お名前やご希望のお日にちを含めてお話しいただけますと、ご案内がスムーズです。お話が終わりましたら、しばらくお待ちください。"
+  - step_name: 聴取_診療科
+    tts_announcement: "ご希望の診療科をお願いいたします。"
+  - step_name: 聴取_予約希望日
+    tts_announcement: "ご希望のお日にちと時間帯をお願いいたします。"
+  - step_name: 聴取_予約日時
+    tts_announcement: "ご予約済みのお日にちと時間帯をお願いいたします。"
+  - step_name: 最終確認_復唱
+    tts_announcement: "ご入力内容を確認いたします。{復唱内容}。お間違いなければ、このままお切りください。"
+
+# --- セクション11: 特記事項 ---
+special_notes:
+  - "新パターン: 冒頭で用件を選択肢分岐させず、自由発話1回から複数スロットを抽出する。"
+  - "「用件抽出」は発話テキストを解析し、用件種別（新規予約/変更・取消/問い合わせのみ）＋各スロット値＋取得有無フラグを出力する想定（実装方式は要設計: 案A=区切り文字付き1文字列をscriptでパース / 案B=スロット別判定+null-check）。"
+  - "チェック_* は抽出の取得有無フラグを参照し、未取得スロットだけを聴取/サブフローに回す（取得済はスキップして合流）。"
+  - "個人情報回収（氏名 → 連絡先 → 生年月日 → 診察券番号）は新規予約/変更・取消/問い合わせのみ の全パス共通のセグメント。各 jump は個人情報サブフローの完全コピーを呼ぶ（生年月日は生年月日復唱モジュール）。"
+  - "「問い合わせのみ」は予約意図のない通話の受け皿。予約系スロットを飛ばして共通個人情報回収へ直行し、終話判定へ。質問への回答自体は横断FAQが各聴取で処理する（専用の RAG/問い合わせパスは廃止）。"
+  - "横断FAQ（質問検知）: 個人情報入力以外の各聴取で質問形式を検知したら、決定論 FAQ Matcher で回答→元の聴取に復帰。個人情報サブフローには置かない。OpenAI不使用・実機PoC検証済（2026-06-05認定）。"
+  - "終話判定（決定論）: 横断FAQが答えられない質問（NOT_FOUND）を返したら未回答フラグを立て、末尾 CMR で END_問い合わせ折り返し / END_受付完了 を出し分ける。OpenAIは挟まない。"
+  - "横断FAQ層は各聴取から共通FAQへ飛んで呼び出し元へ戻る復帰ループのため、scaffold/yaml-to-drawio の標準ブロックでは自動表現不可。drawioでは『💬質問→FAQ』バッジ＋注記で手動表現している（YAML再生成では消えるので注意）。"
+  - "sms_flag: 受付/折り返し=1（送信）、異常系=-2（絶対送らない）。-1 は録音分割バグで禁止のため使わない。"

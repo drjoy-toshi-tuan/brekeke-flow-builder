@@ -1,0 +1,1211 @@
+# 設計書 — 銚子市立病院 健診
+# 生成元: @director エージェント
+# 生成日: 2026/04/08
+# 確認レポート: docs/designs/確認レポート_銚子市立病院_健診_20260408.md
+# ゴールデンテンプレート参照: docs/specs/golden_templates/健診受付型.yaml
+#
+# BLOCKER あり: 本設計書には未確定の情報（TODO_要確認）が含まれています。
+# 確認レポートのBLOCKER項目を解消してから @generator に実行を指示してください。
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "銚子市立病院"
+  group_name: "銚子市立病院"
+  flow_name: "銚子市立病院$健診"
+  target_facility: "銚子市立病院"
+  office_id: "TODO_要確認"           # デモAdmin URL: officeId=5eecd4072c9faeddaddbeef8（要確認）
+  phone_number: "050-1725-5825"      # デモ050番号
+  business_hours: "TODO_要確認"      # Gen2プロンプトに記載なし。Dr.JOY側で設定
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "demo"                # NON-BLOCKER N-7: デモ/本番を確認
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "銚子市立病院$健診"
+      role: "main"
+      description: "冒頭チェーン → 個人情報サブフロー（氏名→生年月日→電話番号）→ 用件聴取（4択DTMF）→ 予約/変更/キャンセル/問合せ分岐 → RAGサブフロー → 終話"
+    - name: "銚子市立病院$氏名聴取"
+      role: "sub"
+      description: "氏名聴取 → 結果返却"
+    - name: "銚子市立病院$生年月日聴取"
+      role: "sub"
+      description: "生年月日聴取（復唱なし）→ 結果返却"
+    - name: "銚子市立病院$電話番号聴取"
+      role: "sub"
+      description: "着信番号分岐 → 電話番号聴取/復唱確認 → 結果返却"
+    - name: "銚子市立病院$RAG検索"
+      role: "sub"
+      description: "FAQ検索ループ → 結果返却"
+  subflows:
+    - name: "銚子市立病院$氏名聴取"
+      target: "氏名聴取"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "氏名聴取サブフロー。リトライ上限到達時は氏名未取得のまま次へスキップ"
+    - name: "銚子市立病院$生年月日聴取"
+      target: "生年月日聴取_復唱なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "生年月日聴取サブフロー。Gen2復唱禁止に従い復唱なし版を使用"
+    - name: "銚子市立病院$電話番号聴取"
+      target: "電話番号聴取_復唱あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "電話番号聴取サブフロー。MOBILEパスの着信番号確認あり。終話はメインフロー側で処理"
+    - name: "銚子市立病院$RAG検索"
+      target: "RAG検索"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "FAQ検索サブフロー。パターン3: 問合せルート内 + 全終話前に配置"
+    # --- TODO_要確認: B-1 登録番号を含める場合は以下を追加 ---
+    # - name: "銚子市立病院$診察券番号聴取"
+    #   target: "診察券番号聴取"
+    #   transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+    #   termination: "return"
+    #   notes: "登録番号（0始まり7桁）聴取。「わからない」分岐あり"
+
+# --- セクション3: フローの目的 ---
+purpose: "銚子市立病院の健診専用AI電話。個人情報（氏名・生年月日・電話番号）を聴取後、用件（予約/変更/キャンセル/その他問合せ）を4択で振り分ける。予約ルートでは予約種類（健康診断/がん検診/予防接種）に応じた詳細聴取を行い、折り返し受付を自動化する。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "銚子市立病院$健診"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → 非通知_アナウンス(TTS) → 完了フラグ_非通知(status=2,smsFlag=-1) → 切断
+            └─ 通常 → acceptance_times
+                        ├─ 時間外/TIMEOUT/ERROR → 時間外_アナウンス(TTS) → 完了フラグ_時間外(status=6,smsFlag=-1) → 切断
+                        └─ 受付可(true) → 冒頭_アナウンス(TTS)
+                                            → ジャンプ_氏名聴取(Custom Jump to Flow)
+                                            → ジャンプ_生年月日聴取(Custom Jump to Flow)
+                                            → ジャンプ_電話番号聴取(Custom Jump to Flow)
+                                            → 用件_選択(TTS) → 用件選択(DTMF STT) → OpenAI_用件_選択
+                                                ├─ 予約 → saveContext_用件_予約 → 予約_種類(TTS) → 予約種類(DTMF STT) → OpenAI_予約_種類
+                                                │     ├─ 健康診断 → saveContext_予約種類 → 健康診断_種類(TTS) → 健康診断の種類(DTMF STT) → OpenAI_健康診断_種類
+                                                │     │     ├─ 人間ドック → saveContext_健診種類 → 脳ドック_確認(TTS) → 脳ドック確認(STT) → OpenAI_脳ドック → saveContext_脳ドック
+                                                │     │     │     → ジャンプ_RAG(パターン3,pre-termination) → END_予約_ドック
+                                                │     │     ├─ 特定健診 → saveContext_健診種類 → 国保_社保(TTS) → 国保_社保(DTMF STT) → OpenAI_国保_社保 → saveContext_国保社保
+                                                │     │     │     → 予約_希望日(TTS) → 予約希望日(STT) → OpenAI_予約_希望日 → saveContext_予約希望日
+                                                │     │     │     → ジャンプ_RAG(パターン3,pre-termination) → END_予約
+                                                │     │     └─ その他 → saveContext_健診種類 → 内容_健康診断(TTS) → 内容_健康診断(STT) → OpenAI_内容_健康診断 → saveContext_内容
+                                                │     │           → 予約_希望日(TTS) → ... → ジャンプ_RAG → END_予約
+                                                │     ├─ がん検診 → saveContext_予約種類 → がん_種類(TTS) → がん検診種類(DTMF STT) → OpenAI_がん_種類
+                                                │     │     ├─ 乳がん → saveContext_がん種類 → 超音波_マンモ(TTS) → 超音波_マンモ(DTMF STT) → OpenAI_超音波_マンモ
+                                                │     │     │     ├─ 超音波 → saveContext_がん種類更新 → 予約_希望日 → ... → ジャンプ_RAG → END_予約
+                                                │     │     │     └─ マンモ → saveContext_がん種類更新 → エコー_確認(TTS) → エコー確認(STT) → OpenAI_エコー → saveContext_がん種類更新
+                                                │     │     │           → 予約_希望日 → ... → ジャンプ_RAG → END_予約
+                                                │     │     ├─ 胃がん/肝炎 → saveContext_がん種類 → 予約_希望日 → ... → ジャンプ_RAG → END_予約
+                                                │     │     └─ その他 → saveContext_がん種類 → がん_内容(TTS) → がん健診内容(STT) → OpenAI_がん_内容 → saveContext_がん内容
+                                                │     │           → 予約_希望日 → ... → ジャンプ_RAG → END_予約
+                                                │     └─ 予防接種 → saveContext_予約種類 → ワクチン_種類(TTS) → ワクチン種類(STT) → OpenAI_ワクチン_種類
+                                                │           ├─ MR/おたふく → saveContext_ワクチン → ジャンプ_RAG → END_予約_MR_おたふく
+                                                │           └─ その他 → saveContext_ワクチン → 予約_希望日 → ... → ジャンプ_RAG → END_予約
+                                                ├─ 変更 → saveContext_用件_変更 → 変更_予約日(TTS) → 変更_現在の予約日(STT) → OpenAI_変更_予約日 → saveContext_変更予約日
+                                                │     → 変更_希望内容(TTS) → 変更希望内容(STT) → OpenAI_変更_希望内容 → saveContext_変更内容
+                                                │     → ジャンプ_RAG(パターン3,pre-termination) → END_変更
+                                                ├─ キャンセル → saveContext_用件_キャンセル → キャンセル_予約日(TTS) → キャンセル_現在の予約日(STT) → OpenAI_キャンセル_予約日 → saveContext_キャンセル予約日
+                                                │     → ジャンプ_RAG(パターン3,pre-termination) → END_キャンセル
+                                                └─ その他問合せ → saveContext_用件_問合せ → 問合せ_内容(TTS) → 問合せ内容(STT) → OpenAI_問合せ_内容 → saveContext_問合せ
+                                                      → ジャンプ_RAG(パターン3,inquiry) → END_問い合わせ
+
+      ─── 終話パターン ───
+      END_予約: 完了フラグ_予約(status=1,smsFlag=1) → 終話_予約(TTS) → 切断
+      END_予約_ドック: 完了フラグ_予約_ドック(status=1,smsFlag=1) → 終話_予約_ドック(TTS) → 切断
+      END_予約_MR_おたふく: 完了フラグ_予約_MR(status=1,smsFlag=1) → 終話_予約_MR_おたふく(TTS) → 切断
+      END_変更: 完了フラグ_変更(status=1,smsFlag=1) → 終話_変更(TTS) → 切断
+      END_キャンセル: 完了フラグ_キャンセル(status=1,smsFlag=1) → 終話_キャンセル(TTS) → 切断
+      END_問い合わせ: 完了フラグ_問い合わせ(status=1,smsFlag=2) → 終話_問い合わせ(TTS) → 切断
+      END_聴取失敗: 完了フラグ_聴取失敗(status=3,smsFlag=-1) → 終話_聴取失敗(TTS) → 切断
+    notes: |
+      冒頭チェーン順序: wait → saveContextModel2DB → incoming-classifier → acceptance_times。
+      個人情報聴取がの前に配置（Gen2設計を踏襲）。
+      予約ルートは3段階の多段分岐（予約種類→健康診断種類/がん検診種類→詳細）。
+      RAGサブフローはパターン3: 問合せルート内(inquiry) + 全終話前(pre-termination)。
+
+  - flow_name: "銚子市立病院$氏名聴取"
+    diagram: |
+      docs/reference/bivr/samples/json/氏名聴取.json を完全コピー。
+      フロー名プレフィックスのみ「銚子市立病院$」に置換。構造・接続・スクリプトは一切変更不可。
+    notes: "CLAUDE.md Rule 9/11 準拠。個人情報サブフロー.bivr を完全コピー。"
+
+  - flow_name: "銚子市立病院$生年月日聴取"
+    diagram: |
+      docs/reference/bivr/samples/json/生年月日聴取_復唱なし.json を完全コピー。
+      フロー名プレフィックスのみ「銚子市立病院$」に置換。構造・接続・スクリプトは一切変更不可。
+    notes: "CLAUDE.md Rule 9/11 準拠。Gen2で全項目復唱禁止のため復唱なし版を使用。"
+
+  - flow_name: "銚子市立病院$電話番号聴取"
+    diagram: |
+      docs/reference/bivr/samples/json/電話番号聴取_復唱あり.json を完全コピー。
+      フロー名プレフィックスのみ「銚子市立病院$」に置換。構造・接続・スクリプトは一切変更不可。
+      termination=return: 終話チェーンはメインフロー側で処理。
+    notes: "CLAUDE.md Rule 9/10/11 準拠。MOBILEパスの着信番号確認は標準機能として復唱あり版を使用。"
+
+  - flow_name: "銚子市立病院$RAG検索"
+    diagram: |
+      docs/reference/bivr/samples/json/RAG検索.json を完全コピー。
+      フロー名プレフィックスのみ「銚子市立病院$」に置換。構造・接続・スクリプトは一切変更不可。
+    notes: "CLAUDE.md Rule 16 準拠。パターン3: 問合せフロー内 + 全終話前に配置。"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  # --- 標準フィールド（itemDefault: true）---
+  - context_name: "classification"
+    context_name_jp: "用件"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - order: "1"
+        value: "予約"
+      - order: "2"
+        value: "変更"
+      - order: "3"
+        value: "キャンセル"
+      - order: "4"
+        value: "その他問合せ"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "用件区分。DTMF 1=予約, 2=変更, 3=キャンセル, 4=その他問合せ"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "氏名聴取サブフローで聴取。カタカナ変換"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "生年月日聴取サブフローで聴取"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: true
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "電話番号聴取サブフローで聴取"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - order: "1"
+        value: "未処理"
+      - order: "2"
+        value: "非通知"
+      - order: "3"
+        value: "聴取失敗"
+      - order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "1=未処理(正常完了) 2=非通知 3=聴取失敗 6=時間外"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "受電日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: true
+    notes: "通話ID自動格納"
+
+  # --- 施設固有フィールド（itemDefault: false）---
+  - context_name: "reservationType"
+    context_name_jp: "予約種類"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "健康診断/がん検診/予防接種。予約ルートのみ"
+
+  - context_name: "course"
+    context_name_jp: "健康診断の種類"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "人間ドック/特定健診/その他。予約→健康診断ルートのみ"
+
+  - context_name: "brainExaminationCheck"
+    context_name_jp: "脳ドック"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "希望あり/希望なし。予約→健康診断→人間ドックルートのみ"
+
+  - context_name: "insuranceTypeCheck"
+    context_name_jp: "国保/社保"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "国民健康保険（国保）/社会保険（社保）/わからない。予約→健康診断→特定健診ルートのみ"
+
+  - context_name: "cancerType"
+    context_name_jp: "がん検診種類"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "乳がん/超音波, 乳がん/マンモグラフィ/エコー希望あり, 乳がん/マンモグラフィ/エコー希望なし, 胃がん, 肝炎, その他。がん検診ルートで段階的に更新"
+
+  - context_name: "vaccineType"
+    context_name_jp: "ワクチン種類"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "ワクチンリスト参照。予約→予防接種ルートのみ"
+
+  - context_name: "detail"
+    context_name_jp: "内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "内容_健康診断/がん健診内容/変更希望内容で使用。フリーテキスト"
+
+  - context_name: "inquiry"
+    context_name_jp: "問合せ内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "その他問合せルートのみ。フリーテキスト"
+
+  - context_name: "reservationDate"
+    context_name_jp: "現在の予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "変更/キャンセルルートで聴取。yyyy-MM-dd 00:00:00形式"
+
+  - context_name: "Preferred_date"
+    context_name_jp: "予約希望日"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約ルートで聴取。フリーテキスト（日付形式でなくてもよい）。NON-BLOCKER N-3参照"
+
+  # --- TODO_要確認: B-1 登録番号を含める場合は以下を追加 ---
+  # - context_name: "medicalCardNumber"
+  #   context_name_jp: "登録番号"
+  #   display_type: "NUMBER"
+  #   range_values: []
+  #   item_default: true
+  #   editable: true
+  #   deletable: true
+  #   notes: "0始まり7桁。「わからない」の場合は「わからない」を格納"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  # --- サブフローで聴取する個人情報 ---
+  - order: 1
+    name: "氏名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientName"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "氏名聴取サブフロー内。カタカナ変換。リトライ上限→スキップ"
+
+  - order: 2
+    name: "生年月日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientDateOfBirth"
+    openai_processing: "convert"
+    output_format: "date_text"
+    output_labels: []
+    notes: "生年月日聴取サブフロー内。復唱なし。リトライ上限→スキップ"
+
+  - order: 3
+    name: "電話番号"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 11
+    retry_count: 2
+    echo_back: true
+    save_to: "additionalPhoneNumber"
+    openai_processing: "normalize"
+    output_format: "number"
+    output_labels: []
+    notes: "電話番号聴取サブフロー内。incoming-classifier分岐。MOBILEパス着信番号確認あり。DTMF 0-9=電話番号の各桁入力, max_dtmf_length=11"
+
+  # --- メインフローで聴取する業務項目 ---
+  - order: 4
+    name: "用件選択"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "予約"
+      - "変更"
+      - "キャンセル"
+      - "その他問合せ"
+    notes: "DTMF 1=予約, 2=変更, 3=キャンセル, 4=その他問合せ"
+
+  - order: 5
+    name: "予約種類"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "reservationType"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "健康診断"
+      - "がん検診"
+      - "予防接種"
+    notes: "DTMF 1=健康診断, 2=がん検診, 3=予防接種。予約ルートのみ"
+
+  - order: 6
+    name: "健康診断の種類"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "course"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "人間ドック"
+      - "特定健診"
+      - "その他"
+    notes: "DTMF 1=人間ドック, 2=特定健診, 3=その他。予約→健康診断ルートのみ"
+
+  - order: 7
+    name: "脳ドック確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "brainExaminationCheck"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "希望あり"
+      - "希望なし"
+    notes: "音声のみ。はい→希望あり、いいえ→希望なし。予約→健康診断→人間ドックルートのみ"
+
+  - order: 8
+    name: "国保_社保"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "insuranceTypeCheck"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "国民健康保険（国保）"
+      - "社会保険（社保）"
+      - "わからない"
+    notes: "DTMF 1=国保, 2=社保, 3=わからない。予約→健康診断→特定健診ルートのみ"
+
+  - order: 9
+    name: "内容_健康診断"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "detail"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "音声のみ。フリーテキスト。コースリスト/オプションリスト参照で正規化。「ない」等→「特になし」。予約→健康診断→その他ルートのみ"
+
+  - order: 10
+    name: "がん検診種類"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "cancerType"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "乳がん"
+      - "胃がん"
+      - "肝炎"
+      - "その他"
+    notes: "DTMF 1=乳がん, 2=胃がん, 3=肝炎, 4=その他。予約→がん検診ルートのみ"
+
+  - order: 11
+    name: "超音波_マンモ"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "cancerType"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "乳がん/超音波"
+      - "乳がん/マンモグラフィ"
+    notes: "DTMF 1=乳腺エコー(超音波), 2=マンモ。cancerTypeを「乳がん」から更新。予約→がん検診→乳がんルートのみ"
+
+  - order: 12
+    name: "エコー確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "cancerType"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "乳がん/マンモグラフィ/エコー希望あり"
+      - "乳がん/マンモグラフィ/エコー希望なし"
+    notes: "音声のみ。はい→エコー希望あり、いいえ→エコー希望なし。cancerTypeを更新。予約→がん検診→乳がん→マンモルートのみ"
+
+  - order: 13
+    name: "がん健診内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "detail"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "音声のみ。フリーテキスト。予約→がん検診→その他ルートのみ"
+
+  - order: 14
+    name: "ワクチン種類"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "vaccineType"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "音声のみ。ワクチンリスト参照で正規化。MR/おたふく判定あり（分岐用）。予約→予防接種ルートのみ"
+
+  - order: 15
+    name: "予約希望日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "Preferred_date"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "音声のみ。フリーテキスト格納（日付形式でなくてもよい）。日付妥当性チェック禁止。複数の予約サブルートから到達"
+
+  - order: 16
+    name: "変更_現在の予約日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "convert"
+    output_format: "date_text"
+    output_labels: []
+    notes: "音声のみ。yyyy-MM-dd 00:00:00形式で格納。変更ルートのみ"
+
+  - order: 17
+    name: "変更希望内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "detail"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "音声のみ。フリーテキスト。コースリスト/オプションリスト参照。変更ルートのみ"
+
+  - order: 18
+    name: "キャンセル_現在の予約日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "convert"
+    output_format: "date_text"
+    output_labels: []
+    notes: "音声のみ。yyyy-MM-dd 00:00:00形式で格納。キャンセルルートのみ"
+
+  - order: 19
+    name: "問合せ内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "inquiry"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "音声のみ。フリーテキスト。その他問合せルートのみ"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  # === 個人情報（サブフロー — 静的JSONコピーのため詳細省略）===
+  # 氏名聴取: docs/reference/bivr/samples/json/氏名聴取.json 完全コピー
+  # 生年月日聴取: docs/reference/bivr/samples/json/生年月日聴取_復唱なし.json 完全コピー
+  # 電話番号聴取: docs/reference/bivr/samples/json/電話番号聴取_復唱あり.json 完全コピー
+
+  # === メインフロー: 用件聴取 ===
+  - step_name: "用件選択"
+    tts_announcement: "ご用件を、次の4つからお選びください。予約は1、変更は2、キャンセルは3、その他お問い合わせは4。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "予約"
+        - "変更"
+        - "キャンセル"
+        - "その他問合せ"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「予約」「よやく」「予約したい」「申し込み」等を含む"
+          output: "予約"
+        - input: "DTMF 2 または「変更」「予約変更」「変えたい」等を含む"
+          output: "変更"
+        - input: "DTMF 3 または「キャンセル」「取り消し」「やめたい」等を含む"
+          output: "キャンセル"
+        - input: "DTMF 4 または「問合せ」「質問」「確認」「わからない」等を含む"
+          output: "その他問合せ"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "classification"
+    next_step: "予約→予約_種類 / 変更→変更_予約日 / キャンセル→キャンセル_予約日 / その他問合せ→問合せ_内容"
+    retry_failure: "end_failure"
+
+  # === 予約ルート ===
+  - step_name: "予約種類"
+    tts_announcement: "ご予約を希望される種類を次の3つからお選びください。健康診断は1、がん検診は2、予防接種は3。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "健康診断"
+        - "がん検診"
+        - "予防接種"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「健康診断」「健診」「健康」等を含む"
+          output: "健康診断"
+        - input: "DTMF 2 または「がん検診」「がん」「癌」等を含む"
+          output: "がん検診"
+        - input: "DTMF 3 または「予防接種」「ワクチン」「接種」等を含む"
+          output: "予防接種"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "reservationType"
+    next_step: "健康診断→健康診断_種類 / がん検診→がん_種類 / 予防接種→ワクチン_種類"
+    retry_failure: "end_failure"
+
+  - step_name: "健康診断の種類"
+    tts_announcement: "健康診断の種類を次の3つからお選びください。人間ドックは1、特定健診は2、その他は3。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "人間ドック"
+        - "特定健診"
+        - "その他"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「人間ドック」「ドック」等を含む"
+          output: "人間ドック"
+        - input: "DTMF 2 または「特定健診」「特定」等を含む"
+          output: "特定健診"
+        - input: "DTMF 3 または上記以外"
+          output: "その他"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "course"
+    next_step: "人間ドック→脳ドック_確認 / 特定健診→国保_社保 / その他→内容_健康診断"
+    retry_failure: "end_failure"
+
+  - step_name: "脳ドック確認"
+    tts_announcement: "脳ドックの追加を希望されますか。希望される方は「はい」、希望されない方は「いいえ」とお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "希望あり"
+        - "希望なし"
+        - "NO_RESULT"
+      mapping:
+        - input: "「はい」「希望します」等の肯定的表現"
+          output: "希望あり"
+        - input: "「いいえ」「希望しません」「けっこうです」等の否定的表現"
+          output: "希望なし"
+      no_result_condition: "肯定/否定が判定できない"
+    save_to: "brainExaminationCheck"
+    next_step: "ジャンプ_RAG → END_予約_ドック"
+    retry_failure: "skip"
+
+  - step_name: "国保_社保"
+    tts_announcement: "保険の種類を次の3つからお選びください。国民健康保険は1、社会保険は2、わからない場合は3。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "国民健康保険（国保）"
+        - "社会保険（社保）"
+        - "わからない"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「国保」「国民健康保険」等を含む"
+          output: "国民健康保険（国保）"
+        - input: "DTMF 2 または「社保」「社会保険」等を含む"
+          output: "社会保険（社保）"
+        - input: "DTMF 3 または「わからない」「わかりません」等を含む"
+          output: "わからない"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "insuranceTypeCheck"
+    next_step: "予約_希望日"
+    retry_failure: "skip"
+
+  - step_name: "内容_健康診断"
+    tts_announcement: "その他に希望される健診内容をすべてお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "コースリスト/オプションリストに該当する回答"
+          output: "正規化されたコース名/オプション名"
+        - input: "「ない」「大丈夫」「ありません」等"
+          output: "特になし"
+        - input: "上記以外"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "detail"
+    next_step: "予約_希望日"
+    retry_failure: "skip"
+
+  - step_name: "がん検診種類"
+    tts_announcement: "がん検診の種類を次の4つからお選びください。乳がんは1、胃がんは2、肝炎は3、その他は4。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "乳がん"
+        - "胃がん"
+        - "肝炎"
+        - "その他"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「乳がん」を含む"
+          output: "乳がん"
+        - input: "DTMF 2 または「胃がん」を含む"
+          output: "胃がん"
+        - input: "DTMF 3 または「肝炎」を含む"
+          output: "肝炎"
+        - input: "DTMF 4 または上記以外"
+          output: "その他"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "cancerType"
+    next_step: "乳がん→超音波_マンモ / 胃がん,肝炎→予約_希望日 / その他→がん_内容"
+    retry_failure: "end_failure"
+
+  - step_name: "超音波_マンモ"
+    tts_announcement: "乳がん検査について、乳腺エコーは1、マンモは2。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "乳がん/超音波"
+        - "乳がん/マンモグラフィ"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「超音波」「エコー」を含む"
+          output: "乳がん/超音波"
+        - input: "DTMF 2 または「マンモ」「マンモグラフィ」を含む"
+          output: "乳がん/マンモグラフィ"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "cancerType"
+    next_step: "超音波→予約_希望日 / マンモ→エコー_確認"
+    retry_failure: "skip"
+
+  - step_name: "エコー確認"
+    tts_announcement: "マンモグラフィに加えて、乳腺エコーを自費で受けることもできます。エコーを追加されますか。「はい、希望します」または「いいえ、希望しません」とお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "乳がん/マンモグラフィ/エコー希望あり"
+        - "乳がん/マンモグラフィ/エコー希望なし"
+        - "NO_RESULT"
+      mapping:
+        - input: "「はい」「希望します」等の肯定的表現"
+          output: "乳がん/マンモグラフィ/エコー希望あり"
+        - input: "「いいえ」「希望しません」等の否定的表現"
+          output: "乳がん/マンモグラフィ/エコー希望なし"
+      no_result_condition: "肯定/否定が判定できない"
+    save_to: "cancerType"
+    next_step: "予約_希望日"
+    retry_failure: "skip"
+
+  - step_name: "がん健診内容"
+    tts_announcement: "ご希望のがん健診をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "detail"
+    next_step: "予約_希望日"
+    retry_failure: "skip"
+
+  - step_name: "ワクチン種類"
+    tts_announcement: "ご希望のワクチン名をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "MR"
+        - "おたふく"
+        - "その他ワクチン名"
+        - "NO_RESULT"
+      mapping:
+        - input: "「MR」「えむあーる」等を含む"
+          output: "MR"
+        - input: "「おたふく」「ムンプス」等を含む"
+          output: "おたふく"
+        - input: "ワクチンリストに該当する名称"
+          output: "正規化されたワクチン名"
+      no_result_condition: "ワクチン名として認識できない"
+    save_to: "vaccineType"
+    next_step: "MR/おたふく→ジャンプ_RAG→END_予約_MR_おたふく / その他→予約_希望日"
+    retry_failure: "skip"
+
+  - step_name: "予約希望日"
+    tts_announcement: "予約を希望される曜日をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "日付・曜日・期間等の回答"
+          output: "フリーテキスト（そのまま保存。日付妥当性チェック禁止）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "Preferred_date"
+    next_step: "ジャンプ_RAG → END_予約"
+    retry_failure: "skip"
+
+  # === 変更ルート ===
+  - step_name: "変更_現在の予約日"
+    tts_announcement: "現在の予約日と予約内容をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "日付テキスト"
+      mapping:
+        - input: "日付を含む回答"
+          output: "yyyy-MM-dd 00:00:00形式。月日のみの場合は着信年を補完"
+      no_result_condition: "音声認識結果が空"
+    save_to: "reservationDate"
+    next_step: "変更_希望内容"
+    retry_failure: "skip"
+
+  - step_name: "変更希望内容"
+    tts_announcement: "変更を希望される検査項目や日付をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（コースリスト/オプションリスト参照で正規化）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "detail"
+    next_step: "ジャンプ_RAG → END_変更"
+    retry_failure: "skip"
+
+  # === キャンセルルート ===
+  - step_name: "キャンセル_現在の予約日"
+    tts_announcement: "現在の予約日と予約内容をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "日付テキスト"
+      mapping:
+        - input: "日付を含む回答"
+          output: "yyyy-MM-dd 00:00:00形式。月日のみの場合は着信年を補完"
+      no_result_condition: "音声認識結果が空"
+    save_to: "reservationDate"
+    next_step: "ジャンプ_RAG → END_キャンセル"
+    retry_failure: "skip"
+
+  # === その他問合せルート ===
+  - step_name: "問合せ内容"
+    tts_announcement: "お問合せ内容をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "inquiry"
+    next_step: "ジャンプ_RAG(inquiry) → END_問い合わせ"
+    retry_failure: "skip"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系 ---
+  - name: "END_予約"
+    condition: "予約ルート完了（人間ドック以外の予約全般: 特定健診/その他健診/がん検診/予防接種）"
+    tts_announcement: "予約についてのご要望を承りました。3営業日以内に、担当者から折り返し電話、もしくは、ショートメールにてご連絡をいたします。担当者からのご連絡後に確定となります。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約"
+
+  - name: "END_予約_ドック"
+    condition: "予約→健康診断→人間ドックルート完了"
+    tts_announcement: "人間ドックについてのご要望を承りました。予約は1か月半後以降となります。土日祝日を除く、3営業日以内に、担当者から折り返し電話、もしくは、ショートメールにて候補日のご連絡をいたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約_ドック"
+
+  - name: "END_予約_MR_おたふく"
+    condition: "予約→予防接種→ワクチン種類がMRまたはおたふく"
+    tts_announcement: "MRワクチンとおたふくかぜワクチンは現在品薄のため、予約日程の受付を行っておりません。入荷があり次第、当院よりご連絡いたしますのでお待ちください。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約_MR_おたふく"
+
+  - name: "END_変更"
+    condition: "変更ルート完了"
+    tts_announcement: "予約変更についてのご要望を承りました。3営業日以内に、担当者から折り返し電話、もしくは、ショートメールにてご連絡をいたします。担当者からのご連絡後に確定となります。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_変更"
+
+  - name: "END_キャンセル"
+    condition: "キャンセルルート完了"
+    tts_announcement: "予約キャンセルについてのご要望を承りました。担当者より折り返しご連絡をさせていただく場合がございます。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_キャンセル"
+
+  - name: "END_問い合わせ"
+    condition: "その他問合せルート完了"
+    tts_announcement: "お問い合わせを承りました。3営業日以内に、担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "2"
+    completion_flag_name: "完了フラグ_問い合わせ"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: false                     # 単一施設でsmsFlag値は2種類（1 or 2）のみ。各終話パターンに直接設定
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "3"                         # Gen2→Gen3デフォルト。NON-BLOCKER N-5参照
+  inquiry_insertion_point: "問合せ_内容聴取後"  # パターン3: 問合せルート内にRAGサブフロー
+  pre_termination: true                # パターン3: 全終話前に「最後にご質問はありますか？」RAGサブフロー
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  # --- メインフロー: 冒頭・異常系 ---
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。銚子市立病院の健診専用AI電話です。音声ガイダンスに従い、お答えください。"
+
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知案内"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "時間外_アナウンス"
+    purpose: "時間外案内"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  # --- メインフロー: 用件聴取 ---
+  - module_name: "用件_選択"
+    purpose: "用件選択案内（4択DTMF）"
+    announcement: "ご用件を、次の4つからお選びください。予約は1、変更は2、キャンセルは3、その他お問い合わせは4。"
+
+  # --- メインフロー: 予約ルート ---
+  - module_name: "予約_種類"
+    purpose: "予約種類選択案内（3択DTMF）"
+    announcement: "ご予約を希望される種類を次の3つからお選びください。健康診断は1、がん検診は2、予防接種は3。"
+
+  - module_name: "健康診断_種類"
+    purpose: "健康診断種類選択案内（3択DTMF）"
+    announcement: "健康診断の種類を次の3つからお選びください。人間ドックは1、特定健診は2、その他は3。"
+
+  - module_name: "脳ドック_確認"
+    purpose: "脳ドック追加確認"
+    announcement: "脳ドックの追加を希望されますか。希望される方は「はい」、希望されない方は「いいえ」とお話しください。"
+
+  - module_name: "国保_社保"
+    purpose: "保険種類選択案内（3択DTMF）"
+    announcement: "保険の種類を次の3つからお選びください。国民健康保険は1、社会保険は2、わからない場合は3。"
+
+  - module_name: "内容_健康診断"
+    purpose: "その他健診内容聴取案内"
+    announcement: "その他に希望される健診内容をすべてお話しください。"
+
+  - module_name: "がん_種類"
+    purpose: "がん検診種類選択案内（4択DTMF）"
+    announcement: "がん検診の種類を次の4つからお選びください。乳がんは1、胃がんは2、肝炎は3、その他は4。"
+
+  - module_name: "超音波_マンモ"
+    purpose: "乳がん検査方法選択案内（2択DTMF）"
+    announcement: "乳がん検査について、乳腺エコーは1、マンモは2。"
+
+  - module_name: "エコー_確認"
+    purpose: "エコー追加確認"
+    announcement: "マンモグラフィに加えて、乳腺エコーを自費で受けることもできます。エコーを追加されますか。「はい、希望します」または「いいえ、希望しません」とお話しください。"
+
+  - module_name: "がん_内容"
+    purpose: "がん健診内容聴取案内"
+    announcement: "ご希望のがん健診をお話しください。"
+
+  - module_name: "ワクチン_種類"
+    purpose: "ワクチン種類聴取案内"
+    announcement: "ご希望のワクチン名をお話しください。"
+
+  - module_name: "予約_希望日"
+    purpose: "予約希望日聴取案内"
+    announcement: "予約を希望される曜日をお話しください。"
+
+  # --- メインフロー: 変更ルート ---
+  - module_name: "変更_予約日"
+    purpose: "変更用・現在の予約日聴取案内"
+    announcement: "現在の予約日と予約内容をお話しください。"
+
+  - module_name: "変更_希望内容"
+    purpose: "変更希望内容聴取案内"
+    announcement: "変更を希望される検査項目や日付をお話しください。"
+
+  # --- メインフロー: キャンセルルート ---
+  - module_name: "キャンセル_予約日"
+    purpose: "キャンセル用・現在の予約日聴取案内"
+    announcement: "現在の予約日と予約内容をお話しください。"
+
+  # --- メインフロー: その他問合せルート ---
+  - module_name: "問合せ_内容"
+    purpose: "問合せ内容聴取案内"
+    announcement: "お問合せ内容をお話しください。"
+
+  # --- メインフロー: 終話 ---
+  - module_name: "終話_予約"
+    purpose: "予約受付完了終話"
+    announcement: "予約についてのご要望を承りました。3営業日以内に、担当者から折り返し電話、もしくは、ショートメールにてご連絡をいたします。担当者からのご連絡後に確定となります。お電話ありがとうございました。"
+
+  - module_name: "終話_予約_ドック"
+    purpose: "人間ドック予約完了終話"
+    announcement: "人間ドックについてのご要望を承りました。予約は1か月半後以降となります。土日祝日を除く、3営業日以内に、担当者から折り返し電話、もしくは、ショートメールにて候補日のご連絡をいたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。お電話ありがとうございました。"
+
+  - module_name: "終話_予約_MR_おたふく"
+    purpose: "MR/おたふくワクチン品薄終話"
+    announcement: "MRワクチンとおたふくかぜワクチンは現在品薄のため、予約日程の受付を行っておりません。入荷があり次第、当院よりご連絡いたしますのでお待ちください。お電話ありがとうございました。"
+
+  - module_name: "終話_変更"
+    purpose: "予約変更完了終話"
+    announcement: "予約変更についてのご要望を承りました。3営業日以内に、担当者から折り返し電話、もしくは、ショートメールにてご連絡をいたします。担当者からのご連絡後に確定となります。お電話ありがとうございました。"
+
+  - module_name: "終話_キャンセル"
+    purpose: "キャンセル完了終話"
+    announcement: "予約キャンセルについてのご要望を承りました。担当者より折り返しご連絡をさせていただく場合がございます。お電話ありがとうございました。"
+
+  - module_name: "終話_問い合わせ"
+    purpose: "問い合わせ完了終話"
+    announcement: "お問い合わせを承りました。3営業日以内に、担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。お電話ありがとうございました。"
+
+  - module_name: "終話_聴取失敗"
+    purpose: "聴取失敗終話"
+    announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "用件選択"
+    words: |
+      予約 よやく
+      変更 へんこう
+      キャンセル きゃんせる
+      問合せ といあわせ
+      取り消し とりけし
+      問い合わせ といあわせ
+      予約変更 よやくへんこう
+
+  - step_name: "予約種類"
+    words: |
+      健康診断 けんこうしんだん
+      がん検診 がんけんしん
+      予防接種 よぼうせっしゅ
+      健診 けんしん
+      検診 けんしん
+      ワクチン わくちん
+
+  - step_name: "健康診断の種類"
+    words: |
+      人間ドック にんげんどっく
+      特定健診 とくていけんしん
+      ドック どっく
+
+  - step_name: "脳ドック確認"
+    words: |
+      希望 きぼう
+      脳ドック のうどっく
+
+  - step_name: "国保_社保"
+    words: |
+      国民健康保険 こくみんけんこうほけん
+      社会保険 しゃかいほけん
+      国保 こくほ
+      社保 しゃほ
+
+  - step_name: "がん検診種類"
+    words: |
+      乳がん にゅうがん
+      胃がん いがん
+      肝炎 かんえん
+
+  - step_name: "超音波_マンモ"
+    words: |
+      超音波 ちょうおんぱ
+      マンモグラフィ まんもぐらふぃ
+      マンモ まんも
+      乳腺エコー にゅうせんえこー
+      エコー えこー
+
+  - step_name: "ワクチン種類"
+    words: |
+      肺炎球菌 はいえんきゅうきん
+      帯状疱疹 たいじょうほうしん
+      インフルエンザ いんふるえんざ
+      コロナ ころな
+      麻疹風疹 ましんふうしん
+      水痘 すいとう
+      水疱瘡 みずぼうそう
+      おたふく おたふく
+      ムンプス むんぷす
+      肝炎 かんえん
+
+  - step_name: "内容_健康診断"
+    words: |
+      人間ドック にんげんどっく
+      生活習慣病 せいかつしゅうかんびょう
+      定期健診 ていきけんしん
+      脳ドック のうどっく
+      肺ドック はいどっく
+      特定健診 とくていけんしん
+      循環器 じゅんかんき
+      電離 でんり
+      石綿 いしわた
+      塵肺 じんぱい
+      有機溶剤 ゆうきようざい
+      骨密度 こつみつど
+      診断書 しんだんしょ
+
+  - step_name: "変更_現在の予約日"
+    words: |
+      予約日 よやくび
+      変更 へんこう
+
+  - step_name: "キャンセル_現在の予約日"
+    words: |
+      予約日 よやくび
+      キャンセル きゃんせる
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "個人情報聴取が用件聴取の前に配置される（Gen2設計踏襲）。標準的なフロー（用件先→個人情報後）とは逆順"
+  - "Gen2で全項目復唱禁止。Gen3でも氏名/生年月日は復唱なし。電話番号はMOBILEパスの着信番号確認のみ（標準サブフロー機能）"
+  - "cancerTypeフィールドは段階的に更新される: 乳がん → 乳がん/超音波 or 乳がん/マンモグラフィ → 乳がん/マンモグラフィ/エコー希望あり等"
+  - "予約希望日（Preferred_date）は日付妥当性チェック禁止。過去日付・当日・翌日でもそのまま受け付ける（Gen2プロンプト厳守ルール）"
+  - "MRワクチン/おたふくかぜワクチンは品薄のため予約不可。専用終話パターン（END_予約_MR_おたふく）に遷移"
+  - "Gen2のsmsFlag値マッピング: Gen2 '0'→Gen3 '-1'（未送信）, Gen2 '1'→Gen3 '1', Gen2 '2'→Gen3 '2', Gen2 '3'（中間状態）→Gen3では不使用"
+  - "3/26メモの未適用変更: medicalCardNumber削除（BLOCKER B-1）、Preferred_date希望時期削除（NON-BLOCKER N-3）、detail希望内容削除（NON-BLOCKER N-4）"
+  - "Gen2の判断ルール（検針→健診、人間ロック→人間ドック、薬→予約等の誤認識対応）はOpenAIプロンプトに反映する（prompterが担当）"
+
+# --- セクション12: 要確認事項 ---
+confirmation_items:
+  - item: "登録番号（medicalCardNumber）をGen3に含めるか除外するか（3/26メモ指示: 削除）"
+    resolved: false
+  - item: "営業時間（曜日・時間帯）— Gen2に記載なし"
+    resolved: false
+  - item: "office_id（デモAdminのofficeIdで正しいか確認）"
+    resolved: false
+  - item: "対象環境（デモ/本番）"
+    resolved: false
+  - item: "Preferred_date（予約希望日）を維持するか削除するか（3/26メモ参照）"
+    resolved: false
+  - item: "RAGサブフロー配置パターン（パターン3: 全終話前に配置 vs パターン1: 問合せルートのみ）"
+    resolved: false

@@ -1,0 +1,99 @@
+# Pattern 6 (テストフロー) — text_normalizer 受入テスト（24 ケース）
+#
+# 検証対象は modules/text_normalizer/script.js（デプロイ正本）を script_test_matrix が
+# sidecar 読込＝バイト一致で全ケース実機（Nashorn）検証（部品 DoD#4）。
+# ケースの正本は acceptance_test/generic_free_text/cases.tsv（oracle.py 24/24 PASS と同一）。
+# この部品は変換器: expected はラベルでなく「クリーン化後の文字列」（CMR は完全値比較）。
+# 実機判定＝通話後の Brekeke ログで "[TEST FAIL]" 件数 0（pass/fail とも次 case へ進む）。
+# 実行回数 ≈ 3 + 24×4 + 2 ≈ 101（< 900 バジェット・1 コールで完走）。
+#
+# 生成: python3 tools/build_part_acceptance_bivr.py text_normalizer
+# 出力: output/acceptance/text_normalizer/text_normalizer_p6_acceptance.bivr
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "カレス記念病院_診療_20260716"
+  flow_name: "カレス記念病院_診療_20260716$テキスト正規化v1"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "カレス記念病院_診療_20260716$テキスト正規化v1"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("=================================================");
+      $runner.getLogger().info("[TEST START] text_normalizer v1 受入 (24 cases)");
+      $runner.getLogger().info("=================================================");
+      $runner.setResult("ok");
+    next: TEXTNORM_TEST
+
+  - step: TEXTNORM_TEST
+    type: script_test_matrix
+    script_file: "../script.js"
+    input_placeholder: "{{SOURCE_MODULE}}"
+    final_next: ログ_完了
+    cases:
+      # --- フィラー除去（先頭）---
+      - {id: T01, input: "えーと、頭が痛くて", expected: "頭が痛くて"}
+      - {id: T02, input: "えっと薬の飲み方を聞きたい", expected: "薬の飲み方を聞きたい"}
+      - {id: T03, input: "あのー、予約の変更をお願いします", expected: "予約の変更をお願いします"}
+      - {id: T04, input: "うーんと、来週の都合が悪いです", expected: "来週の都合が悪い"}
+      - {id: T05, input: "なんか、熱っぽい感じがします", expected: "熱っぽい感じがします"}
+      - {id: T06, input: "まあ大丈夫なんですが念のため", expected: "大丈夫なんですが念のため"}
+      # --- フィラー除去（文中・読点の直後）---
+      - {id: T07, input: "頭が痛くて、えーと、吐き気もあります", expected: "頭が痛くて、吐き気もあります"}
+      - {id: T08, input: "薬について、あのー、飲み合わせを確認したい", expected: "薬について、飲み合わせを確認したい"}
+      # --- 複合フィラー ---
+      - {id: T09, input: "えーと、あのー、健診の結果について", expected: "健診の結果について"}
+      # --- 語中は壊さない ---
+      - {id: T10, input: "気分がうーんと悪い訳ではない", expected: "気分がうーんと悪い訳ではない"}
+      # --- 全角→半角 ---
+      - {id: T11, input: "ＡＢ１２３", expected: "AB123"}
+      - {id: T12, input: "血圧が１４０です", expected: "血圧が140"}
+      - {id: T13, input: "（月）から（水）まで", expected: "(月)から(水)まで"}
+      # --- 全角スペース・連続空白の圧縮 ---
+      - {id: T14, input: "山田　太郎　です", expected: "山田 太郎"}
+      - {id: T15, input: "頭が  痛い", expected: "頭が 痛い"}
+      # --- 句読点の正規化・末尾句読点の除去 ---
+      - {id: T16, input: "頭が痛いです。", expected: "頭が痛い"}
+      - {id: T17, input: "熱があります，咳も出ます．", expected: "熱があります、咳も出ます"}
+      - {id: T18, input: "、頭が痛い", expected: "頭が痛い"}
+      # --- 意味は書き換えない ---
+      - {id: T19, input: "先週から腰が痛くて夜も眠れません", expected: "先週から腰が痛くて夜も眠れません"}
+      - {id: T20, input: "子供が熱を出したので本日診てほしい", expected: "子供が熱を出したので本日診てほしい"}
+      - {id: T21, input: "処方箋の日数を間違えていないか確認したい", expected: "処方箋の日数を間違えていないか確認したい"}
+      # --- 冪等 ---
+      - {id: T22, input: "頭が痛くて", expected: "頭が痛くて"}
+      - {id: T23, input: "AB123", expected: "AB123"}
+      # --- フィラーのみ → 元の trim 済み文字列を返す ---
+      - {id: T24, input: "えーと", expected: "えーと"}
+
+  - step: ログ_完了
+    type: inline_script
+    body: |
+      $runner.getLogger().info("=================================================");
+      $runner.getLogger().info("[TEST DONE] text_normalizer v1 受入 24 cases 完走");
+      $runner.getLogger().info("=================================================");
+      $runner.setResult("ok");
+    next: 結果_完了
+
+  - step: 結果_完了
+    type: announcement
+    prompt: "{tts_g:テストが完了しました。ログの TEST FAIL 件数を確認してください。}"
+    next: 切断
+
+  - step: 切断
+    type: termination

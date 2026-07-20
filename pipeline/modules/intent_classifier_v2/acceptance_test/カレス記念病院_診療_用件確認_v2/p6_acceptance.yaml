@@ -1,0 +1,85 @@
+# Pattern 6 (テストフロー) — intent_classifier_v2「カレス記念病院_診療_用件確認_v2」spec 受入テスト【24ケース】
+#
+# spec: カレス記念病院_診療 の script_用件確認（4択メニュー: 予約/変更/キャンセル/その他お問い合わせ）v2版。
+#   2026-07-17: 元spec（d9f5b945…・カレス記念病院_診療_用件確認）はキーワードが最小限で
+#   実発話の揺れをカバーできない懸念があったため、他施設で実証済みの menu_代表spec
+#   （49/49 oracle + 27/27実機PASS）の語彙・rule・eventを、カレスの4ルートに合わせて移植。
+#   除外した代表spec要素（浜口さん確認済み・2026-07-17）:
+#     - operator（オペレーター転送）: カレスに転送route無し → evidence自体を追加せず
+#     - キャンセル否定「キャンセルしないでください」等 → 専用route無し・NO_RESULT（リトライ）のまま
+#     - inquiry_vague（曖昧な質問）→ その他お問い合わせに丸めず、代表spec通りCLARIFY（聞き返し）に
+#   検証対象は同ディレクトリ script.js（デプロイ正本の INPUT_MODULE のみ __INPUT_MODULE__ に置換、
+#   engine/spec hash は本番と完全一致確認済み）。ケースの正本は同ディレクトリ cases.tsv（oracle 24/24 PASS）。
+#
+# 生成: python3 tools/build_part_acceptance_bivr.py intent_classifier_v2 \
+#         --spec modules/intent_classifier_v2/acceptance_test/カレス記念病院_診療_用件確認_v2/p6_acceptance.yaml \
+#         --out  output/acceptance/intent_classifier_v2/intent_classifier_v2_karesu_yoken_v2_p6.bivr
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$用件分類v2カレス記念病院診療specV2"
+  flow_name: "テスト$用件分類v2カレス記念病院診療specV2"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$用件分類v2カレス記念病院診療specV2"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("=================================================");
+      $runner.getLogger().info("[TEST START] intent_classifier_v2 カレス記念病院_診療_用件確認_v2 spec 受入 (24 cases)");
+      $runner.getLogger().info("=================================================");
+      $runner.setResult("ok");
+    next: INTENT_TEST
+
+  - step: INTENT_TEST
+    type: script_test_matrix
+    script_file: "script.js"
+    input_placeholder: "__INPUT_MODULE__"
+    final_next: 結果_完了
+    cases:
+      - {id: v01, input: "1", expected: "予約"}
+      - {id: v02, input: "２", expected: "変更"}
+      - {id: v03, input: "2ばんでおねがいします", expected: "変更"}
+      - {id: v04, input: "1です", expected: "予約"}
+      - {id: v05, input: "よやくをお願いします", expected: "予約"}
+      - {id: v06, input: "キャンセルしたいです", expected: "キャンセル"}
+      - {id: v07, input: "キャンセルはやめて変更にしてください", expected: "変更"}
+      - {id: v08, input: "へんこうかキャンセルか迷っています", expected: "CLARIFY"}
+      - {id: v09, input: "はい", expected: "NO_RESULT"}
+      - {id: v10, input: "1992年生まれです", expected: "NO_RESULT"}
+      - {id: v11, input: "こんにちは", expected: "NO_RESULT"}
+      - {id: v12, input: "聞こえませんでした", expected: "REPEAT"}
+      - {id: v13, input: "4", expected: "その他お問い合わせ"}
+      - {id: v14, input: "よんばん", expected: "その他お問い合わせ"}
+      - {id: v15, input: "質問があるんですが", expected: "その他お問い合わせ"}
+      - {id: v16, input: "キャンセル料について確認したい", expected: "その他お問い合わせ"}
+      - {id: v17, input: "何時から診てもらえますか", expected: "CLARIFY"}
+      - {id: v18, input: "初診でも診てもらえますか", expected: "CLARIFY"}
+      - {id: v19, input: "7月26日に予約してるんだけど、都合がつかないので、来月で大丈夫ですか", expected: "変更"}
+      - {id: v20, input: "予約をキャンセルしたいです", expected: "キャンセル"}
+      - {id: v21, input: "予約を変更したいです", expected: "変更"}
+      - {id: v22, input: "えっとー、よやくをおねがいします", expected: "予約"}
+      - {id: v23, input: "予約をしたいとおもっています", expected: "予約"}
+      - {id: v24, input: "予約したいです", expected: "予約"}
+
+  - step: 結果_完了
+    type: announcement
+    prompt: "{tts_g:カレス記念病院診療 用件確認v2spec のテストが完了しました。ログでTEST FAILが0件であることを確認してください。}"
+    next: 切断
+
+  - step: 切断
+    type: termination

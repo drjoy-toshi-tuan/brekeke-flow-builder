@@ -1,0 +1,1500 @@
+# 設計書 -- 聖マリアヘルスケアセンター 健診
+# 生成元: @director エージェント
+# 生成日: 2026/04/08
+# 確認レポート: docs/designs/確認レポート_聖マリアヘルスケアセンター_健診_20260408.md
+# ゴールデンテンプレート参照: 予約管理型.yaml（用件多分岐+復唱）+ 健診受付型.yaml（smsFlag設計）
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "聖マリアヘルスケアセンター"
+  group_name: "聖マリアヘルスケアセンター"
+  flow_name: "聖マリアヘルスケアセンター$健診_20260408"
+  target_facility: "聖マリアヘルスケアセンター 国際保健センター"
+  office_id: "TODO_要確認"                     # NON-BLOCKER N-1
+  phone_number: "0942-35-5522"                 # 代表電話番号（代表案内・リトライ超過時に案内）
+  business_hours: "TODO_要確認"                # NON-BLOCKER N-2: acceptance_times配置あり
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "demo"                          # NON-BLOCKER N-7
+
+# --- セクション2: フロー構成 ---
+# 個人/企業分岐 + 用件9ルート + 共通後段。メインフローが全分岐を管理。
+# 個人情報サブフロー: 氏名・生年月日・電話番号はCLAUDE.md Rule 9準拠の標準サブフロー。
+# 担当者名(patientName2)は標準サブフロー流用不可のため、メインフロー内でインライン聴取。
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "聖マリアヘルスケアセンター$健診_20260408"
+      role: "main"
+      description: >
+        冒頭チェーン → 個人/企業確認 → 用件聴取(個人5択/企業4択) → 用件復唱確認
+        → 用件別聴取ルート(9ルート) → 共通後段(氏名/生年月日/企業名/担当者名/電話番号)
+        → 最後の質問(RAGサブフロー) → 終話(通常/二次受診/代表案内)
+    - name: "聖マリアヘルスケアセンター$氏名聴取_20260408"
+      role: "sub"
+      description: "氏名聴取 → 結果返却"
+    - name: "聖マリアヘルスケアセンター$生年月日聴取_20260408"
+      role: "sub"
+      description: "生年月日聴取(復唱あり) → DOB Re-confirmation → 結果返却"
+    - name: "聖マリアヘルスケアセンター$電話番号聴取_20260408"
+      role: "sub"
+      description: "着信番号分岐 → 電話番号聴取/復唱確認 → 結果返却"
+    - name: "聖マリアヘルスケアセンター$RAG検索_20260408"
+      role: "sub"
+      description: "RAG/FAQ検索サブフロー"
+  subflows:
+    - name: "聖マリアヘルスケアセンター$氏名聴取_20260408"
+      target: "氏名聴取"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: >
+        CLAUDE.md Rule 9 準拠。個人情報サブフロー.bivr を完全コピー。
+        個人ルート: 受診者名(patientName)を聴取。
+        企業_変更/企業_キャンセル: 受診者名(patientName)を聴取（担当者名とは別）。
+        リトライ上限到達時は氏名未取得のまま次へスキップ。
+    - name: "聖マリアヘルスケアセンター$生年月日聴取_20260408"
+      target: "生年月日聴取"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: >
+        CLAUDE.md Rule 9 準拠。個人情報サブフロー.bivr の「生年月日聴取（復唱あり）」を完全コピー。
+        個人ルートのみ使用（企業ルートでは生年月日を聴取しない）。
+    - name: "聖マリアヘルスケアセンター$電話番号聴取_20260408"
+      target: "電話番号聴取"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: >
+        CLAUDE.md Rule 9/10 準拠。個人情報サブフロー.bivr を完全コピー。
+        termination=return: 終話パターンが用件（通常/二次受診/代表案内）で異なるため、
+        メインフロー側で最後の質問→終話チェーンを制御する。
+    - name: "聖マリアヘルスケアセンター$RAG検索_20260408"
+      target: "RAG検索"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: >
+        CLAUDE.md Rule 16 準拠。サブフローRAG.bivr を完全コピー。
+        パターン3: 問い合わせルート内(パターン1) + 全終話前(パターン2) の両方で使用。
+
+# --- セクション3: フローの目的 ---
+purpose: >
+  聖マリアヘルスケアセンター国際保健センターの健診予約受付AI電話。
+  個人/企業の区分を確認した後、用件（個人: 予約/変更/キャンセル/二次受診/問い合わせ、
+  企業: 予約/変更/キャンセル/問い合わせ）を聴取し、用件別に必要情報
+  （受診希望コース・オプション・希望時期・予約日・変更内容・再検査内容・問い合わせ内容）を聴取する。
+  受診者名・生年月日（個人のみ）・企業名・担当者名（企業のみ）・連絡先電話番号を収集し、
+  折り返し受付を自動化する。代表電話番号は0942-35-5522。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "聖マリアヘルスケアセンター$健診_20260408"
+    diagram: |
+      === 冒頭チェーン ===
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → 非通知_アナウンス(TTS) → 完了フラグ_非通知(status=2, smsFlag=-1) → 切断
+            └─ 通常/携帯/固定 → acceptance_times
+                  ├─ 時間外/TIMEOUT/ERROR → 時間外_アナウンス(TTS) → 完了フラグ_時間外(status=6, smsFlag=-1) → 切断
+                  └─ 受付可 → 冒頭_アナウンス(TTS)
+
+      === 個人/企業確認 ===
+      冒頭_アナウンス
+        → 個人企業_確認(TTS)
+        → 入力_個人企業_確認(AmiVoice STT)
+        → OpenAI_個人企業_確認
+            ├─ 個人 → saveContext_個人企業(company_check="個人") → 用件_個人(TTS)
+            ├─ 企業 → saveContext_個人企業(company_check="企業") → 用件_企業(TTS)
+            └─ NO_RESULT → リトライ_個人企業_確認
+
+      === 用件聴取（個人 5択）===
+      用件_個人(TTS)
+        → 入力_用件_個人(DTMF AmiVoice STT, max_dtmf_length=1)
+        → OpenAI_用件_個人
+            ├─ 予約 → 復唱_予約_個人(TTS+STT+OpenAI)
+            │           ├─ 肯定 → saveContext_用件(classification="予約") → [個人_予約ルート]
+            │           └─ 否定 → 用件_個人(TTS) に戻る
+            ├─ 変更 → 復唱_変更_個人 → saveContext_用件("変更") → [個人_変更ルート]
+            ├─ キャンセル → 復唱_キャンセル_個人 → saveContext_用件("キャンセル") → [個人_キャンセルルート]
+            ├─ 二次受診 → 復唱_二次受診_個人 → saveContext_用件("二次受診") → [個人_二次受診ルート]
+            ├─ 問い合わせ → 復唱_問い合わせ_個人 → saveContext_用件("問い合わせ") → [個人_問い合わせルート]
+            └─ NO_RESULT → リトライ_用件_個人
+                            └─ No more → saveContext_用件("問い合わせ") → [個人_問い合わせルート]
+
+      === 用件聴取（企業 4択）===
+      用件_企業(TTS)
+        → 入力_用件_企業(DTMF AmiVoice STT, max_dtmf_length=1)
+        → OpenAI_用件_企業
+            ├─ 予約 → 復唱_予約_企業 → saveContext_用件("予約") → [企業_予約ルート]
+            ├─ 変更 → 復唱_変更_企業 → saveContext_用件("変更") → [企業_変更ルート]
+            ├─ キャンセル → 復唱_キャンセル_企業 → saveContext_用件("キャンセル") → [企業_キャンセルルート]
+            ├─ 問い合わせ → 復唱_問い合わせ_企業 → saveContext_用件("問い合わせ") → [企業_問い合わせルート]
+            └─ NO_RESULT → リトライ_用件_企業
+                            └─ No more → saveContext_用件("問い合わせ") → [企業_問い合わせルート]
+
+      === 個人_予約ルート ===
+      コース_聴取(TTS) → 入力_コース(AmiVoice STT) → OpenAI_コース → saveContext_コース(course)
+        → オプション_聴取(TTS) → 入力_オプション(AmiVoice STT) → OpenAI_オプション → saveContext_オプション(option)
+        → 希望時期_予約_個人(TTS) → 入力_希望時期(AmiVoice STT) → OpenAI_希望時期 → saveContext_希望時期(Preferred_date)
+        → [個人共通後段]
+
+      === 個人_変更ルート ===
+      当日確認_個人(TTS) → 入力_当日確認(DTMF AmiVoice STT) → OpenAI_当日確認
+        ├─ 肯定（当日/翌日） → [代表案内終話]
+        ├─ 否定（それ以外） → 予約日_変更(TTS) → 入力_予約日(DTMF AmiVoice STT) → OpenAI_予約日
+        │     → saveContext_予約日(reservationDate)
+        │     → 予約日_復唱(TTS) → 入力_予約日_復唱(DTMF AmiVoice STT) → OpenAI_予約日_復唱
+        │         ├─ 肯定 → 変更内容_聴取(TTS) → 入力_変更内容(AmiVoice STT) → OpenAI_変更内容
+        │         │           → saveContext_変更内容(change_detail) → [個人共通後段]
+        │         └─ 否定 → 予約日_変更(TTS) に戻る
+        └─ NO_RESULT → リトライ_当日確認
+
+      === 個人_キャンセルルート ===
+      当日確認_個人(TTS) → 入力_当日確認 → OpenAI_当日確認
+        ├─ 肯定 → [代表案内終話]
+        ├─ 否定 → 予約日_キャンセル(TTS) → 入力_予約日 → OpenAI_予約日
+        │     → saveContext_予約日 → 予約日_復唱 → ...
+        │     → [個人共通後段]
+        └─ NO_RESULT → リトライ_当日確認
+
+      === 個人_二次受診ルート ===
+      予約日_二次受診(TTS) → 入力_予約日 → OpenAI_予約日 → saveContext_予約日
+        → 予約日_復唱 → ...肯定 →
+        → 再検査内容_聴取(TTS) → 入力_再検査内容(AmiVoice STT) → OpenAI_再検査内容
+        → saveContext_再検査内容(change_detail)
+        → 希望時期_二次受診(TTS) → 入力_希望時期 → OpenAI_希望時期 → saveContext_希望時期(Preferred_date)
+        → [個人共通後段]
+
+      === 個人_問い合わせルート ===
+      問い合わせ_聴取_個人(TTS) → 入力_問い合わせ(AmiVoice STT) → OpenAI_問い合わせ
+        → saveContext_問い合わせ(reason)
+        → ジャンプ_RAG検索(Custom Jump to Flow)  ★パターン1: 問い合わせルート内RAG
+        → [個人共通後段（最後の質問なし → 直接終話）]
+
+      === 個人共通後段 ===
+      ジャンプ_氏名聴取(Custom Jump to Flow) → [氏名聴取サブフロー → return]
+        → ジャンプ_生年月日聴取(Custom Jump to Flow) → [生年月日聴取サブフロー(復唱あり) → return]
+        → 企業名_個人(TTS) → 入力_企業名(AmiVoice STT) → OpenAI_企業名 → saveContext_企業名(company_name)
+        → ジャンプ_電話番号聴取(Custom Jump to Flow) → [電話番号聴取サブフロー → return]
+        → [最後の質問分岐]
+
+      === 企業_予約ルート ===
+      コース_聴取_企業(TTS) → 入力_コース → OpenAI_コース → saveContext_コース(course)
+        → 希望時期_予約_企業(TTS) → 入力_希望時期 → OpenAI_希望時期 → saveContext_希望時期(Preferred_date)
+        → [企業共通後段]
+
+      === 企業_変更ルート ===
+      当日確認_企業(TTS) → 入力_当日確認 → OpenAI_当日確認
+        ├─ 肯定 → [代表案内終話]
+        └─ 否定 → 予約日_変更_企業(TTS) → ... → saveContext_予約日
+            → ジャンプ_氏名聴取(Custom Jump to Flow) → [受診者名聴取 → return]
+            → 変更内容_聴取_企業(TTS) → ... → saveContext_変更内容(change_detail)
+            → [企業共通後段]
+
+      === 企業_キャンセルルート ===
+      当日確認_企業(TTS) → ... →
+        ├─ 肯定 → [代表案内終話]
+        └─ 否定 → 予約日_キャンセル_企業(TTS) → ... → saveContext_予約日
+            → ジャンプ_氏名聴取(Custom Jump to Flow) → [受診者名聴取 → return]
+            → [企業共通後段]
+
+      === 企業_問い合わせルート ===
+      問い合わせ_聴取_企業(TTS) → 入力_問い合わせ → OpenAI_問い合わせ → saveContext_問い合わせ(reason)
+        → ジャンプ_RAG検索(Custom Jump to Flow)  ★パターン1
+        → [企業共通後段（最後の質問なし → 直接終話）]
+
+      === 企業共通後段 ===
+      企業名_企業(TTS) → 入力_企業名 → OpenAI_企業名 → saveContext_企業名(company_name)
+        → 担当者名_聴取(TTS) → 入力_担当者名(AmiVoice STT) → OpenAI_担当者名 → saveContext_担当者名(patientName2)
+        → ジャンプ_電話番号聴取(Custom Jump to Flow) → [電話番号聴取サブフロー → return]
+        → [最後の質問分岐]
+
+      === 最後の質問分岐 ===
+      ★ classification が「問い合わせ」の場合 → 最後の質問をスキップ → [終話分岐]
+      ★ それ以外 →
+        ジャンプ_RAG検索_終話前(Custom Jump to Flow)  ★パターン2: 全終話前RAG
+        → [終話分岐]
+
+      === 終話分岐 ===
+      ★ classification が「二次受診」の場合:
+        完了フラグ_二次受診(saveCompletionFlag2db, status=1, smsFlag=1)
+        → END_終話_二次受診(TTS) → 切断
+
+      ★ それ以外（予約/変更/キャンセル/問い合わせ）:
+        完了フラグ_通常(saveCompletionFlag2db, status=1, smsFlag=1)
+        → END_終話_通常(TTS) → 切断
+
+      === 代表案内終話 ===
+      完了フラグ_代表案内(saveCompletionFlag2db, status=2, smsFlag=-1)
+        → END_代表案内(TTS) → 切断
+
+      === リトライ超過終話 ===
+      完了フラグ_リトライ超過(saveCompletionFlag2db, status=2, smsFlag=-1)
+        → END_リトライ超過(TTS) → 切断
+
+    notes: >
+      冒頭チェーン順序: wait → saveContextModel2DB → incoming-classifier → acceptance_times。
+      個人/企業で9ルート分岐。各ルートの共通後段で個人情報聴取サブフローに遷移。
+      用件リトライ超過時は問い合わせルートにフォールスルー（Gen2仕様維持）。
+      当日確認の肯定/否定で変更/キャンセルルートが分岐。
+      最後の質問は問い合わせルートではスキップ。
+      終話は二次受診とそれ以外で文言が異なる。
+
+  - flow_name: "聖マリアヘルスケアセンター$氏名聴取_20260408"
+    diagram: |
+      ★★★ 完全コピー対象（CLAUDE.md Rule 9）★★★
+      docs/reference/bivr/samples/個人情報サブフロー.bivr の「氏名聴取」フローを完全コピーする。
+      フロー名プレフィックスのみ「聖マリアヘルスケアセンター$」に置換。構造・接続・スクリプトは一切変更不可。
+
+      構成: AmiVoice STT → OpenAI正規化 → saveContext → script_結果返却（5モジュール）
+      リトライ上限到達時は氏名未取得のままスキップ。script_結果返却_氏名で$runner.setResult()実行。
+    notes: "CLAUDE.md Rule 9/11 準拠。個人情報サブフロー.bivr を完全コピー。"
+
+  - flow_name: "聖マリアヘルスケアセンター$生年月日聴取_20260408"
+    diagram: |
+      ★★★ 完全コピー対象（CLAUDE.md Rule 9）★★★
+      docs/reference/bivr/samples/個人情報サブフロー.bivr の「生年月日聴取（復唱あり）」フローを完全コピーする。
+      フロー名プレフィックスのみ「聖マリアヘルスケアセンター$」に置換。構造・接続・スクリプトは一切変更不可。
+
+      構成: DTMF AmiVoice STT → OpenAI正規化 → DOB Re-confirmation → saveContext
+      復唱あり: Gen2プロンプト「生年月日聴取後に復唱をしてください」に基づく。
+    notes: "CLAUDE.md Rule 9 準拠。復唱あり版を使用。"
+
+  - flow_name: "聖マリアヘルスケアセンター$電話番号聴取_20260408"
+    diagram: |
+      ★★★ 完全コピー対象（CLAUDE.md Rule 9/10）★★★
+      docs/reference/bivr/samples/個人情報サブフロー.bivr の「電話番号聴取」フローを完全コピーする。
+      フロー名プレフィックスのみ「聖マリアヘルスケアセンター$」に置換。構造・接続・スクリプトは一切変更不可。
+
+      構成: incoming-classifier → 携帯/固定分岐 → Phone Normalization → Re-confirmation（24モジュール）
+      termination=return: メインフローに結果を返却し、メインフロー側で最後の質問→終話チェーンを実行。
+    notes: "CLAUDE.md Rule 9/10 準拠。termination=return。"
+
+  - flow_name: "聖マリアヘルスケアセンター$RAG検索_20260408"
+    diagram: |
+      ★★★ 完全コピー対象（CLAUDE.md Rule 16）★★★
+      docs/reference/bivr/samples/サブフローRAG.bivr を完全コピーする。
+      フロー名プレフィックスのみ「聖マリアヘルスケアセンター$」に置換。構造・接続・スクリプトは一切変更不可。
+
+      2箇所で使用:
+      - パターン1（問い合わせルート内）: 初回TTS「お問い合わせ内容をご自由におっしゃってください。」
+      - パターン2（全終話前）: 初回TTS「何かご質問はございますか？」
+    notes: "CLAUDE.md Rule 16 準拠。パターン3（複合）。"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+# Gen2 function properties から変換。
+# smsFlag / endpoint は saveContextModel2DB に含めない（saveCompletionFlag2db のパラメータ）。
+# Gen2 status "0" は Gen3 で使用禁止（CLAUDE.md Rule 12b）。
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - order: "1"
+        value: "予約"
+      - order: "2"
+        value: "変更"
+      - order: "3"
+        value: "キャンセル"
+      - order: "4"
+        value: "二次受診"
+      - order: "5"
+        value: "問い合わせ"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "用件聴取で設定。リトライ超過時は「問い合わせ」にフォールスルー"
+
+  - context_name: "company_check"
+    context_name_jp: "個人/企業"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "「個人」または「企業」。冒頭の個人企業確認で設定"
+
+  - context_name: "patientName"
+    context_name_jp: "受診者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "氏名聴取サブフローで聴取。個人全ルート+企業_変更/キャンセルで使用"
+
+  - context_name: "patientName2"
+    context_name_jp: "担当者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "企業ルートのみ。メインフロー内インラインで聴取（サブフロー不使用）"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "生年月日聴取サブフロー(復唱あり)で聴取。個人ルートのみ"
+
+  - context_name: "course"
+    context_name_jp: "受診希望コース"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約ルートのみ。フリーテキスト保存（発話内容をそのまま格納）"
+
+  - context_name: "option"
+    context_name_jp: "追加オプション"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "個人_予約ルートのみ。フリーテキスト保存。複数項目は読点区切り"
+
+  - context_name: "reservationDate"
+    context_name_jp: "予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "変更/キャンセル/二次受診ルートで聴取。yyyy-MM-dd形式"
+
+  - context_name: "Preferred_date"
+    context_name_jp: "希望時期"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約/二次受診ルートで聴取。フリーテキスト保存。企業の場合は人数も含む"
+
+  - context_name: "change_detail"
+    context_name_jp: "変更内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "変更ルート: 変更内容。二次受診ルート: 再検査内容。フリーテキスト保存"
+
+  - context_name: "company_name"
+    context_name_jp: "企業名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "個人/企業共通で聴取。個人は「ありません」も可"
+
+  - context_name: "reason"
+    context_name_jp: "問い合わせ内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "問い合わせルートのみ。フリーテキスト保存"
+
+  - context_name: "reason1"
+    context_name_jp: "最後の質問"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "RAGサブフロー（パターン2: 全終話前）で聴取。問い合わせルートではスキップ"
+
+  - context_name: "question"
+    context_name_jp: "FAQ質問内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "RAGサブフロー内でFAQ質問を蓄積。「質問1●質問2●質問3」形式"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "電話番号聴取サブフローで聴取"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: true
+    notes: "着信番号自動格納"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "6"
+        order: "3"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "1=正常完了(全用件) 2=代表案内/非通知/リトライ超過 6=時間外"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "受電日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: true
+    notes: "通話ID自動格納"
+
+# --- セクション6: 聴取項目一覧 ---
+# 9ルート共通の聴取項目。使用ルートはnotesに記載。
+hearing_items:
+  # --- 共通: 個人/企業確認 ---
+  - order: 1
+    name: "個人企業確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "company_check"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "個人"
+      - "企業"
+    notes: "全ルート共通。「はい/肯定/本人」→個人、「いいえ/否定/企業/担当者/会社」→企業"
+
+  # --- 個人: 用件聴取 ---
+  - order: 2
+    name: "用件_個人"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "予約"
+      - "変更"
+      - "キャンセル"
+      - "二次受診"
+      - "問い合わせ"
+    notes: "個人のみ。DTMF 1=予約 2=変更 3=キャンセル 4=二次受診 5=問い合わせ。リトライ超過→問い合わせルートにフォールスルー"
+
+  # --- 企業: 用件聴取 ---
+  - order: 3
+    name: "用件_企業"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "予約"
+      - "変更"
+      - "キャンセル"
+      - "問い合わせ"
+    notes: "企業のみ。DTMF 1=予約 2=変更 3=キャンセル 4=問い合わせ。リトライ超過→問い合わせルートにフォールスルー"
+
+  # --- 用件復唱（個人5種+企業4種 = 9パターン）---
+  - order: 4
+    name: "用件復唱"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: null
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "肯定"
+      - "否定"
+    notes: >
+      各用件ごとにTTS文言が異なる（「新規の予約でよろしいでしょうか？」等）。
+      肯定→用件別ルートに進む、否定→用件聴取に戻る。
+      個人5種 + 企業4種 = 9パターンの復唱TTS。
+
+  # --- 当日確認（変更/キャンセル共通）---
+  - order: 5
+    name: "当日確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: null
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "肯定"
+      - "否定"
+    notes: "変更/キャンセルルートのみ（個人+企業共通）。肯定→代表案内終話、否定→予約日聴取に進む"
+
+  # --- 予約日聴取 ---
+  - order: 6
+    name: "予約日"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 10
+    retry_count: 2
+    echo_back: true
+    save_to: "reservationDate"
+    openai_processing: "convert"
+    output_format: "date_text"
+    output_labels: []
+    notes: >
+      変更/キャンセル/二次受診で使用。日付形式(yyyy-MM-dd)に変換。
+      復唱あり: 「予約日は{reservationDate}でよろしいでしょうか？」
+      二次受診の場合はTTS文言が異なる。
+
+  # --- コース聴取 ---
+  - order: 7
+    name: "コース"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "course"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "予約ルート（個人/企業共通）。発話内容をそのまま格納。わからない場合も受け付ける"
+
+  # --- オプション聴取 ---
+  - order: 8
+    name: "オプション"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "option"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "個人_予約ルートのみ。複数項目は読点区切りで格納。「ありません」も受け付ける"
+
+  # --- 希望時期聴取 ---
+  - order: 9
+    name: "希望時期"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "Preferred_date"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: >
+      予約/二次受診ルートで使用。TTS文言がルートで異なる:
+      - 個人_予約: 「受診を希望されている時期をお話ください。」
+      - 個人_二次受診: 「受診を希望されている時期を、本日より2週間以降のお日にちで...」
+      - 企業_予約: 「受診を希望されている時期や、おおよその人数をお話ください。」
+
+  # --- 変更内容聴取 ---
+  - order: 10
+    name: "変更内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "change_detail"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "変更ルート（個人/企業共通）。フリーテキスト保存"
+
+  # --- 再検査内容聴取 ---
+  - order: 11
+    name: "再検査内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "change_detail"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "個人_二次受診ルートのみ。change_detailに格納（変更内容と同じフィールド）。「わからない」も受け付ける"
+
+  # --- お問い合わせ内容聴取 ---
+  - order: 12
+    name: "問い合わせ内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "問い合わせルート（個人/企業共通）。フリーテキスト保存。復唱しない"
+
+  # --- 氏名 → サブフロー（hearing_items名を"氏名"に統一: サブフロー"氏名聴取"と部分マッチ成立のため）---
+  - order: 13
+    name: "氏名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientName"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "氏名聴取サブフロー内。受診者名(patientName)を聴取。個人全ルート + 企業_変更/キャンセルで使用。復唱なし"
+
+  # --- 生年月日 → サブフロー ---
+  - order: 14
+    name: "生年月日"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 10
+    retry_count: 2
+    echo_back: true
+    save_to: "patientDateOfBirth"
+    openai_processing: "convert"
+    output_format: "date_text"
+    output_labels: []
+    notes: "生年月日聴取サブフロー内（復唱あり）。個人ルートのみ。和暦・西暦対応"
+
+  # --- 企業名聴取 ---
+  - order: 15
+    name: "企業名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "company_name"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "個人/企業共通。インライン聴取。「ありません」も受け付ける"
+
+  # --- 担当者名聴取（企業のみ、インライン）---
+  - order: 16
+    name: "担当者名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientName2"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: >
+      企業ルートのみ。メインフロー内インライン聴取（標準氏名聴取サブフローはpatientNameに固定保存のため流用不可）。
+      TTS: 「ご担当者様のお名前を、私は、田中太郎です、のようにフルネームでお話ください。」
+
+  # --- 電話番号 → サブフロー ---
+  - order: 17
+    name: "電話番号"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 11
+    retry_count: 3
+    echo_back: true
+    save_to: "additionalPhoneNumber"
+    openai_processing: "normalize"
+    output_format: "number"
+    output_labels: []
+    notes: "電話番号聴取サブフロー内。リトライ3回（Gen2仕様維持 NON-BLOCKER N-6）"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  # === 個人企業確認 ===
+  - step_name: "個人企業確認"
+    tts_announcement: "初めに、ご連絡いただいている方は受診されるご本人様でしょうか？はい、そうです、または、いいえ、違いますでお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "個人"
+        - "企業"
+        - "NO_RESULT"
+      mapping:
+        - input: "「はい」「そうです」「本人」「一人」「二人」「家族」「夫」「妻」等の個人を示す発話"
+          output: "個人"
+        - input: "「いいえ」「違います」「担当者」「会社」「企業」「団体」「医療機関」「健保組合」等の企業・団体を示す発話"
+          output: "企業"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "company_check"
+    next_step: "個人→用件_個人 / 企業→用件_企業"
+    retry_failure: "end_failure"
+
+  # === 用件聴取（個人）===
+  - step_name: "用件_個人"
+    tts_announcement: "ご用件を次の5つのうちの、いずれかでお話ください。 1.新規の予約、2.予約の変更、3.予約のキャンセル、4.二次受診、5.その他お問い合わせ、 それでは、お話ください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "予約"
+        - "変更"
+        - "キャンセル"
+        - "二次受診"
+        - "問い合わせ"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「予約」「新規」「薬」「お薬」を含む"
+          output: "予約"
+        - input: "DTMF 2 または「変更」「取り直し」「変えたい」「別の」を含む"
+          output: "変更"
+        - input: "DTMF 3 または「キャンセル」「やめる」「取り消し」を含む"
+          output: "キャンセル"
+        - input: "DTMF 4 または「二次受診」「再検査」「精密検査」を含む"
+          output: "二次受診"
+        - input: "DTMF 5 または「問い合わせ」「質問」「聞きたい」を含む"
+          output: "問い合わせ"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "classification"
+    next_step: "各用件の復唱確認へ"
+    retry_failure: "skip"
+    retry_failure_notes: "リトライ超過 → 問い合わせルートにフォールスルー（Gen2仕様維持）"
+
+  # === 用件聴取（企業）===
+  - step_name: "用件_企業"
+    tts_announcement: "ご用件を次の4つのうちの、いずれかでお話ください。 1.新規の予約、2.予約の変更、3.予約のキャンセル、4.その他お問い合わせ、 それでは、お話ください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "予約"
+        - "変更"
+        - "キャンセル"
+        - "問い合わせ"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「予約」「新規」を含む"
+          output: "予約"
+        - input: "DTMF 2 または「変更」を含む"
+          output: "変更"
+        - input: "DTMF 3 または「キャンセル」を含む"
+          output: "キャンセル"
+        - input: "DTMF 4 または「問い合わせ」を含む"
+          output: "問い合わせ"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "classification"
+    next_step: "各用件の復唱確認へ"
+    retry_failure: "skip"
+    retry_failure_notes: "リトライ超過 → 問い合わせルートにフォールスルー"
+
+  # === 用件復唱（各用件共通構造、TTS文言のみ異なる）===
+  - step_name: "復唱_予約"
+    tts_announcement: "新規の予約でよろしいでしょうか？"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["肯定", "否定", "NO_RESULT"]
+      mapping:
+        - input: "「はい」「そうです」「DTMF 1」"
+          output: "肯定"
+        - input: "「いいえ」「違います」「DTMF 2」"
+          output: "否定"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: null
+    next_step: "肯定→用件別ルート / 否定→用件聴取に戻る"
+    retry_failure: "skip"
+
+  - step_name: "復唱_変更"
+    tts_announcement: "予約の変更でよろしいでしょうか？"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["肯定", "否定", "NO_RESULT"]
+      mapping:
+        - input: "「はい」/DTMF 1"
+          output: "肯定"
+        - input: "「いいえ」/DTMF 2"
+          output: "否定"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: null
+    next_step: "肯定→変更ルート / 否定→用件聴取に戻る"
+    retry_failure: "skip"
+
+  - step_name: "復唱_キャンセル"
+    tts_announcement: "予約のキャンセルでよろしいでしょうか？"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["肯定", "否定", "NO_RESULT"]
+      mapping:
+        - input: "「はい」/DTMF 1"
+          output: "肯定"
+        - input: "「いいえ」/DTMF 2"
+          output: "否定"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: null
+    next_step: "肯定→キャンセルルート / 否定→用件聴取に戻る"
+    retry_failure: "skip"
+
+  - step_name: "復唱_二次受診"
+    tts_announcement: "二次受診でよろしいでしょうか？"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["肯定", "否定", "NO_RESULT"]
+      mapping:
+        - input: "「はい」/DTMF 1"
+          output: "肯定"
+        - input: "「いいえ」/DTMF 2"
+          output: "否定"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: null
+    next_step: "肯定→二次受診ルート / 否定→用件聴取に戻る"
+    retry_failure: "skip"
+
+  - step_name: "復唱_問い合わせ"
+    tts_announcement: "その他お問い合わせでよろしいでしょうか？"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["肯定", "否定", "NO_RESULT"]
+      mapping:
+        - input: "「はい」/DTMF 1"
+          output: "肯定"
+        - input: "「いいえ」/DTMF 2"
+          output: "否定"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: null
+    next_step: "肯定→問い合わせルート / 否定→用件聴取に戻る"
+    retry_failure: "skip"
+
+  # === 用件復唱（包括エントリー: hearing_items "用件復唱" に対応）===
+  # 個人5種 + 企業4種 = 9パターン。各TTS文言は復唱_予約/復唱_変更/復唱_キャンセル/復唱_二次受診/復唱_問い合わせ で個別定義。
+  - step_name: "用件復唱"
+    tts_announcement: "（用件ごとに異なる。各復唱_* TTSモジュールで個別定義）"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["肯定", "否定", "NO_RESULT"]
+      mapping:
+        - input: "「はい」「そうです」/DTMF 1"
+          output: "肯定"
+        - input: "「いいえ」「違います」/DTMF 2"
+          output: "否定"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: null
+    next_step: "肯定→用件別ルート / 否定→用件聴取に戻る"
+    retry_failure: "skip"
+    notes: >
+      9パターン（個人5 + 企業4）。個人/企業で同一用件は同じTTS文言のため共有可能。
+      各用件のTTS文言とOpenAIルールは復唱_予約/復唱_変更/復唱_キャンセル/復唱_二次受診/復唱_問い合わせ の各エントリを参照。
+
+  # === 当日確認 ===
+  - step_name: "当日確認"
+    tts_announcement: "今回のお問い合わせは、本日もしくは翌営業日の予約に関する内容ですか？はい、そうです、または、いいえ、違いますでお話ください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["肯定", "否定", "NO_RESULT"]
+      mapping:
+        - input: "「はい」「そうです」/DTMF 1"
+          output: "肯定"
+        - input: "「いいえ」「違います」/DTMF 2"
+          output: "否定"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: null
+    next_step: "肯定→代表案内終話 / 否定→予約日聴取"
+    retry_failure: "end_failure"
+
+  # === 予約日（包括エントリー: hearing_items "予約日" に対応）===
+  # 変更/キャンセル/二次受診ルートで使用。ルートによりTTS文言が異なる。
+  - step_name: "予約日"
+    tts_announcement: "（ルートによりTTS文言が異なる。予約日_変更キャンセル / 予約日_二次受診 モジュールで個別定義）"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["日付テキスト(yyyy-MM-dd)", "わからない(二次受診のみ)", "NO_RESULT"]
+      mapping:
+        - input: "日付として解釈可能な発話"
+          output: "yyyy-MM-dd形式"
+        - input: "「わからない」「不明」（二次受診ルートのみ有効）"
+          output: "わからない"
+      no_result_condition: "日付として解釈不可かつ「わからない」でもない"
+    save_to: "reservationDate"
+    next_step: "予約日_復唱"
+    retry_failure: "end_failure"
+    notes: >
+      変更/キャンセル/二次受診ルートで使用。詳細は予約日_変更キャンセル / 予約日_二次受診 の各エントリを参照。
+      復唱あり: 予約日_復唱 で「はい/いいえ」確認。
+
+  # === 予約日聴取（変更/キャンセル用）===
+  - step_name: "予約日_変更キャンセル"
+    tts_announcement: "現在の予約日を4月1日のように日付でお話ください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["日付テキスト(yyyy-MM-dd)", "NO_RESULT"]
+      mapping:
+        - input: "日付として解釈可能な発話"
+          output: "yyyy-MM-dd形式"
+      no_result_condition: "日付として解釈不可"
+    save_to: "reservationDate"
+    next_step: "予約日_復唱"
+    retry_failure: "end_failure"
+
+  # === 予約日聴取（二次受診用）===
+  - step_name: "予約日_二次受診"
+    tts_announcement: "お受けいただいた、健康診断の受診日を4月1日のように日付でお話ください。わからない場合は、わからない、のようにお話しください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["日付テキスト(yyyy-MM-dd)", "わからない", "NO_RESULT"]
+      mapping:
+        - input: "日付として解釈可能な発話"
+          output: "yyyy-MM-dd形式"
+        - input: "「わからない」「不明」"
+          output: "わからない"
+      no_result_condition: "日付として解釈不可かつ「わからない」でもない"
+    save_to: "reservationDate"
+    next_step: "予約日_復唱"
+    retry_failure: "skip"
+
+  # === 予約日復唱 ===
+  - step_name: "予約日_復唱"
+    tts_announcement: "予約日は{reservationDate}でよろしいでしょうか？"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["肯定", "否定", "NO_RESULT"]
+      mapping:
+        - input: "「はい」/DTMF 1"
+          output: "肯定"
+        - input: "「いいえ」/DTMF 2"
+          output: "否定"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: null
+    next_step: "肯定→次のステップ / 否定→予約日聴取に戻る"
+    retry_failure: "skip"
+
+  # === コース聴取 ===
+  - step_name: "コース"
+    tts_announcement: "受診されるコースをお話ください。わからない場合は、わからない、のようにお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["フリーテキスト"]
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "course"
+    next_step: "個人→オプション / 企業→希望時期"
+    retry_failure: "skip"
+
+  # === オプション聴取 ===
+  - step_name: "オプション"
+    tts_announcement: "ご希望のオプション検査をお話しください。特にない場合は、ありません、のようにお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["フリーテキスト"]
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（複数項目は読点区切り）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "option"
+    next_step: "希望時期_予約"
+    retry_failure: "skip"
+
+  # === 希望時期（包括エントリー: hearing_items "希望時期" に対応）===
+  # 予約/二次受診ルートで使用。ルートによりTTS文言が異なる。
+  - step_name: "希望時期"
+    tts_announcement: "（ルートによりTTS文言が異なる。希望時期_予約_個人 / 希望時期_二次受診 / 希望時期_予約_企業 で個別定義）"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["フリーテキスト"]
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "Preferred_date"
+    next_step: "各ルートの共通後段"
+    retry_failure: "skip"
+    notes: >
+      予約/二次受診ルートで使用。詳細は希望時期_予約_個人 / 希望時期_二次受診 / 希望時期_予約_企業 の各エントリを参照。
+
+  # === 希望時期聴取（3パターン）===
+  - step_name: "希望時期_予約_個人"
+    tts_announcement: "受診を希望されている時期をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["フリーテキスト"]
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "Preferred_date"
+    next_step: "個人共通後段"
+    retry_failure: "skip"
+
+  - step_name: "希望時期_二次受診"
+    tts_announcement: "受診を希望されている時期を、本日より2週間以降のお日にちで自由にお話ください。なお、診療科が複数になる場合は、複数回のご来院が必要となりますのでご了承下さい。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["フリーテキスト"]
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "Preferred_date"
+    next_step: "個人共通後段"
+    retry_failure: "skip"
+
+  - step_name: "希望時期_予約_企業"
+    tts_announcement: "受診を希望されている時期や、おおよその人数をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["フリーテキスト"]
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "Preferred_date"
+    next_step: "企業共通後段"
+    retry_failure: "skip"
+
+  # === 変更内容聴取 ===
+  - step_name: "変更内容"
+    tts_announcement: "オプション検査の追加や変更、もしくは日程変更など希望されている内容をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["フリーテキスト"]
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "change_detail"
+    next_step: "個人→個人共通後段 / 企業→企業共通後段"
+    retry_failure: "skip"
+
+  # === 再検査内容聴取 ===
+  - step_name: "再検査内容"
+    tts_announcement: "受診を希望される再検査の項目をお話しください。わからない場合は、わからない、のようにお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["フリーテキスト"]
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "change_detail"
+    next_step: "希望時期_二次受診"
+    retry_failure: "skip"
+
+  # === 問い合わせ内容聴取 ===
+  - step_name: "問い合わせ内容"
+    tts_announcement: "お問い合わせの内容をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["フリーテキスト"]
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "reason"
+    next_step: "RAGサブフロー（パターン1）→ 個人共通後段 or 企業共通後段"
+    retry_failure: "skip"
+
+  # === 企業名聴取（インライン）===
+  - step_name: "企業名"
+    tts_announcement: "ご連絡をいただいている方の、企業名もしくは団体名をお話しください。所属がない方は、ありません、のようにお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["フリーテキスト"]
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "company_name"
+    next_step: "個人→電話番号聴取サブフロー / 企業→担当者名"
+    retry_failure: "skip"
+
+  # === 担当者名聴取（インライン、企業のみ）===
+  - step_name: "担当者名"
+    tts_announcement: "ご担当者様のお名前を、私は、田中太郎です、のようにフルネームでお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["氏名テキスト"]
+      mapping:
+        - input: "音声認識結果"
+          output: "氏名テキスト（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "patientName2"
+    next_step: "電話番号聴取サブフロー"
+    retry_failure: "skip"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # 正常終話（通常）
+  - name: "END_終話_通常"
+    condition: "全聴取完了 かつ classification が 予約/変更/キャンセル/問い合わせ のいずれか"
+    tts_announcement: "かしこまりました。健康診断のお申し込みを受付いたしました。3営業日以内の、担当者からの折り返し電話、もしくは、SMSにて確定となります。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_通常"
+
+  # 正常終話（二次受診）
+  - name: "END_終話_二次受診"
+    condition: "全聴取完了 かつ classification=二次受診"
+    tts_announcement: "二次受診の申し込みを受付いたしました。3営業日以内の、担当者からの折り返し電話、もしくは、SMSにて確定となります。また、受診日程についても折り返し時にご相談の上確定となります。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_二次受診"
+
+  # 代表案内（当日/翌日予約）
+  - name: "END_代表案内"
+    condition: "当日確認で「肯定」（本日/翌営業日の予約）"
+    tts_announcement: "申し訳ございません。本日と翌営業日のご予約に関しては、こちらのAI電話ではお受けできません。恐れ入りますが、代表電話までおかけなおしください。番号は、0942-35-5522です。繰り返します。番号は、0942-35-5522です。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_代表案内"
+
+  # リトライ超過（代表案内）
+  - name: "END_リトライ超過"
+    condition: "一般リトライ超過（電話番号聴取含む）"
+    tts_announcement: "ご質問いただいた内容はAI電話ではご対応できませんので、代表電話の0942-35-5522におかけ直しください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_リトライ超過"
+
+  # 時間外
+  - name: "END_時間外"
+    condition: "acceptance_times で時間外と判定"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  # 非通知
+  - name: "END_非通知"
+    condition: "incoming-classifier で非通知と判定"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+# smsFlag分岐設計
+# 本フローでは用件別/施設別のsmsFlag分岐は不要（単一施設、全正常終話でsmsFlag=1）。
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "3"                                   # Gen2→Gen3移管のデフォルト
+  inquiry_insertion_point: "問い合わせ内容聴取後"   # パターン1: 問い合わせルート内RAG
+  pre_termination: true                           # パターン2: 全終話前にRAGサブフロー配置
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  # メインフロー: 冒頭チェーン
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。聖マリアヘルスケアセンター、国際保健センターの予約専用、AI電話です。"
+
+  - module_name: "時間外_アナウンス"
+    purpose: "時間外案内"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知案内"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  # メインフロー: 個人企業確認
+  - module_name: "個人企業_確認"
+    purpose: "個人/企業確認"
+    announcement: "初めに、ご連絡いただいている方は受診されるご本人様でしょうか？はい、そうです、または、いいえ、違いますでお話ください。"
+
+  # メインフロー: 用件聴取（個人）
+  - module_name: "用件_個人"
+    purpose: "用件聴取案内（個人5択）"
+    announcement: "ご用件を次の5つのうちの、いずれかでお話ください。 1.新規の予約、2.予約の変更、3.予約のキャンセル、4.二次受診、5.その他お問い合わせ、 それでは、お話ください。"
+
+  # メインフロー: 用件聴取（企業）
+  - module_name: "用件_企業"
+    purpose: "用件聴取案内（企業4択）"
+    announcement: "ご用件を次の4つのうちの、いずれかでお話ください。 1.新規の予約、2.予約の変更、3.予約のキャンセル、4.その他お問い合わせ、 それでは、お話ください。"
+
+  # メインフロー: 用件復唱（個人5種 + 企業4種 = 9パターン）
+  # 個人/企業で同一用件は同じ文言のため、TTS共有可。generatorが判断。
+  - module_name: "復唱_予約"
+    purpose: "用件復唱: 予約"
+    announcement: "新規の予約でよろしいでしょうか？"
+  - module_name: "復唱_変更"
+    purpose: "用件復唱: 変更"
+    announcement: "予約の変更でよろしいでしょうか？"
+  - module_name: "復唱_キャンセル"
+    purpose: "用件復唱: キャンセル"
+    announcement: "予約のキャンセルでよろしいでしょうか？"
+  - module_name: "復唱_二次受診"
+    purpose: "用件復唱: 二次受診"
+    announcement: "二次受診でよろしいでしょうか？"
+  - module_name: "復唱_問い合わせ"
+    purpose: "用件復唱: 問い合わせ"
+    announcement: "その他お問い合わせでよろしいでしょうか？"
+
+  # メインフロー: 当日確認
+  - module_name: "当日確認"
+    purpose: "当日/翌日予約確認"
+    announcement: "今回のお問い合わせは、本日もしくは翌営業日の予約に関する内容ですか？はい、そうです、または、いいえ、違いますでお話ください。"
+
+  # メインフロー: 予約日
+  - module_name: "予約日_変更"
+    purpose: "予約日聴取（変更/キャンセル用）"
+    announcement: "現在の予約日を4月1日のように日付でお話ください。"
+  - module_name: "予約日_二次受診"
+    purpose: "予約日聴取（二次受診用）"
+    announcement: "お受けいただいた、健康診断の受診日を4月1日のように日付でお話ください。わからない場合は、わからない、のようにお話しください。"
+  - module_name: "予約日_復唱"
+    purpose: "予約日復唱確認"
+    announcement: "予約日は{reservationDate}でよろしいでしょうか？"
+
+  # メインフロー: 各種聴取
+  - module_name: "コース_聴取"
+    purpose: "受診希望コース聴取"
+    announcement: "受診されるコースをお話ください。わからない場合は、わからない、のようにお話ください。"
+  - module_name: "オプション_聴取"
+    purpose: "オプション検査聴取"
+    announcement: "ご希望のオプション検査をお話しください。特にない場合は、ありません、のようにお話ください。"
+  - module_name: "希望時期_予約_個人"
+    purpose: "希望時期聴取（個人_予約）"
+    announcement: "受診を希望されている時期をお話ください。"
+  - module_name: "希望時期_二次受診"
+    purpose: "希望時期聴取（二次受診）"
+    announcement: "受診を希望されている時期を、本日より2週間以降のお日にちで自由にお話ください。なお、診療科が複数になる場合は、複数回のご来院が必要となりますのでご了承下さい。"
+  - module_name: "希望時期_予約_企業"
+    purpose: "希望時期聴取（企業_予約）"
+    announcement: "受診を希望されている時期や、おおよその人数をお話ください。"
+  - module_name: "変更内容_聴取"
+    purpose: "変更内容聴取"
+    announcement: "オプション検査の追加や変更、もしくは日程変更など希望されている内容をお話ください。"
+  - module_name: "再検査内容_聴取"
+    purpose: "再検査内容聴取（二次受診）"
+    announcement: "受診を希望される再検査の項目をお話しください。わからない場合は、わからない、のようにお話しください。"
+  - module_name: "問い合わせ_聴取"
+    purpose: "問い合わせ内容聴取"
+    announcement: "お問い合わせの内容をお話ください。"
+
+  # メインフロー: 個人/企業共通
+  - module_name: "企業名_聴取"
+    purpose: "企業名聴取"
+    announcement: "ご連絡をいただいている方の、企業名もしくは団体名をお話しください。所属がない方は、ありません、のようにお話しください。"
+  - module_name: "担当者名_聴取"
+    purpose: "担当者名聴取（企業のみ）"
+    announcement: "ご担当者様のお名前を、私は、田中太郎です、のようにフルネームでお話ください。"
+
+  # メインフロー: 終話
+  - module_name: "END_終話_通常"
+    purpose: "通常終話（予約/変更/キャンセル/問い合わせ）"
+    announcement: "かしこまりました。健康診断のお申し込みを受付いたしました。3営業日以内の、担当者からの折り返し電話、もしくは、SMSにて確定となります。お電話ありがとうございました。それでは失礼いたします。"
+  - module_name: "END_終話_二次受診"
+    purpose: "二次受診終話"
+    announcement: "二次受診の申し込みを受付いたしました。3営業日以内の、担当者からの折り返し電話、もしくは、SMSにて確定となります。また、受診日程についても折り返し時にご相談の上確定となります。お電話ありがとうございました。それでは失礼いたします。"
+  - module_name: "END_代表案内"
+    purpose: "代表案内終話（当日/翌日予約）"
+    announcement: "申し訳ございません。本日と翌営業日のご予約に関しては、こちらのAI電話ではお受けできません。恐れ入りますが、代表電話までおかけなおしください。番号は、0942-35-5522です。繰り返します。番号は、0942-35-5522です。お電話ありがとうございました。それでは失礼いたします。"
+  - module_name: "END_リトライ超過"
+    purpose: "リトライ超過終話"
+    announcement: "ご質問いただいた内容はAI電話ではご対応できませんので、代表電話の0942-35-5522におかけ直しください。お電話ありがとうございました。それでは失礼いたします。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "個人企業確認"
+    words: |
+      はい はい
+      いいえ いいえ
+      そうです そうです
+      違います ちがいます
+      本人 ほんにん
+      企業 きぎょう
+      会社 かいしゃ
+      団体 だんたい
+      担当者 たんとうしゃ
+
+  - step_name: "用件_個人"
+    words: |
+      予約 よやく
+      変更 へんこう
+      キャンセル きゃんせる
+      二次受診 にじじゅしん
+      問い合わせ といあわせ
+      新規 しんき
+      取り消し とりけし
+
+  - step_name: "用件_企業"
+    words: |
+      予約 よやく
+      変更 へんこう
+      キャンセル きゃんせる
+      問い合わせ といあわせ
+      新規 しんき
+      取り消し とりけし
+
+  - step_name: "用件復唱"
+    words: |
+      はい はい
+      いいえ いいえ
+      そうです そうです
+      違います ちがいます
+
+  - step_name: "当日確認"
+    words: |
+      はい はい
+      いいえ いいえ
+      そうです そうです
+      違います ちがいます
+
+  - step_name: "コース"
+    words: |
+      人間ドック にんげんどっく
+      日帰りドック ひがえりどっく
+      宿泊ドック しゅくはくどっく
+      脳ドック のうどっく
+      協会けんぽ きょうかいけんぽ
+      生活習慣病予防健診 せいかつしゅうかんびょうよぼうけんしん
+      定期健診 ていきけんしん
+      法定健診 ほうていけんしん
+      雇用時健診 こようじけんしん
+      イーウェル いーうぇる
+      東振協 とうしんきょう
+      特定健康診査 とくていけんこうしんさ
+      特定健診 とくていけんしん
+      外来予約 がいらいよやく
+      市民検診 しみんけんしん
+      PET-CT ぺっとしーてぃー
+      女性がん検診 じょせいがんけんしん
+      健診 けんしん
+      検診 けんしん
+      ドック どっく
+      精密検査 せいみつけんさ
+
+  - step_name: "オプション"
+    words: |
+      子宮頸部細胞診 しきゅうけいぶさいぼうしん
+      乳腺超音波 にゅうせんちょうおんぱ
+      脳ドック のうどっく
+      鎮静剤 ちんせいざい
+      胃カメラ いかめら
+      経口カメラ けいこうかめら
+      経鼻カメラ けいびかめら
+      バリウム ばりうむ
+      大腸カメラ だいちょうかめら
+      胸部CT検査 きょうぶしーてぃーけんさ
+      腹部超音波 ふくぶちょうおんぱ
+      便潜血検査 べんせんけつけんさ
+      前立腺がん検査 ぜんりつせんがんけんさ
+      胸部レントゲン きょうぶれんとげん
+      骨密度測定 こつみつどそくてい
+      麻疹 ましん
+      ムンプス むんぷす
+      予防接種 よぼうせっしゅ
+      セデーション せでーしょん
+      乳房エコー にゅうぼうえこー
+      腹部エコー ふくぶえこー
+      PSA ぴーえすえー
+
+  - step_name: "予約日"
+    words: |
+      (和暦辞書 + month辞書 + day辞書 を適用)
+
+  - step_name: "予約日_復唱"
+    words: |
+      はい はい
+      いいえ いいえ
+
+  - step_name: "企業名"
+    words: |
+      (フリーテキスト -- profile_words 空)
+
+  - step_name: "担当者名"
+    words: |
+      (フリーテキスト -- profile_words 空。氏名辞書を適用)
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - >
+    個人/企業分岐 + 用件9ルートの大規模フロー。Gen2の単一OpenAIプロンプトが管理していた
+    全分岐ロジックをBrekekeモジュールに分解するため、メインフローのモジュール数が非常に多くなる（推定200+モジュール）。
+  - >
+    担当者名(patientName2)はメインフロー内インライン聴取。標準氏名聴取サブフローは
+    patientNameに固定保存のため流用不可（CLAUDE.md Rule 9: 構造変更禁止）。
+  - >
+    用件復唱は個人5種+企業4種=9パターンだが、個人と企業で同一用件は同じTTS文言のため
+    共有可能（予約/変更/キャンセル/問い合わせの4つのTTSモジュールを共有し、二次受診は個人のみ）。
+    generatorが最適化を判断。
+  - >
+    用件リトライ超過時のフォールスルー: Gen2仕様を維持し、問い合わせルートに遷移する。
+    Retry Counter の No more → 問い合わせルートの最初のステップに接続。
+  - >
+    予約日の復唱: Gen2で明示されており、Re-confirmationモジュールではなくTTS+STT+OpenAI
+    （はい/いいえ分岐）で実装する。生年月日の復唱は標準サブフロー内のDOB Re-confirmationで対応。
+  - >
+    受診希望コース: Gen2に詳細なコースリスト（18種）とキーワード定義があるが、Gen3では
+    フリーテキスト保存（発話内容をそのまま格納）。コース正規化はOpenAIプロンプトで対応する可能性あり
+    （prompterが判断）。
+  - >
+    追加オプション: Gen2に詳細なオプションリスト（18種）とキーワード定義があるが、Gen3では
+    フリーテキスト保存。複数項目の読点区切りはOpenAIプロンプトで指示。
+  - >
+    電話番号リトライ3回: Gen2仕様を維持（Gen3標準は2回）。NON-BLOCKER N-6で確認推奨。
+  - >
+    Gen2のstatus="0"はGen3で使用禁止（CLAUDE.md Rule 12b）。途中切断はシステムデフォルト扱い。
+  - >
+    最後の質問の分岐: classification="問い合わせ" の場合はRAGサブフロー（パターン2）をスキップし
+    直接終話に進む。それ以外はRAGサブフローを経由してから終話。
+  - >
+    終話の分岐: classification="二次受診" の場合は END_終話_二次受診（文言が異なる）、
+    それ以外は END_終話_通常。ContextMatchRouter または Script で分岐。
+  - >
+    Gen2プロンプト内の「03-0000-0000」はプレースホルダー。実際の代表電話番号は0942-35-5522。
+  - "生年月日・診察券番号はこのフローでは生年月日のみ聴取（個人ルート）。診察券番号は聴取しない"
+  - >
+    フロー図で _個人/_企業 サフィックスが付いているモジュール名（当日確認_個人/当日確認_企業、
+    コース_聴取/コース_聴取_企業、問い合わせ_聴取_個人/問い合わせ_聴取_企業、
+    変更内容_聴取/変更内容_聴取_企業、予約日_変更/予約日_変更_企業/予約日_キャンセル/予約日_キャンセル_企業、
+    企業名_個人/企業名_企業）について、TTS文言が同一のモジュールはgeneratorが1つの共有モジュールとして
+    生成してよい。tts_modules の定義名（サフィックスなし）が共有モジュール名となる。
+    予約日_変更 は変更/キャンセル共用のTTSモジュールとして使用する（文言が同一のため）。
+  - >
+    企業_変更/企業_キャンセルでは受診者名(patientName)も聴取する（氏名聴取サブフロー使用）。
+    企業_予約/企業_問い合わせでは受診者名は聴取しない。
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+# 詳細は確認レポート（docs/designs/確認レポート_聖マリアヘルスケアセンター_健診_20260408.md）を参照。
+confirmation_items:
+  - item: "office_id"
+    resolved: false
+  - item: "営業時間（曜日・時間帯）の確認"
+    resolved: false
+  - item: "時間外アナウンス文言の確認（デフォルト文言で仮設定済み）"
+    resolved: false
+  - item: "非通知アナウンス文言の確認（デフォルト文言で仮設定済み）"
+    resolved: false
+  - item: "smsFlag値の割り当て（全正常終話=1で統一。用件別にSMSテンプレート分離が必要か確認）"
+    resolved: false
+  - item: "電話番号リトライ3回の維持の可否（Gen2仕様。Gen3標準は2回）"
+    resolved: false
+  - item: "対象環境（デモで仮設定）"
+    resolved: false
+  - item: "STATUS range_values id=2 のラベル変更検討（現在「代表案内」だが、実際は代表案内/非通知/リトライ超過の3用途で使用。「要転送/対応不可」等への変更はDr.JOY画面表示に影響するため要確認）"
+    resolved: false

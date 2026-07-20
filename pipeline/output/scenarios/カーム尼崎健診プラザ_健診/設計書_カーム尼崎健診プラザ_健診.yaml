@@ -1,0 +1,645 @@
+# ============================================================
+# 設計書 — カーム尼崎健診プラザ 健診
+# ============================================================
+# 生成元: @director エージェント
+# 生成日: 2026-05-07
+# 確認レポート: output/scenarios/カーム尼崎健診プラザ_健診/確認レポート_カーム尼崎健診プラザ_健診_20260507.md
+# 元資料: commubo抽出/【018】愛仁会総合健康センター｜【019】カーム尼崎健診プラザ/【0009-2カーム】健診1_M_本番/
+# ============================================================
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "カーム尼崎健診プラザ"
+  scenario_name: "健診"
+  group_name: "カーム尼崎健診プラザ"
+  flow_name: "カーム尼崎健診プラザ$健診"
+  target_facility: "本院のみ"
+  office_id: "TODO_要確認"
+  phone_number: "06-6430-1315"
+  business_hours: "祝日・年末年始除く 月-金 9:00-15:00、第 2・第 4 土曜 9:00-12:00（その他土曜は休業）"
+  flow_type: "subflow"
+  work_type: "gen1_migration"
+  environment: "prod"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "カーム尼崎健診プラザ$健診"
+      role: "main"
+      description: "冒頭→用件確認(DTMF 2択 1=新規/2=予約以外)→氏名→生年月日→電話番号→用件分岐→(新規:受診希望日 / 予約以外:携帯チェック→[携帯&WEB:WEB案内終話 or 携帯&TEL/その他:現在予約日聴取])→終話。Gen1→Gen3 移管"
+  subflows:
+    - name: "カーム尼崎健診プラザ$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "Gen3 標準サンプルを完全コピー（個人情報サブフロー.bivr）。Gen1『受診者名（担当者名）聴取』に対応。復唱なし（Gen1 仕様踏襲: 聞き取り完了時のみ『ありがとうございます。』アナウンス、yes/no 確認なし）"
+    - name: "カーム尼崎健診プラザ$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "Gen3 標準サンプルを完全コピー。Gen1『生年月日聞取り』に対応。DTMF 西暦 8 桁入力 + 復唱（『<生年月日>でよろしいですか？1=OK, 2=NG』）。和暦/西暦変換あり（大正/昭和/平成/令和）"
+    - name: "カーム尼崎健診プラザ$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "Gen3 標準サンプルを完全コピー。Gen1『連絡先聴取』+『電話番号区切り』に対応。incoming-classifier 3 分岐（携帯/固定/050）→ Phone Normalization → 復唱確認 → phone_type（携帯/固定/その他）を saveContext2DB で確定。後続の 携帯チェック_予約以外 CMR で参照"
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  カーム尼崎健診プラザ 健診専用 AI 電話応対フロー。
+  受診者からの電話を受け、用件（新規予約 / 予約以外）を DTMF 2 択で振り分け、
+  氏名・生年月日・連絡先電話番号を聴取した上で:
+    - 新規予約ルート: 受診希望日（自由テキスト）を聴取して終話、3 営業日以内に担当者が折り返し
+    - 予約以外ルート: 携帯電話発信なら WEB 予約フォーム案内（SMS）の選択肢を提示、
+                     固定電話/050 または WEB 不希望なら 現在の予約日（DTMF 8 桁）を聴取して終話
+  全聴取項目のリトライ失敗は代表電話（06-6430-1315）案内で終話（status=2）。
+  Gen1（commubo）→ Gen3（Brekeke IVR）への移管案件。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "カーム尼崎健診プラザ$健診"
+    diagram: |
+      冒頭(wait 2000ms)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → END_非通知(TTS) → 完了フラグ_非通知(status=2) → 切断
+            └─ 通常 → 営業時間チェック(acceptance_times)
+                        ├─ 時間外 → END_時間外(TTS) → 完了フラグ_時間外(status=6) → 切断
+                        └─ 受付可 → 冒頭_アナウンス(TTS)
+                                      → 用件確認(hearing/enum, DTMF only, max=1)
+                                          [DTMF 1=新規 / 2=予約以外]
+                                      → 氏名聴取(subflow)
+                                      → 生年月日聴取(subflow, 復唱あり)
+                                      → 電話番号聴取(subflow, 復唱あり)
+                                          [phone_type=携帯/固定/その他 を確定]
+                                      → 用件分岐_予約日(CMR on OpenAI_用件確認)
+                                          ├─ 新規 → 受診希望日聴取(hearing/text)
+                                          │           → END_通常(TTS) → 完了フラグ_通常(status=1, sms=1) → 切断
+                                          └─ other(=予約以外) → 携帯チェック_予約以外(CMR on 電話番号聴取)
+                                                ├─ 携帯 → WEB予約希望確認(hearing/enum, DTMF only, max=1, retry=5)
+                                                │           [DTMF 1=WEB / 2=TEL]
+                                                │           ├─ WEB → END_WEB予約案内(TTS) → 完了フラグ_WEB(status=1, sms=1) → 切断
+                                                │           ├─ TEL → 現在の予約日聴取(hearing/datetime, DTMF 8桁)
+                                                │           │           → END_通常(TTS) → 完了フラグ_通常(status=1, sms=1) → 切断
+                                                │           └─ other(5回失敗) → 現在の予約日聴取(hearing/datetime)
+                                                │                       → END_通常 → 切断
+                                                └─ other(=固定/IP/その他) → 現在の予約日聴取(hearing/datetime, DTMF 8桁)
+                                                                          → END_通常 → 切断
+      [全聴取のリトライ失敗] → END_聴取失敗(TTS: 代表電話 06-6430-1315 案内) → 完了フラグ_聴取失敗(status=2) → 切断
+    notes: "Gen1 main.yaml の構造を Gen3 ブロック型で再構成。Gen1 の 携帯チェック（用件確認直後発火）は、Gen3 では 電話番号聴取 サブフローで phone_type を確定する仕様のため、連絡先聴取後の発火位置に移動。これにより着信番号での短絡判定はできなくなるが、UX 影響は許容範囲（director_log 参照）"
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # ============================
+  # 冒頭
+  # ============================
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 用件確認
+
+  # ============================
+  # 用件確認（DTMF 1=新規 / 2=予約以外）
+  # ============================
+  - step: 用件確認
+    type: hearing
+    output_format: enum
+    next: 氏名聴取
+
+  # ============================
+  # 個人情報聴取サブフロー（Gen3 標準を完全コピー）
+  # ============================
+  - step: 氏名聴取
+    type: subflow
+    flowname: "カーム尼崎健診プラザ$氏名聴取"
+    next: 生年月日聴取
+
+  - step: 生年月日聴取
+    type: subflow
+    flowname: "カーム尼崎健診プラザ$生年月日聴取"
+    next: 電話番号聴取
+
+  - step: 電話番号聴取
+    type: subflow
+    flowname: "カーム尼崎健診プラザ$電話番号聴取"
+    next: 用件分岐_予約日
+
+  # ============================
+  # 用件分岐: 新規 → 受診希望日 / 予約以外 → 携帯チェック
+  # ============================
+  - step: 用件分岐_予約日
+    type: context_match_router
+    reference_module: "OpenAI_用件確認"
+    conditions:
+      - match: "新規"
+        next: 受診希望日聴取
+      - match: "other"
+        next: 携帯チェック_予約以外
+
+  # ============================
+  # 携帯チェック（予約以外ルートのみ）: 電話番号聴取が確定した phone_type を参照
+  # ============================
+  - step: 携帯チェック_予約以外
+    type: context_match_router
+    reference_module: "電話番号聴取"
+    conditions:
+      - match: "携帯"
+        next: WEB予約希望確認
+      - match: "other"
+        next: 現在の予約日聴取
+
+  # ============================
+  # WEB 予約希望確認（DTMF 1=WEB / 2=TEL）
+  # ============================
+  - step: WEB予約希望確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "WEB"
+        next: END_WEB予約案内
+      - match: "TEL"
+        next: 現在の予約日聴取
+      - match: "other"
+        next: 現在の予約日聴取
+
+  # ============================
+  # 受診希望日聴取（新規ルート、自由テキスト）
+  # ============================
+  - step: 受診希望日聴取
+    type: hearing
+    output_format: text
+    next: END_通常
+
+  # ============================
+  # 現在の予約日聴取（予約以外ルート、DTMF 8 桁日付）
+  # ============================
+  - step: 現在の予約日聴取
+    type: hearing
+    output_format: datetime
+    next: END_通常
+
+  # ============================
+  # 終話ブロック
+  # ============================
+  - step: END_通常
+    type: termination
+    termination_ref: "END_通常"
+
+  - step: END_WEB予約案内
+    type: termination
+    termination_ref: "END_WEB予約案内"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "新規"
+      - id: "2"
+        order: "2"
+        value: "予約以外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "DTMF 1=新規（健康診断の予約取得）/ 2=予約以外（変更・キャンセル・問い合わせ等）。Gen1 用件聴取の DTMF 2 択を踏襲"
+
+  - context_name: "patientName"
+    context_name_jp: "受診者氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "Gen1『受診者名（担当者名）』。氏名聴取サブフローで格納（フルカタカナ）"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "Gen1『生年月日聞取り』。DTMF 西暦 8 桁入力 + 復唱確認（和暦/西暦変換あり: 大正/昭和/平成/令和）"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "Gen1『連絡先聴取』+『電話番号区切り』。携帯/IP/固定の桁数バリデーション + Phone Normalization + 復唱確認"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納（システム側）"
+
+  - context_name: "reservationDate"
+    context_name_jp: "現在の予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "予約以外ルートで聴取（DTMF 西暦 8 桁）。新規ルートでは未使用"
+
+  - context_name: "preferredDate"
+    context_name_jp: "受診希望日"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "新規ルートで聴取（自由テキスト: 『10月10日』『10月中旬』等の曖昧表現も許容）"
+
+  - context_name: "phone_type"
+    context_name_jp: "端末種別"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "電話番号聴取サブフロー内 incoming-classifier + saveContext2DB で確定（携帯 / 固定 / その他）。携帯チェック_予約以外 CMR で参照し WEB 予約案内の出し分けに利用"
+
+  - context_name: "webReservationChoice"
+    context_name_jp: "WEB予約希望"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "WEB予約希望確認 hearing で DTMF 1=WEB / 2=TEL を保存。WEB 選択時は END_WEB予約案内 へ、TEL 選択時は 現在の予約日聴取 へ進む"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+      - id: "7"
+        order: "7"
+        value: "非通知"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "Gen3 標準。1=正常完了 / 2=代表案内（リトライ失敗）/ 6=時間外 / 7=非通知"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "システム自動取得"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "用件確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 3
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "新規"
+      - "予約以外"
+    notes: "DTMF 1=新規, 2=予約以外。音声入力なし（Gen1 用件聴取『次の2つのうちのいずれかでダイヤルプッシュ』踏襲）。実際の分岐は後段の 用件分岐_予約日 CMR で行う"
+
+  - order: 2
+    name: "WEB予約希望確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 5
+    echo_back: false
+    save_to: "webReservationChoice"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "WEB"
+      - "TEL"
+    notes: "DTMF 1=WEB（WEB 予約フォームを SMS 送付）, 2=TEL（電話で続行）。Gen1 LoopCount 5 回失敗は『入力確認できないので TEL へ』アナウンス → 現在の予約日聴取 へ skip"
+
+  - order: 3
+    name: "受診希望日聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "preferredDate"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "新規ルート専用。曖昧表現（『10月中旬』等）を許容するため text 形式。Gen1『受診を希望される日を、「10月10日」、のように日程や、「10月中旬」、のように時期など、自由におっしゃってください』"
+
+  - order: 4
+    name: "現在の予約日聴取"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 8
+    retry_count: 3
+    echo_back: true
+    save_to: "reservationDate"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: "予約以外ルート専用。Gen1『健診予約日をダイヤルプッシュで西暦8桁の数字を入力してください』踏襲。復唱あり（『<日付>でよろしいですか？1=OK / 2=NG』）。DTMF 入力仕様: 西暦8桁数字（例 DTMF 20251010 = 2025年10月10日）— 数字キー以外の単独 DTMF 対応はなし。復唱フェーズの DTMF 対応: 1=確定 / 2=再入力"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "用件確認"
+    tts_announcement: "ご用件を、次の2つのうちの、いずれかでダイヤルプッシュしてください。「予約を取る」は1を、「予約の変更・キャンセル」は2を、それでは、押してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "新規"
+        - "予約以外"
+      mapping:
+        - input: "DTMF 1"
+          output: "新規"
+        - input: "DTMF 2"
+          output: "予約以外"
+      no_result_condition: "DTMF 1 / 2 以外、または無音"
+    save_to: "classification"
+    next_step: "氏名聴取"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "WEB予約希望確認"
+    tts_announcement: "ご予約はWEB予約フォームからお申し込みも可能でございます。WEB予約フォームからお申し込みをご希望の場合は1を、このままお電話でのお申し込みをご希望の場合は2を、ダイヤルプッシュしてください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "WEB"
+        - "TEL"
+      mapping:
+        - input: "DTMF 1"
+          output: "WEB"
+        - input: "DTMF 2"
+          output: "TEL"
+      no_result_condition: "DTMF 1 / 2 以外、または無音"
+    save_to: "webReservationChoice"
+    next_step: "現在の予約日聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: "入力が確認できませんでした。引き続き、電話にてご案内させていただきます。"
+
+  - step_name: "受診希望日聴取"
+    tts_announcement: "受診を希望される日を、「10月10日」、のように日程や、「10月中旬」、のように時期など、自由におっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "日付・時期表現（『10月10日』『10月中旬』『来月上旬』等）"
+          output: "発話内容をそのまま格納（text）"
+      no_result_condition: "無音"
+    save_to: "preferredDate"
+    next_step: "END_通常"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "現在の予約日聴取"
+    tts_announcement: "現在の予約日を、ダイヤルプッシュで西暦8桁の数字を入力してください。例えば、2025年10月10日であれば、20251010、と入力してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "DTMF 8 桁数字（例: 20251010）"
+          output: "yyyy-MM-dd 00:00:00 形式に正規化"
+      no_result_condition: "8 桁取得不能、または無音"
+    save_to: "reservationDate"
+    next_step: "END_通常"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（必須）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "7"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "恐れ入りますが、時間内におかけ直しください。本窓口の受付時間は、日祝日、年末年始を除く、月曜から金曜の9時から15時、第2、第4土曜日は9時から12時となります。その他土曜日は受け付けておりませんのでご注意ください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "全聴取項目のリトライ上限到達（共通フォールバック）"
+    tts_announcement: "お電話が遠いようで、回答が確認できませんでした。恐れ入りますが、祝日を除く、月曜日から金曜日の8時45分から17時、土曜日の8時45分から12時に、代表電話、06-6430-1315へおかけなおしください。電話番号が分かる場合はそのままお電話をお切りください。分からない場合はご案内いたしますのでメモをご準備ください。代表電話番号は、06-6430-1315です。繰り返します。代表電話番号は、06-6430-1315です。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系 ---
+  - name: "END_通常"
+    condition: "新規/予約以外ルートとも、聴取完了後の通常終話"
+    tts_announcement: "3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_通常"
+
+  - name: "END_WEB予約案内"
+    condition: "予約以外ルート + 携帯発信 + WEB 選択"
+    tts_announcement: "かしこまりました。お電話終了後にショートメールでURLをお送りいたします。URLをタップし、予約申し込みを完了させてください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_WEB予約案内"
+
+# smsFlag 分岐設計
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ 検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTS モジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。カーム尼崎健診プラザの、予約専用AI電話です。"
+
+  - module_name: "用件確認"
+    purpose: "用件分岐の DTMF 入力プロンプト"
+    announcement: "ご用件を、次の2つのうちの、いずれかでダイヤルプッシュしてください。「予約を取る」は1を、「予約の変更・キャンセル」は2を、それでは、押してください。"
+
+  - module_name: "WEB予約希望確認"
+    purpose: "WEB 予約 or TEL 続行の DTMF 入力プロンプト"
+    announcement: "ご予約はWEB予約フォームからお申し込みも可能でございます。WEB予約フォームからお申し込みをご希望の場合は1を、このままお電話でのお申し込みをご希望の場合は2を、ダイヤルプッシュしてください。"
+
+  - module_name: "受診希望日聴取"
+    purpose: "新規ルートの希望日自由聴取プロンプト"
+    announcement: "受診を希望される日を、「10月10日」、のように日程や、「10月中旬」、のように時期など、自由におっしゃってください。"
+
+  - module_name: "現在の予約日聴取"
+    purpose: "予約以外ルートの現在予約日 DTMF 入力プロンプト"
+    announcement: "現在の予約日を、ダイヤルプッシュで西暦8桁の数字を入力してください。例えば、2025年10月10日であれば、20251010、と入力してください。"
+
+  - module_name: "END_非通知"
+    purpose: "非通知着信アナウンス"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_時間外"
+    purpose: "営業時間外アナウンス"
+    announcement: "恐れ入りますが、時間内におかけ直しください。本窓口の受付時間は、日祝日、年末年始を除く、月曜から金曜の9時から15時、第2、第4土曜日は9時から12時となります。その他土曜日は受け付けておりませんのでご注意ください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ上限到達時の代表電話案内"
+    announcement: "お電話が遠いようで、回答が確認できませんでした。恐れ入りますが、祝日を除く、月曜日から金曜日の8時45分から17時、土曜日の8時45分から12時に、代表電話、06-6430-1315へおかけなおしください。電話番号が分かる場合はそのままお電話をお切りください。分からない場合はご案内いたしますのでメモをご準備ください。代表電話番号は、06-6430-1315です。繰り返します。代表電話番号は、06-6430-1315です。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_通常"
+    purpose: "正常完了アナウンス（折り返し連絡約束）"
+    announcement: "3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_WEB予約案内"
+    purpose: "WEB 予約フォーム URL の SMS 送付案内"
+    announcement: "かしこまりました。お電話終了後にショートメールでURLをお送りいたします。URLをタップし、予約申し込みを完了させてください。お電話ありがとうございました。それでは失礼いたします。"
+
+# --- セクション10: AmiVoice 辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "受診希望日聴取"
+    words: |
+      上旬 じょうじゅん
+      中旬 ちゅうじゅん
+      下旬 げじゅん
+      来月 らいげつ
+      来週 らいしゅう
+      再来週 さらいしゅう
+      再来月 さらいげつ
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "Gen1（commubo）→ Gen3（Brekeke IVR）移管。元資料: commubo抽出/【018】愛仁会総合健康センター｜【019】カーム尼崎健診プラザ/【0009-2カーム】健診1_M_本番/"
+  - "用件入口は DTMF 2 値のみ（1=新規 / 2=予約以外）。音声入力は受け付けない。Gen1 main.yaml の用件聴取仕様を踏襲"
+  - "**第 2/第 4 土曜のみ営業の特殊ルール**: acceptance_times の標準仕様（曜日 × 時間帯）では表現困難。**Dr.JOY 管理画面の祝日カレンダー機能で第 1/第 3/第 5 土曜を休業日として個別登録**することで対応する想定（Dr.JOY 運用担当に確認要・confirmation_items 参照）"
+  - "**携帯チェック の発火位置**: Gen1 では用件確認直後（連絡先聴取の前）に着信番号で携帯/固定を判定していたが、Gen3 では電話番号聴取サブフローが phone_type を確定する仕様のため、**連絡先聴取後**に発火する設計とした。これにより着信番号での短絡判定（『電話前にいきなり WEB 予約フォーム案内』）はできなくなるが、UX 影響は許容範囲（director_log 参照）"
+  - "新規ルートは受診希望日（自由テキスト）のみ聴取。健診種類（人間ドック/協会けんぽ/その他）の聴取は無し → 担当者折り返しに任せる（Gen1 仕様踏襲）"
+  - "Gen1『用件の復唱（健康診断）』『用件の復唱（変更）』は単方向アナウンスで yes/no 確認なし。Gen3 では echo_back: false とし、用件確認 hearing 直後に氏名聴取へ直接進む（復唱アナウンスは省略）"
+  - "全聴取項目のリトライ失敗は共通の END_聴取失敗（代表電話 06-6430-1315 案内）で終話。Gen1 の 各 CP（Compliance Path）箱が 代表電話へ → 直通番号案内 に集約されている設計を踏襲"
+  - "WEB 予約希望確認のリトライ 5 回失敗は『skip』で 現在の予約日聴取 に進む（Gen1 LoopCount 5 → 入力確認できないので TEL へ → 受診者名 を Gen3 で簡素化）"
+  - "代表電話案内の受付時間（祝日除く 月-金 8:45-17:00、土 8:45-12:00）と本番受付時間（時間外案内文言: 月-金 9:00-15:00 + 第 2/第 4 土曜 9:00-12:00）に Gen1 元資料上で差分あり。本番受付時間は時間外案内の値を採用、代表電話案内は元資料 TTS をそのまま転記"
+  - "TTS は `{tts_g:...}` 小文字形式（GOOGLE TTS デフォルト）。SSML タグは使用しない（Re-confirmation node の `<speak type=\"telephone\">` だけは電話番号復唱の SSML 例外として許可）"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "[Dr.JOY 側] 営業時間スケジュール詳細（基本枠: Mon-Fri 9:00-15:00, Sat 9:00-12:00）の登録"
+    resolved: false
+    assignee: "Dr.JOY 運用担当"
+    notes: "フロー側は acceptance_times モジュール配置のみ"
+
+  - item: "[Dr.JOY 側] 第 1/第 3/第 5 土曜の休業日登録（祝日カレンダー機能）"
+    resolved: false
+    assignee: "Dr.JOY 運用担当"
+    notes: "第 2/第 4 土曜のみ営業の特殊ルールを Dr.JOY 祝日カレンダーで吸収。フロー側 acceptance_times 修正は不要。年末年始（12/29-1/3 等）の休業も同様"
+
+  - item: "[Dr.JOY 側] SMS 送信文面（END_通常 用、END_WEB予約案内 用）の登録"
+    resolved: false
+    assignee: "Dr.JOY 運用担当"
+    notes: "END_通常: 折り返し連絡約束の文面 / END_WEB予約案内: WEB 予約フォーム URL 含む文面。フロー側は sms_flag: 1 シグナルのみ送出"
+
+  - item: "[Dr.JOY 側] WEB 予約フォーム URL の準備（SMS 本文に埋め込む）"
+    resolved: false
+    assignee: "Dr.JOY 運用担当"
+
+  - item: "[Dr.JOY 側] office_id の設定確認"
+    resolved: false
+    assignee: "Dr.JOY 運用担当"
+
+  - item: "[Brekeke 側] 着信電話番号（ARS 番号）の紐付け設定"
+    resolved: false
+    assignee: "Brekeke 設定担当"
+    notes: "デモ/本番で異なる 050 番号を指定。設計書には記載しない"
+
+  - item: "[本番投入前] 携帯チェック発火位置の Gen1→Gen3 差分について通話テストで UX 影響確認"
+    resolved: false
+    assignee: "QA 担当"
+    notes: "Gen1: 用件確認直後で携帯判定（連絡先聴取の前）→ Gen3: 連絡先聴取後で携帯判定。WEB 予約希望確認の発火が後段に移ることが UX 上問題ないか実機確認"
+
+# --- セクション13: director 判断ログ（参考）---
+director_log:
+  - decision: "携帯チェック の発火位置の Gen1→Gen3 移植方針"
+    choice: "(B) 電話番号聴取 後段に配置（Gen3 標準パターン）"
+    reason: "Gen3 では 電話番号聴取 サブフロー内 incoming-classifier が phone_type context を確定する仕様。Gen1 の『用件確認直後に着信番号で携帯/固定判定』を Gen3 で再現するには script_template: phone_type に独自実装が必要。標準パターン採用で実装コスト・保守性が改善。UX 的には WEB 予約希望確認の発火が後段（連絡先聴取後）に移るが、既に氏名・生年月日・電話番号を伺った後でも違和感は許容範囲"
+
+  - decision: "受診希望日聴取 の output_format"
+    choice: "text"
+    reason: "Gen1 元資料『「10月10日」のように日程や、「10月中旬」のように時期など、自由におっしゃってください』より、曖昧表現を許容するため。datetime では『10月中旬』を YYYY-MM-DD に正規化できない"
+
+  - decision: "現在の予約日聴取 の output_format"
+    choice: "datetime"
+    reason: "Gen1 元資料は DTMF 西暦 8 桁入力（19700404 形式）を採用しており、明確な YYYY-MM-DD への正規化が前提"
+
+  - decision: "用件確認 の echo_back"
+    choice: "false"
+    reason: "Gen1 の『用件の復唱（健康診断）』『用件の復唱（変更）』は単方向アナウンスで yes/no 確認なし。Gen3 echo_back（Re-confirmation node）は yes/no 確認を強制するため不適合"
+
+  - decision: "用件確認 の出力ラベル"
+    choice: '"新規" / "予約以外"'
+    reason: "Gen1 main.yaml 用件の分岐_1 が 一致『その他』→ 携帯チェック / default → 受診者名 という構造で、DTMF=2 を『予約以外』として扱っているため。entity 定義上は『変更』だが、流れ上は予約以外 = 変更 + 問い合わせ + キャンセル の包括カテゴリ"
+
+  - decision: "終話パターンの SMS フラグ"
+    choice: "共通 sms=1（携帯/固定で TTS を分けない）"
+    reason: "Gen1 終話挨拶『3 営業日以内に担当者から折り返し電話、もしくはショートメール』が両者言及で、固定電話に対しても違和感なし。設計簡素化のため固定/携帯で TTS 文言を分けない"
+
+  - decision: "リトライ失敗時の終話"
+    choice: "共通 END_聴取失敗（代表電話案内）"
+    reason: "Gen1 main.yaml の全 CP（Compliance Path）箱が 代表電話へ → 直通番号案内 の同一終話に集約されているため"
+
+  - decision: "WEB 予約希望確認 のリトライ失敗時"
+    choice: "skip → 現在の予約日聴取"
+    reason: "Gen1 の LoopCount 5 回失敗 → 入力確認できないので TEL へ → 受診者名 を Gen3 で簡素化。Gen3 では既に氏名等聴取済みのため、現在予約日聴取に直接進む"
+
+  - decision: "サブフロー step 名"
+    choice: "氏名聴取 / 生年月日聴取 / 電話番号聴取（jump_ プレフィックス付与なし）"
+    reason: "director プロンプトの新命名規約に準拠"
+
+  - decision: "flow 名 / group 名"
+    choice: "正式名「カーム尼崎健診プラザ」（11 文字）"
+    reason: "URL エンコード後 33 バイト + サブフロー名最長（電話番号聴取 = 約 27 バイト）+ \"drjoy^\" + \"$\" + \"_YYYYMMDD\" = 80 バイト程度。255 バイト制約内・19 文字以内ルール遵守"

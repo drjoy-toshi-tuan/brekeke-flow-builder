@@ -1,0 +1,694 @@
+# ゴールデンテンプレート: 健診受付型（Health Checkup Intake）
+# パターン概要: 複数施設対応の健診受付フロー。施設選択（DTMF 3択）→ 用件選択（DTMF 2択）→ 問い合わせ内容（STT, optional）→ 氏名・電話番号サブフロー。
+# 参照元: 中之島クリニック 健診 設計書を汎用化
+# 用途: Directorエージェントが新規設計書を生成する際のリファレンス。
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "サンプルクリニック"
+  group_name: "サンプルCL"
+  flow_name: "サンプルCL$健診"
+  target_facility: "サンプルクリニック / サンプルクリニックレディースプラザ / サンプルガーデンズ健診クリニック"
+  office_id: "TODO_要確認"
+  phone_number: "06-1234-5678"
+  business_hours: "祝日除く月〜土 9:00〜17:00"
+  flow_type: "subflow"
+  work_type: "new"
+  environment: "demo"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "サンプルCL$健診"
+      role: "main"
+      description: "冒頭チェーン → 施設選択（DTMF 3択）→ 用件選択（DTMF 2択）→ 問い合わせ内容 → サブフロー遷移"
+    - name: "サンプルCL$氏名聴取"
+      role: "sub"
+      description: "氏名聴取 → 結果返却"
+    - name: "サンプルCL$電話番号聴取"
+      role: "sub"
+      description: "着信番号分岐 → 電話番号聴取/復唱確認 → 終話チェーン → 結果返却"
+  subflows:
+    - name: "サンプルCL$氏名聴取"
+      target: "氏名聴取"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "氏名聴取サブフロー。リトライ上限到達時は氏名未取得のまま次へスキップ"
+    - name: "サンプルCL$電話番号聴取"
+      target: "電話番号聴取"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "self_contained"
+      notes: "電話番号聴取サブフロー。終話チェーン（smsFlag 6パターン分岐）を含む。termination=self_contained のためサブフロー内で通話終了する"
+
+# --- セクション3: フローの目的 ---
+purpose: "3施設共通の健診予約受付AI電話。施設選択（DTMF 3択）の後、人間ドック・健診の受付またはその他問い合わせの振り分けを行う。氏名と連絡先電話番号を聴取し、担当者への折り返し依頼を受け付ける。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "サンプルCL$健診"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → acceptance_times
+            ├─ 時間外 → 時間外_アナウンス(TTS) → 完了フラグ_時間外 → END_時間外 → 切断
+            └─ 受付可 → incoming-classifier
+                          ├─ 非通知 → 非通知_アナウンス(TTS) → 完了フラグ_非通知 → END_非通知 → 切断
+                          └─ 通常 → 冒頭_アナウンス(TTS)
+                                      → 施設_選択(TTS)
+                                      → 入力_施設_選択(DTMF AmiVoice STT, max_dtmf_length=1)
+                                      → OpenAI_施設_選択(generate_by_OpenAI)
+                                          ├─ サンプルクリニック → saveContext_施設
+                                          ├─ サンプルクリニックレディースプラザ → saveContext_施設
+                                          ├─ サンプルガーデンズ健診クリニック → saveContext_施設
+                                          └─ NO_RESULT → リトライ_施設_選択
+                                      → saveContext_施設(saveContext2DB)
+                                      → 用件_選択(TTS)
+                                      → 入力_用件_選択(DTMF AmiVoice STT, max_dtmf_length=1)
+                                      → OpenAI_用件_選択(generate_by_OpenAI)
+                                          ├─ 人間ドック → saveContext_用件 → ジャンプ_氏名聴取
+                                          ├─ その他 → saveContext_用件 → 問合せ_内容(TTS)
+                                          │            → 入力_問合せ_内容(AmiVoice STT)
+                                          │            → OpenAI_問合せ_内容
+                                          │            → saveContext_問合せ → ジャンプ_氏名聴取
+                                          └─ NO_RESULT → リトライ_用件_選択
+                                      → [氏名聴取サブフローから戻り]
+                                      → ジャンプ_電話番号聴取(Custom Jump to Flow)
+                                      → [電話番号聴取サブフロー内で終話まで完結]
+
+      ─── メインフロー内終話パターン ───
+      END_時間外 → 切断
+      END_非通知 → 切断
+    notes: "冒頭チェーン順序: wait → saveContextModel2DB → acceptance_times → incoming-classifier。時間外チェックを先に実施"
+
+  - flow_name: "サンプルCL$氏名聴取"
+    diagram: |
+      ★★★ 完全コピー対象（CLAUDE.md Rule 9） ★★★
+      docs/reference/bivr/samples/個人情報サブフロー.bivr の「氏名聴取」フローを完全コピーする。
+      フロー名プレフィックスのみ「サンプルCL$」に置換。構造・接続・スクリプトは一切変更不可。
+
+      構成: AmiVoice STT → OpenAI正規化 → saveContext → script_結果返却（5モジュール）
+      リトライ上限到達時は氏名未取得のままスキップ。script_結果返却_氏名で$runner.setResult()実行。
+    notes: |
+      CLAUDE.md Rule 9/11 準拠。個人情報サブフロー.bivr を完全コピー。
+      フロー名プレフィックスのみ施設名に置換。
+
+  - flow_name: "サンプルCL$電話番号聴取"
+    diagram: |
+      ★★★ 完全コピー対象（CLAUDE.md Rule 9/10） ★★★
+      docs/reference/bivr/samples/個人情報サブフロー.bivr の「電話番号聴取」フローを完全コピーする。
+      フロー名プレフィックスのみ「サンプルCL$」に置換。構造・接続・スクリプトは一切変更不可。
+
+      構成: incoming-classifier → 携帯/固定分岐 → Phone Normalization → Re-confirmation（24モジュール）
+
+      ★ 以下の終話チェーンのみ施設固有のカスタマイズが必要 ★
+      電話番号聴取完了後の終話チェーンで、smsFlag の分岐を施設固有に設定する:
+
+      [終話チェーン（施設固有部分）]
+        → smsFlag分岐(script で clinicalDepartment × full-body_checkup を判定)
+            ├─ 人間ドック × サンプルCL → 完了フラグ(status=1, smsFlag=1) → END_人間ドック(TTS) → 切断
+            ├─ 人間ドック × レディース → 完了フラグ(status=1, smsFlag=2) → END_人間ドック(TTS) → 切断
+            ├─ 人間ドック × ガーデンズ → 完了フラグ(status=1, smsFlag=3) → END_人間ドック(TTS) → 切断
+            ├─ その他 × サンプルCL → 完了フラグ(status=1, smsFlag=4) → END_その他(TTS) → 切断
+            ├─ その他 × レディース → 完了フラグ(status=1, smsFlag=5) → END_その他(TTS) → 切断
+            └─ その他 × ガーデンズ → 完了フラグ(status=1, smsFlag=6) → END_その他(TTS) → 切断
+    notes: |
+      CLAUDE.md Rule 9/10 準拠。電話番号聴取部分は個人情報サブフロー.bivr を完全コピー。
+      終話チェーン（smsFlag分岐）のみ施設固有にカスタマイズ。@General$Script で実装。
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "予約"
+      - id: "2"
+        order: "2"
+        value: "変更"
+      - id: "3"
+        order: "3"
+        value: "キャンセル"
+      - id: "4"
+        order: "4"
+        value: "問合せ"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "用件区分。本フローでは常に「問合せ」をセット"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "施設"
+    display_type: "DEPARTMENT"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "サンプルクリニック"
+      - id: "2"
+        order: "2"
+        value: "サンプルクリニックレディースプラザ"
+      - id: "3"
+        order: "3"
+        value: "サンプルガーデンズ健診クリニック"
+      - id: "4"
+        order: "4"
+        value: "登録なし"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "施設選択結果。DTMF 1/2/3 に対応"
+
+  - context_name: "full-body_checkup"
+    context_name_jp: "用件詳細"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: false
+    deletable: true
+    notes: "「人間ドック」または「その他」を保存"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "氏名聴取サブフローで聴取"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "電話番号聴取サブフローで聴取"
+
+  - context_name: "reason"
+    context_name_jp: "問合せ内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: false
+    deletable: true
+    notes: "その他ルートのみ。フリーテキスト"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: true
+    notes: "着信番号自動格納"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "1=未処理 2=代表案内"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "受電日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: true
+    notes: "通話ID自動格納"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "施設選択"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "サンプルクリニック"
+      - "サンプルクリニックレディースプラザ"
+      - "サンプルガーデンズ健診クリニック"
+    notes: "DTMF 1/2/3。3施設から選択"
+
+  - order: 2
+    name: "用件選択"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "full-body_checkup"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "人間ドック"
+      - "その他"
+    notes: "DTMF 1=人間ドック/健診, 2=その他。classificationは常に「問合せ」を固定セット"
+
+  - order: 3
+    name: "問合せ内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "none"
+    output_format: "free_text"
+    output_labels: []
+    notes: "その他ルートのみ。フリーテキスト保存（正規化不要）"
+
+  - order: 4
+    name: "氏名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientName"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "氏名聴取サブフロー内"
+
+  - order: 5
+    name: "電話番号"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 11
+    retry_count: 3
+    echo_back: true
+    save_to: "additionalPhoneNumber"
+    openai_processing: "normalize"
+    output_format: "number"
+    output_labels: []
+    notes: "電話番号聴取サブフロー内。Phone Normalization + Re-confirmation。リトライ3回（第2世代仕様維持）"
+
+  - order: 6
+    name: "電話番号確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: null
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "肯定"
+      - "否定"
+    notes: "電話番号聴取サブフロー内。肯定/否定の復唱確認"
+
+  - order: 7
+    name: "携帯確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: null
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "肯定"
+      - "否定"
+    notes: "電話番号聴取サブフロー内。着信番号が携帯の場合の復唱確認"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "施設選択"
+    tts_announcement: "お電話ありがとうございます。お問い合わせの施設をお選びください。サンプルクリニックの方は1、サンプルクリニックレディースプラザの方は2、サンプルガーデンズ健診クリニックの方は3を押してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "サンプルクリニック"
+        - "サンプルクリニックレディースプラザ"
+        - "サンプルガーデンズ健診クリニック"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「サンプルクリニック」を含む"
+          output: "サンプルクリニック"
+        - input: "DTMF 2 または「レディースプラザ」を含む"
+          output: "サンプルクリニックレディースプラザ"
+        - input: "DTMF 3 または「ガーデンズ」を含む"
+          output: "サンプルガーデンズ健診クリニック"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "clinicalDepartment"
+    next_step: "用件_選択"
+    retry_failure: "end_failure"
+
+  - step_name: "用件選択"
+    tts_announcement: "ご用件をお選びください。1、人間ドックや健診。2、それ以外。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "人間ドック"
+        - "その他"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「ドック」「健診」「検診」「人間ドック」を含む"
+          output: "人間ドック"
+        - input: "DTMF 2 または「それ以外」「その他」を含む"
+          output: "その他"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "full-body_checkup"
+    next_step: "人間ドック→ジャンプ_氏名聴取 / その他→問合せ_内容"
+    retry_failure: "skip"
+
+  - step_name: "問合せ内容"
+    tts_announcement: "改めて内容を確認のうえ折り返しご連絡いたしますが、本日はどのようなご用件でしょうか。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "reason"
+    next_step: "ジャンプ_氏名聴取"
+    retry_failure: "skip"
+
+  - step_name: "氏名"
+    tts_announcement: "お名前をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "氏名テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "氏名テキスト（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "patientName"
+    next_step: "script_結果返却_氏名 → メインフロー → ジャンプ_電話番号聴取"
+    retry_failure: "skip"
+
+  - step_name: "携帯_確認"
+    tts_announcement: "ご連絡先の電話番号は{telephoneNumber}でよろしいでしょうか。1、はい。2、いいえ。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "肯定"
+        - "否定"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「はい」を含む"
+          output: "肯定"
+        - input: "DTMF 2 または「いいえ」を含む"
+          output: "否定"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: null
+    next_step: "肯定→script_携帯判別 / 否定→電話番号_聴取（その他パスへ合流）"
+    retry_failure: "skip"
+
+  - step_name: "電話番号_聴取"
+    tts_announcement: "ご連絡先の電話番号をお話しください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "正規化済み電話番号"
+      mapping:
+        - input: "10〜11桁の数値（先頭0）"
+          output: "正規化済み電話番号"
+      no_result_condition: "電話番号として不正な形式"
+    save_to: "additionalPhoneNumber"
+    next_step: "Re-confirmation（電話番号確認）"
+    retry_failure: "end_failure"
+
+  - step_name: "電話番号_確認"
+    tts_announcement: "連絡先の電話番号は{additionalPhoneNumber}でよろしいでしょうか。1、はい。2、いいえでお答えください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "肯定"
+        - "否定"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「はい」を含む"
+          output: "肯定"
+        - input: "DTMF 2 または「いいえ」を含む"
+          output: "否定"
+        - input: "10〜11桁の数値が入力された場合"
+          output: "新しい番号としてadditionalPhoneNumberを更新し再度確認"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: null
+    next_step: "肯定→script_携帯判別→終話チェーン / 否定→電話番号_訂正"
+    retry_failure: "skip"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # 正常終話（6パターン）
+  - name: "END_人間ドック_サンプル"
+    condition: "full-body_checkup=人間ドック & clinicalDepartment=サンプルクリニック"
+    tts_announcement: "人間ドックのご連絡を承りました。担当者からの連絡にて確定となります。なお、この後届くSMSのURLから項目の入力をお願いいたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_人間ドック_サンプル"
+
+  - name: "END_人間ドック_レディース"
+    condition: "full-body_checkup=人間ドック & clinicalDepartment=サンプルクリニックレディースプラザ"
+    tts_announcement: "人間ドックのご連絡を承りました。担当者からの連絡にて確定となります。なお、この後届くSMSのURLから項目の入力をお願いいたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "2"
+    completion_flag_name: "完了フラグ_人間ドック_レディース"
+
+  - name: "END_人間ドック_ガーデンズ"
+    condition: "full-body_checkup=人間ドック & clinicalDepartment=サンプルガーデンズ健診クリニック"
+    tts_announcement: "人間ドックのご連絡を承りました。担当者からの連絡にて確定となります。なお、この後届くSMSのURLから項目の入力をお願いいたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "3"
+    completion_flag_name: "完了フラグ_人間ドック_ガーデンズ"
+
+  - name: "END_その他_サンプル"
+    condition: "full-body_checkup=その他 & clinicalDepartment=サンプルクリニック"
+    tts_announcement: "ご用件をお預かりいたしました。担当者から折り返し電話、もしくはSMSにてご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "4"
+    completion_flag_name: "完了フラグ_その他_サンプル"
+
+  - name: "END_その他_レディース"
+    condition: "full-body_checkup=その他 & clinicalDepartment=サンプルクリニックレディースプラザ"
+    tts_announcement: "ご用件をお預かりいたしました。担当者から折り返し電話、もしくはSMSにてご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "5"
+    completion_flag_name: "完了フラグ_その他_レディース"
+
+  - name: "END_その他_ガーデンズ"
+    condition: "full-body_checkup=その他 & clinicalDepartment=サンプルガーデンズ健診クリニック"
+    tts_announcement: "ご用件をお預かりいたしました。担当者から折り返し電話、もしくはSMSにてご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "6"
+    completion_flag_name: "完了フラグ_その他_ガーデンズ"
+
+  # 異常終話
+  - name: "END_上限到達エラー"
+    condition: "電話番号リトライ上限超過"
+    tts_announcement: "申し訳ございません。折り返し先のお電話番号を聞き取ることができませんでした。恐れ入りますが、コールセンターへおかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_上限エラー"
+
+  - name: "END_時間外"
+    condition: "acceptance_times で時間外と判定"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_非通知"
+    condition: "incoming-classifier で非通知と判定"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。"
+    status: "2"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_非通知"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: true
+  routing_keys:
+    - "clinicalDepartment"
+    - "full-body_checkup"
+  patterns:
+    - condition: "clinicalDepartment=サンプルクリニック & full-body_checkup=人間ドック"
+      sms_flag: "1"
+      notes: "人間ドック × サンプルCL"
+    - condition: "clinicalDepartment=サンプルクリニックレディースプラザ & full-body_checkup=人間ドック"
+      sms_flag: "2"
+      notes: "人間ドック × レディース"
+    - condition: "clinicalDepartment=サンプルガーデンズ健診クリニック & full-body_checkup=人間ドック"
+      sms_flag: "3"
+      notes: "人間ドック × ガーデンズ"
+    - condition: "clinicalDepartment=サンプルクリニック & full-body_checkup=その他"
+      sms_flag: "4"
+      notes: "その他 × サンプルCL"
+    - condition: "clinicalDepartment=サンプルクリニックレディースプラザ & full-body_checkup=その他"
+      sms_flag: "5"
+      notes: "その他 × レディース"
+    - condition: "clinicalDepartment=サンプルガーデンズ健診クリニック & full-body_checkup=その他"
+      sms_flag: "6"
+      notes: "その他 × ガーデンズ"
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  # メインフロー
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。"
+
+  - module_name: "施設_選択"
+    purpose: "施設選択案内（3択）"
+    announcement: "お問い合わせの施設をお選びください。サンプルクリニックの方は1、サンプルクリニックレディースプラザの方は2、サンプルガーデンズ健診クリニックの方は3を押してください。"
+
+  - module_name: "用件_選択"
+    purpose: "用件選択案内（2択）"
+    announcement: "ご用件をお選びください。1、人間ドックや健診。2、それ以外。"
+
+  - module_name: "問合せ_内容"
+    purpose: "問い合わせ内容聴取案内"
+    announcement: "改めて内容を確認のうえ折り返しご連絡いたしますが、本日はどのようなご用件でしょうか。"
+
+  - module_name: "時間外_アナウンス"
+    purpose: "時間外案内"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知案内"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。"
+
+  - module_name: "END_時間外"
+    purpose: "時間外終話"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_非通知"
+    purpose: "非通知終話"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。"
+
+  # 氏名聴取サブフロー
+  - module_name: "氏名_聴取"
+    purpose: "氏名聴取案内"
+    announcement: "お名前をお話しください。"
+
+  # 電話番号聴取サブフロー
+  - module_name: "携帯_確認"
+    purpose: "携帯番号復唱確認"
+    announcement: "ご連絡先の電話番号は{telephoneNumber}でよろしいでしょうか。1、はい。2、いいえ。"
+
+  - module_name: "電話番号_聴取"
+    purpose: "電話番号聴取案内"
+    announcement: "ご連絡先の電話番号をお話しください。"
+
+  - module_name: "電話番号_確認"
+    purpose: "電話番号復唱確認"
+    announcement: "連絡先の電話番号は{additionalPhoneNumber}でよろしいでしょうか。1、はい。2、いいえでお答えください。"
+
+  - module_name: "電話番号_訂正"
+    purpose: "電話番号訂正案内"
+    announcement: "正しい電話番号を再度お話しください。"
+
+  - module_name: "END_人間ドック"
+    purpose: "人間ドック受付完了終話（3施設共通TTS）"
+    announcement: "人間ドックのご連絡を承りました。担当者からの連絡にて確定となります。なお、この後届くSMSのURLから項目の入力をお願いいたします。お電話ありがとうございました。"
+
+  - module_name: "END_その他"
+    purpose: "その他用件受付完了終話（3施設共通TTS）"
+    announcement: "ご用件をお預かりいたしました。担当者から折り返し電話、もしくはSMSにてご連絡いたします。お電話ありがとうございました。"
+
+  - module_name: "END_上限到達エラー"
+    purpose: "電話番号リトライ上限終話"
+    announcement: "申し訳ございません。折り返し先のお電話番号を聞き取ることができませんでした。恐れ入りますが、コールセンターへおかけ直しください。お電話ありがとうございました。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "施設選択"
+    words: |
+      サンプルクリニック さんぷるくりにっく
+      サンプル さんぷる
+      レディースプラザ れでぃーすぷらざ
+      レディース れでぃーす
+      サンプルガーデンズ健診クリニック さんぷるがーでんずけんしんくりにっく
+      サンプルガーデンズ さんぷるがーでんず
+
+  - step_name: "用件選択"
+    words: |
+      人間ドック にんげんどっく
+      健診 けんしん
+      検診 けんしん
+      ドック どっく
+      その他 そのた
+      それ以外 それいがい
+
+  - step_name: "問合せ内容"
+    words: |
+      （フリーテキスト — profile_words 空）
+
+  - step_name: "氏名"
+    words: |
+      （フリーテキスト — profile_words 空）
+
+  - step_name: "電話番号"
+    words: |
+      （DTMFメイン — profile_words 空）
+
+  - step_name: "電話番号確認"
+    words: |
+      はい はい
+      いいえ いいえ
+
+  - step_name: "携帯確認"
+    words: |
+      はい はい
+      いいえ いいえ
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "3施設共通の1フロー構成。施設選択が冒頭にある特殊構成"
+  - "smsFlag が 6パターン: clinicalDepartment（3値）x full-body_checkup（2値）= 6パターン。通常のフローより複雑"
+  - "電話番号リトライ3回: 第2世代の仕様を維持（第3世代標準の2回より1回多い）"
+  - "電話番号確認中の番号再入力対応: 確認中に10-11桁の新しい番号をそのまま入力できる仕様"
+  - "classification は常に「問合せ」: 人間ドックでも「問合せ」がセットされる"
+  - "終話チェーンは電話番号聴取サブフロー内で完結: smsFlag分岐を含む"
+  - "冒頭チェーンの順序: wait → saveContextModel2DB → acceptance_times → incoming-classifier（時間外チェックを先に実施）"
+  - "生年月日・診察券番号はこのフローでは聴取しない"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "office_id"
+    resolved: false
+  - item: "営業時間（曜日・時間帯）の最終確認"
+    resolved: false
+  - item: "時間外アナウンスの文言"
+    resolved: true
+  - item: "非通知アナウンスの文言"
+    resolved: true
+  - item: "smsFlag 1〜6 の割り当てが正しいか"
+    resolved: false
+  - item: "電話番号リトライ3回の維持の可否"
+    resolved: false
+  - item: "classification が全ケース「問合せ」で正しいか"
+    resolved: false

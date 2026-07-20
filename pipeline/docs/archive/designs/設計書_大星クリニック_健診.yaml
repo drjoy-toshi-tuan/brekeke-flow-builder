@@ -1,0 +1,1134 @@
+# 設計書 — 大星クリニック 健診
+# 生成元: @director エージェント
+# 生成日: 2026-04-22
+# 確認レポート: docs/designs/確認レポート_大星クリニック_健診_20260420.md
+# 作業種別: Gen2→Gen3移管
+# 元資料: docs/reference/customer_docs/【健診1】：大星クリニック.md
+# 移管ノート: docs/migration/gen2_大星クリニック_健診.md
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "大星クリニック健診センター"
+  group_name: "大星クリニック健診センター"
+  flow_name: "大星クリニック健診センター$健診"
+  target_facility: "大星クリニック（健診・人間ドック専用窓口）"
+  office_id: "TODO_要確認"              # NON-BLOCKER N-1: Dr.JOY管理画面で確認
+  phone_number: "TODO_要確認"           # NON-BLOCKER N-2: IVR着信番号（Brekeke設定時）
+  business_hours: "祝日除く月〜金 9:00〜17:00"  # NON-BLOCKER N-3: Dr.JOY側スケジュールで最終設定
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "prod"                   # 移管ノート記載値
+
+# --- セクション2: フロー構成 ---
+# Customer Doc 1-4-2 により 連絡先電話番号の聴取は禁止。
+#   → 電話番号聴取サブフローは配置しない。着信番号（telephoneNumber）のみで携帯/固定判定。
+# 生年月日は「○○ですね」1回復唱のみ許可（Customer Doc 2 / 重要ポイント）。
+#   → 生年月日聴取サブフローは復唱ありを使用。
+# 氏名復唱は禁止（Customer Doc 2）。
+#   → 氏名聴取サブフローは復唱なしの標準コピー。
+# FAQ対応なし（Customer Doc 1-2）。RAGサブフロー配置しない。
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "大星クリニック健診センター$健診"
+      role: "main"
+      description: "冒頭チェーン → 氏名聴取サブフロー → 生年月日聴取サブフロー（復唱あり） → 用件聴取(4分類) → 用件別聴取 → 終話分岐(classification × phone_type) → 終話"
+    - name: "大星クリニック健診センター$氏名聴取"
+      role: "sub"
+      description: "氏名聴取 → 結果返却（復唱なし）"
+    - name: "大星クリニック健診センター$生年月日聴取"
+      role: "sub"
+      description: "生年月日聴取 → DOB Re-confirmation（○○ですね）→ 結果返却"
+  subflows:
+    - name: "大星クリニック健診センター$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "氏名聴取サブフロー。復唱禁止のため復唱なし版を使用。リトライ上限到達時は氏名未取得のまま次へスキップ"
+    - name: "大星クリニック健診センター$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "生年月日聴取サブフロー。DOB Re-confirmation（「○○ですね」）を含む復唱ありパターン（Customer Doc 2 準拠）"
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  大星クリニックの健康診断・人間ドック予約専用AIオペレーター。
+  着信者から受診者名・生年月日を聴取した後、用件（申込/変更/キャンセル/その他問い合わせ）を4分類で聴取する。
+  申込ルートでは受診歴・胃カメラ有無に応じて質問順を切替えてコース・予約希望日・会社名を聴取、
+  変更ルートは既存予約日と変更希望日、キャンセルルートは既存予約日、その他ルートは内容確認を聴取する。
+  最後に classification × 着信番号種別（携帯/固定）の組み合わせで終話アナウンスを分岐し、
+  申込×携帯の場合のみ SMS 送信（smsFlag=1）、それ以外は折返し案内で終話する。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "大星クリニック健診センター$健診"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → END_非通知（「186を追加して...」即時終話, status=2）
+            └─ 通常 → acceptance_times
+                        ├─ 時間外 → END_時間外（status=6）
+                        └─ 受付可 → 冒頭_アナウンス(TTS)
+                                      → jump_氏名聴取(サブフロー・復唱なし)
+                                        → jump_生年月日聴取(サブフロー・復唱あり「○○ですね」)
+                                          → 用件聴取(OpenAI enum 4分岐)
+      ─── 用件ルート ───
+        申し込み ─→ 受診歴_申込 ─→ 胃カメラ_申込(enum 2分岐)
+                                    ├─ 有 → 胃カメラ方法_申込 → 予約希望日_申込_有
+                                    │       → 受診希望コース_申込_有 → 会社名_申込(合流)
+                                    └─ 無 → 受診希望コース_申込_無 → 予約希望日_申込_無
+                                            → 会社名_申込(合流)
+        変更 ───────→ 予約日_変更 → 変更希望日 ─┐
+        キャンセル ──→ 予約日_キャンセル ──────┤
+        その他 ─────→ 内容確認_その他 ──────┤
+                                                └→ 終話分岐_用件(ContextMatchRouter: classification)
+                                                    ├─ 申し込み → 終話分岐_電話種別(Script: phone_type)
+                                                    │               ├─ 携帯 → END_申込_携帯(smsFlag=1) → 切断
+                                                    │               └─ 固定/その他 → END_申込_固定(smsFlag=-1) → 切断
+                                                    └─ 変更/キャンセル/その他 → END_その他全般(smsFlag=-1) → 切断
+    notes: |
+      - 非通知即時終話: 冒頭アナウンスも流さず即 END_非通知（Customer Doc 1-4-1）
+      - 胃カメラ有無で質問順切替は顧客明記「絶対に指定順どおり」
+      - 連絡先電話番号は聴取しない（Customer Doc 1-4-2）。携帯/固定判定は telephoneNumber（着信番号）のみ
+      - 復唱は生年月日のみ。氏名・コース・予約日・変更内容の復唱禁止（Customer Doc 2）
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭ブロック ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: jump_氏名聴取
+
+  # --- 氏名聴取サブフロー ---
+  - step: jump_氏名聴取
+    type: subflow
+    flowname: "大星クリニック健診センター$氏名聴取"
+    next: jump_生年月日聴取
+
+  # --- 生年月日聴取サブフロー（復唱あり「○○ですね」）---
+  - step: jump_生年月日聴取
+    type: subflow
+    flowname: "大星クリニック健診センター$生年月日聴取"
+    next: 用件聴取
+
+  # --- 用件聴取（4分類 Pattern A）---
+  - step: 用件聴取
+    type: hearing
+    output_format: enum
+    retry_failure: end_failure
+    conditions:
+      - match: "申し込み"
+        next: 受診歴_申込
+      - match: "変更"
+        next: 予約日_変更
+      - match: "キャンセル"
+        next: 予約日_キャンセル
+      - match: "その他"
+        next: 内容確認_その他
+
+  # --- 申込ルート共通前段 ---
+  - step: 受診歴_申込
+    type: hearing
+    output_format: enum
+    retry_failure: skip
+    conditions:
+      - match: "default"
+        next: 胃カメラ_申込
+
+  - step: 胃カメラ_申込
+    type: hearing
+    output_format: enum
+    retry_failure: skip
+    conditions:
+      - match: "有"
+        next: 胃カメラ方法_申込
+      - match: "default"
+        next: 受診希望コース_申込_無
+
+  # --- 申込_胃カメラ有ルート ---
+  - step: 胃カメラ方法_申込
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 予約希望日_申込_有
+
+  - step: 予約希望日_申込_有
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 受診希望コース_申込_有
+
+  - step: 受診希望コース_申込_有
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 会社名_申込
+
+  # --- 申込_胃カメラ無ルート ---
+  - step: 受診希望コース_申込_無
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 予約希望日_申込_無
+
+  - step: 予約希望日_申込_無
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 会社名_申込
+
+  # --- 申込合流地点 ---
+  - step: 会社名_申込
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 終話分岐_用件
+
+  # --- 変更ルート ---
+  - step: 予約日_変更
+    type: hearing
+    output_format: datetime
+    retry_failure: skip
+    next: 変更希望日
+
+  - step: 変更希望日
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 終話分岐_用件
+
+  # --- キャンセルルート ---
+  - step: 予約日_キャンセル
+    type: hearing
+    output_format: datetime
+    retry_failure: skip
+    next: 終話分岐_用件
+
+  # --- その他ルート ---
+  - step: 内容確認_その他
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 終話分岐_用件
+
+  # --- 終話分岐1: classification による ContextMatchRouter（Pattern B）---
+  - step: 終話分岐_用件
+    type: context_match_router
+    reference_module: "classification"
+    conditions:
+      - match: "申し込み"
+        next: 終話分岐_電話種別
+      - match: "default"
+        next: END_その他全般
+
+  # --- 終話分岐2: telephoneNumber で携帯/固定判定（Script）---
+  - step: 終話分岐_電話種別
+    type: script
+    script_template: phone_type
+    reference_module: "telephoneNumber"
+    template_params: {}
+    conditions:
+      - match: "mobile"
+        next: END_申込_携帯
+      - match: "default"
+        next: END_申込_固定
+
+  # --- 終話ブロック ---
+  - step: END_申込_携帯
+    type: termination
+    termination_ref: "END_申込_携帯"
+
+  - step: END_申込_固定
+    type: termination
+    termination_ref: "END_申込_固定"
+
+  - step: END_その他全般
+    type: termination
+    termination_ref: "END_その他全般"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+# Customer Doc function.parameters.properties から転記。
+# endpoint / smsFlag は CLAUDE.md 規則により saveContextModel2DB に含めず、
+# 各 saveCompletionFlag2db のパラメータとして設定する。
+context_fields:
+  # --- Dr.JOY 標準フィールド ---
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "申し込み"
+      - id: "2"
+        order: "2"
+        value: "変更"
+      - id: "3"
+        order: "3"
+        value: "キャンセル"
+      - id: "4"
+        order: "4"
+        value: "その他"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "用件4分類（Customer Doc function.classification.enum より）"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "受診者名。複数人発話時は最初の1名のみ。2人目以降は reason に改行区切りで格納（Customer Doc 3）"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "DTMF聴取（<dtmf digit=\"8\" />）+ ○○ですね 1回復唱。yyyy-MM-dd 形式"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "着信番号自動格納。Customer Doc 1-4-3: 先頭3桁で 090/080/070=携帯、050/その他10桁=固定判定"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "Customer Doc 1-4-2 により聴取しない。function スキーマ互換のため定義のみ残す（実運用で値は入らない）"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "聴取失敗"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "CLAUDE.md 規則に従い Gen2 の 0/1/2 を 1/2/3/6 にマップ。0 は Gen3 で使用禁止"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "着信日時自動格納。相対日付（今日/明日/明後日）・10月以降の年度補正の基準（Customer Doc 1-4 / 1-5）"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+  # --- 施設固有フィールド（function properties より転記、endpoint/smsFlag は除外）---
+  - context_name: "medical_history"
+    context_name_jp: "受診歴"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "有 / 無 / 空（function.medical_history.enum）"
+
+  - context_name: "gastroscopy"
+    context_name_jp: "胃カメラ確認"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "有 / 無 / 空。質問順切替のキー（function.gastroscopy.enum）"
+
+  - context_name: "method"
+    context_name_jp: "胃カメラ方法"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "口 / 鼻（胃カメラ有ルートのみ）"
+
+  - context_name: "course"
+    context_name_jp: "受診希望コース"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "リスト一致なら正式名称、不一致なら発話原文（Customer Doc 1-3）。「わからない」は空欄、再質問・候補提示は禁止"
+
+  - context_name: "option"
+    context_name_jp: "追加オプション"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "Customer Doc セクション4のリストは未提供（NON-BLOCKER N-5）。現フローでは聴取ステップ無し"
+
+  - context_name: "Preferred_date"
+    context_name_jp: "予約希望日"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "フリーワード格納。明確な月日発話のみ yyyy-MM-dd に正規化（Customer Doc 1-5）。当年度補完、10月以降の1-9月発話は翌年扱い"
+
+  - context_name: "reservationDate"
+    context_name_jp: "予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "変更・キャンセル時の既存予約日。yyyy-MM-dd HH:mm 形式"
+
+  - context_name: "companyName"
+    context_name_jp: "会社名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "企業予約時の会社名。個人の場合は「その他」を格納"
+
+  - context_name: "confirmation"
+    context_name_jp: "内容確認"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "その他ルートの問い合わせ内容"
+
+  - context_name: "change_item"
+    context_name_jp: "変更項目"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "日時変更/内容変更の区分（Customer Doc 5「日程変更」判定参照）。現フローでは自動格納のみ、別途聴取しない"
+
+  - context_name: "reason"
+    context_name_jp: "問い合わせ内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "Customer Doc 3: 2人目以降の氏名（カタカナ）・生年月日（yyyy-MM-dd）を改行区切りで格納"
+
+# --- セクション6: 聴取項目一覧 ---
+# サブフロー内の聴取項目（氏名・生年月日）は設計書に含めない（CLAUDE.md Rule 9 準拠、共通サブフローを参照）。
+hearing_items:
+  - order: 1
+    name: "用件聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "申し込み"
+      - "変更"
+      - "キャンセル"
+      - "その他"
+    notes: "DTMF未使用（Customer Doc 共通ヒアリング参照）。誤認識救済語彙（薬/お薬→申し込み、取り直す/変えたい等→変更、やめる/取り消し等→キャンセル）を OpenAI プロンプトで実装"
+
+  - order: 2
+    name: "受診歴_申込"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "medical_history"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "有"
+      - "無"
+    notes: "Yes/No判定。「はい、あります」→有 / 「いいえ、ありません」→無。NO_RESULT時はデフォルトで胃カメラ_申込へフォールスルー"
+
+  - order: 3
+    name: "胃カメラ_申込"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "gastroscopy"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "有"
+      - "無"
+    notes: "Yes/No判定。「はい希望します」→有 / 「いいえ希望しません」→無。有ルート/無ルートで質問順切替（Customer Doc 明記「絶対に指定順どおり」）"
+
+  - order: 4
+    name: "胃カメラ方法_申込"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "method"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "「口」「鼻」を正規化。胃カメラ有ルートの最初の質問"
+
+  - order: 5
+    name: "予約希望日_申込_有"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "Preferred_date"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "胃カメラ有ルート2番目。フリーワード保存。明確な日付のみ yyyy-MM-dd 正規化（当年度補完、10月以降の1-9月発話は翌年扱い）"
+
+  - order: 6
+    name: "受診希望コース_申込_有"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "course"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "Customer Doc 1-3: リスト一致なら正式名称、不一致なら発話原文格納。「わからない/不明/覚えていない」は空欄。候補提示・再質問禁止。コースリストは Customer Doc セクション3が空欄のため N-5"
+
+  - order: 7
+    name: "受診希望コース_申込_無"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "course"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "胃カメラ無ルート最初の質問。処理ルールは _有 と同じ"
+
+  - order: 8
+    name: "予約希望日_申込_無"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "Preferred_date"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "胃カメラ無ルート2番目。処理ルールは _申込_有 と同じ"
+
+  - order: 9
+    name: "会社名_申込"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "companyName"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "有/無ルートの合流地点。個人の場合は「その他」を格納"
+
+  - order: 10
+    name: "予約日_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: "既存予約日。yyyy-MM-dd HH:mm 正規化"
+
+  - order: 11
+    name: "変更希望日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "Preferred_date"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "変更後の希望日。明確な月日のみ yyyy-MM-dd、それ以外は発話原文"
+
+  - order: 12
+    name: "予約日_キャンセル"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: "キャンセル対象予約日。yyyy-MM-dd HH:mm"
+
+  - order: 13
+    name: "内容確認_その他"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "confirmation"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: "その他ルートの問い合わせ内容。要約して格納"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "用件聴取"
+    tts_announcement: "ご用件を、次の4つのうち、「お申込み」「予約変更」「予約キャンセル」「その他問い合わせ」、 のいずれかをお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "申し込み"
+        - "変更"
+        - "キャンセル"
+        - "その他"
+      mapping:
+        - input: "「申込み」「申し込み」「予約」「薬」「お薬」を含む"
+          output: "申し込み"
+        - input: "「変更」「取り直したい」「取り直す」「別の」「変えたい」「変える」「変えて」を含む"
+          output: "変更"
+        - input: "「キャンセル」「やめる」「取り消し」「取り消す」「取消」「やめたい」を含む"
+          output: "キャンセル"
+        - input: "「その他」「問い合わせ」「問合せ」を含む"
+          output: "その他"
+      no_result_condition: "上記いずれにも該当しない（意図不明案内後リトライ）"
+    save_to: "classification"
+    next_step: "（enum分岐）"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "受診歴_申込"
+    tts_announcement: "過去に当クリニックで受診されたことはありますか？「はい、あります。」「いいえ、ありません。」のようにお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "有"
+        - "無"
+      mapping:
+        - input: "「はい」「ある」「あります」「過去にあり」等の肯定表現"
+          output: "有"
+        - input: "「いいえ」「ない」「ありません」「初めて」等の否定表現"
+          output: "無"
+      no_result_condition: "判定不能 → デフォルトで胃カメラ_申込へ進む"
+    save_to: "medical_history"
+    next_step: "胃カメラ_申込"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "胃カメラ_申込"
+    tts_announcement: "胃カメラ検査を希望されますでしょうか。「はい希望します」「いいえ希望しません」のようにお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "有"
+        - "無"
+      mapping:
+        - input: "「はい」「希望します」「希望する」「お願いします」「受けたい」等"
+          output: "有"
+        - input: "「いいえ」「希望しません」「しない」「結構です」「いらない」等"
+          output: "無"
+      no_result_condition: "判定不能 → 無ルートへフォールスルー（デフォルト）"
+    save_to: "gastroscopy"
+    next_step: "（enum分岐: 有→胃カメラ方法_申込 / 無・default→受診希望コース_申込_無）"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "胃カメラ方法_申込"
+    tts_announcement: "胃カメラ検査に関して、検査方法を口か鼻をお選びください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "口"
+        - "鼻"
+      mapping:
+        - input: "「口」「くち」「口から」を含む"
+          output: "口"
+        - input: "「鼻」「はな」「鼻から」を含む"
+          output: "鼻"
+      no_result_condition: "どちらにも該当しない → 発話原文を格納"
+    save_to: "method"
+    next_step: "予約希望日_申込_有"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "予約希望日_申込_有"
+    tts_announcement: "胃カメラの実施日は木曜日の午前です。受診を希望されるお日にちやお時間帯をお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "明確な月日発話（例: 5月20日）"
+          output: "yyyy-MM-dd（当年度補完、10月以降の1-9月発話は翌年扱い）"
+        - input: "「今日」「明日」「明後日」"
+          output: "着信日基準で yyyy-MM-dd"
+        - input: "曖昧な発話・時間帯のみ"
+          output: "発話原文をそのまま格納"
+      no_result_condition: "無回答 → リトライ"
+    save_to: "Preferred_date"
+    next_step: "受診希望コース_申込_有"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "受診希望コース_申込_有"
+    tts_announcement: "ご希望の健診、または人間ドックのコース名をお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "コースリストのキーワード一致"
+          output: "リストの正式名称（※リスト未提供のため現状は発話原文格納）"
+        - input: "リスト不一致"
+          output: "発話原文をそのまま格納（Customer Doc 1-3）"
+        - input: "「わからない」「不明」「覚えていない」"
+          output: "空欄"
+      no_result_condition: "無回答 → リトライ（ただし聴取内容の再質問は禁止。Customer Doc 1-3）"
+    save_to: "course"
+    next_step: "会社名_申込"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "受診希望コース_申込_無"
+    tts_announcement: "ご希望の健診、または人間ドックのコース名をお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "コースリストのキーワード一致"
+          output: "リストの正式名称（※リスト未提供）"
+        - input: "リスト不一致"
+          output: "発話原文をそのまま格納"
+        - input: "「わからない」「不明」「覚えていない」"
+          output: "空欄"
+      no_result_condition: "無回答 → リトライ"
+    save_to: "course"
+    next_step: "予約希望日_申込_無"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "予約希望日_申込_無"
+    tts_announcement: "受診を希望するお日にちやお時間帯をお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "明確な月日発話"
+          output: "yyyy-MM-dd（当年度補完、10月以降の1-9月発話は翌年扱い）"
+        - input: "「今日」「明日」「明後日」"
+          output: "着信日基準で yyyy-MM-dd"
+        - input: "曖昧な発話・時間帯のみ"
+          output: "発話原文をそのまま格納"
+      no_result_condition: "無回答 → リトライ"
+    save_to: "Preferred_date"
+    next_step: "会社名_申込"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "会社名_申込"
+    tts_announcement: "企業でお申込みされた場合は、お勤め先の会社名をお話しください。個人でのお申込みの場合は、「その他」とお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "企業名を含む発話"
+          output: "会社名をそのまま格納"
+        - input: "「その他」「個人」「個人です」を含む"
+          output: "その他"
+      no_result_condition: "無回答 → リトライ"
+    save_to: "companyName"
+    next_step: "終話分岐_用件"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "予約日_変更"
+    tts_announcement: "予約した日はいつですか？どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "明確な月日・日時発話"
+          output: "yyyy-MM-dd HH:mm 形式"
+        - input: "曖昧な発話"
+          output: "発話原文をそのまま格納"
+      no_result_condition: "無回答 → リトライ"
+    save_to: "reservationDate"
+    next_step: "変更希望日"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "変更希望日"
+    tts_announcement: "予約を変更される、お日にちやお時間帯をお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "明確な月日発話"
+          output: "yyyy-MM-dd"
+        - input: "曖昧な発話・時間帯のみ"
+          output: "発話原文をそのまま格納"
+      no_result_condition: "無回答 → リトライ"
+    save_to: "Preferred_date"
+    next_step: "終話分岐_用件"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "予約日_キャンセル"
+    tts_announcement: "予約した日はいつですか？どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "明確な月日・日時発話"
+          output: "yyyy-MM-dd HH:mm 形式"
+        - input: "曖昧な発話"
+          output: "発話原文をそのまま格納"
+      no_result_condition: "無回答 → リトライ"
+    save_to: "reservationDate"
+    next_step: "終話分岐_用件"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "内容確認_その他"
+    tts_announcement: "お問い合わせの内容を簡潔にお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "問い合わせ内容の発話"
+          output: "要約して格納"
+      no_result_condition: "無回答 → リトライ"
+    save_to: "confirmation"
+    next_step: "終話分岐_用件"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須 — 削除禁止）---
+  - name: "END_非通知"
+    condition: "非通知着信（incoming_phone_number が anonymous/空/0桁）"
+    tts_announcement: "お手数をおかけしますが、発信者番号を通知して再度お電話ください。電話番号の前に\"186\"を追加いただくことで発信者番号を通知していただくことができます。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達（無回答3回目）"
+    tts_announcement: "申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、再度おかけなおしください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系 ---
+  - name: "END_申込_携帯"
+    condition: "classification=申し込み かつ 着信番号が携帯（090/080/070で始まる11桁）"
+    tts_announcement: "電話終了後に送信されるSMSより必要項目の入力を完了してください。〇日以内にスタッフより折り返しご連絡をいたします。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_申込_携帯"
+
+  - name: "END_申込_固定"
+    condition: "classification=申し込み かつ 着信番号が固定（10桁 or 050で始まる11桁）"
+    tts_announcement: "内容確認後、〇日以内にスタッフより折り返しご連絡をいたします。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_申込_固定"
+
+  - name: "END_その他全般"
+    condition: "classification=変更/キャンセル/その他（電話種別を問わず）"
+    tts_announcement: "内容確認後、〇日以内にスタッフより折り返しご連絡をいたします。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_その他全般"
+
+# smsFlag分岐設計
+# Customer Doc function.smsFlag の記述:
+#   申し込み × 携帯(090/080/070/060)      → smsFlag=1
+#   変更  × patientName/DOB not empty    → smsFlag=2
+#   キャンセル × patientName/DOB not empty → smsFlag=2
+#   それ以外                            → smsFlag=0
+# Gen3 では saveCompletionFlag2db の sms_flag パラメータで終話ごとに固定値を埋める方針。
+# 変更/キャンセル/その他は END_その他全般 に集約するため、Gen2 の smsFlag=2 は本フローでは実装しない
+# （Dr.JOY側で status=1 の受付記録があれば人間オペレーターが対応）。
+# BREKEKE で SMS を送らない場合は sms_flag=-1 を使用（Gen3 標準）。
+sms_flag_routing:
+  enabled: true
+  routing_keys:
+    - "classification"
+    - "telephoneNumber"
+  patterns:
+    - condition: "classification=申し込み かつ 携帯（090/080/070 11桁）"
+      sms_flag: "1"
+      notes: "END_申込_携帯"
+    - condition: "classification=申し込み かつ 固定（10桁 or 050 11桁）"
+      sms_flag: "-1"
+      notes: "END_申込_固定（SMS送信なし）"
+    - condition: "classification=変更/キャンセル/その他"
+      sms_flag: "-1"
+      notes: "END_その他全般（Gen3 方針で統一、SMS送信なし）"
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+# Customer Doc 1-2 に明記: プロンプト外の質問は再質問1回→代表電話案内で終話。RAG未使用。
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+# IVRプロパティに記載するモジュール名とアナウンス文言の完全リスト。モジュール名とプロパティ名の完全一致が必須。
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "はい、大星クリニックです。健康診断、人間ドックの予約専用AIオペレーターがご用件を承ります。"
+
+  - module_name: "用件聴取"
+    purpose: "用件4分類聴取"
+    announcement: "ご用件を、次の4つのうち、「お申込み」「予約変更」「予約キャンセル」「その他問い合わせ」、 のいずれかをお話しください。どうぞ。"
+
+  - module_name: "受診歴_申込"
+    purpose: "受診歴確認"
+    announcement: "過去に当クリニックで受診されたことはありますか？「はい、あります。」「いいえ、ありません。」のようにお話しください。どうぞ。"
+
+  - module_name: "胃カメラ_申込"
+    purpose: "胃カメラ有無確認"
+    announcement: "胃カメラ検査を希望されますでしょうか。「はい希望します」「いいえ希望しません」のようにお話しください。どうぞ。"
+
+  - module_name: "胃カメラ方法_申込"
+    purpose: "胃カメラ方法（口/鼻）聴取"
+    announcement: "胃カメラ検査に関して、検査方法を口か鼻をお選びください。どうぞ。"
+
+  - module_name: "予約希望日_申込_有"
+    purpose: "胃カメラ有ルート予約希望日"
+    announcement: "胃カメラの実施日は木曜日の午前です。受診を希望されるお日にちやお時間帯をお話しください。どうぞ。"
+
+  - module_name: "受診希望コース_申込_有"
+    purpose: "胃カメラ有ルート受診希望コース"
+    announcement: "ご希望の健診、または人間ドックのコース名をお話しください。どうぞ。"
+
+  - module_name: "受診希望コース_申込_無"
+    purpose: "胃カメラ無ルート受診希望コース"
+    announcement: "ご希望の健診、または人間ドックのコース名をお話しください。どうぞ。"
+
+  - module_name: "予約希望日_申込_無"
+    purpose: "胃カメラ無ルート予約希望日"
+    announcement: "受診を希望するお日にちやお時間帯をお話しください。どうぞ。"
+
+  - module_name: "会社名_申込"
+    purpose: "会社名聴取"
+    announcement: "企業でお申込みされた場合は、お勤め先の会社名をお話しください。個人でのお申込みの場合は、「その他」とお話しください。どうぞ。"
+
+  - module_name: "予約日_変更"
+    purpose: "変更ルート既存予約日"
+    announcement: "予約した日はいつですか？どうぞ。"
+
+  - module_name: "変更希望日"
+    purpose: "変更ルート希望日"
+    announcement: "予約を変更される、お日にちやお時間帯をお話しください。どうぞ。"
+
+  - module_name: "予約日_キャンセル"
+    purpose: "キャンセル対象予約日"
+    announcement: "予約した日はいつですか？どうぞ。"
+
+  - module_name: "内容確認_その他"
+    purpose: "その他問い合わせ内容"
+    announcement: "お問い合わせの内容を簡潔にお話しください。どうぞ。"
+
+  - module_name: "END_申込_携帯"
+    purpose: "申込・携帯終話（SMS案内あり）"
+    announcement: "電話終了後に送信されるSMSより必要項目の入力を完了してください。〇日以内にスタッフより折り返しご連絡をいたします。それでは失礼いたします。"
+
+  - module_name: "END_申込_固定"
+    purpose: "申込・固定終話（SMS案内なし）"
+    announcement: "内容確認後、〇日以内にスタッフより折り返しご連絡をいたします。それでは失礼いたします。"
+
+  - module_name: "END_その他全般"
+    purpose: "変更/キャンセル/その他終話"
+    announcement: "内容確認後、〇日以内にスタッフより折り返しご連絡をいたします。それでは失礼いたします。"
+
+  - module_name: "END_非通知"
+    purpose: "非通知即時終話"
+    announcement: "お手数をおかけしますが、発信者番号を通知して再度お電話ください。電話番号の前に\"186\"を追加いただくことで発信者番号を通知していただくことができます。それでは失礼いたします。"
+
+  - module_name: "END_時間外"
+    purpose: "時間外終話"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "無回答エラー終話"
+    announcement: "申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、再度おかけなおしください。お電話ありがとうございました。それでは失礼いたします。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+# 読み仮名は Customer Doc 5（予約関連の対応フロー）の誤認識救済語彙から抽出。
+# コースリストは Customer Doc セクション3が空欄のため辞書登録は現時点で最小限。
+amivoice_dictionary:
+  - step_name: "用件聴取"
+    words: |
+      申込み もうしこみ
+      申し込み もうしこみ
+      予約 よやく
+      変更 へんこう
+      取り直す とりなおす
+      取り直し とりなおし
+      変えたい かえたい
+      キャンセル きゃんせる
+      取り消し とりけし
+      取消 とりけし
+      やめる やめる
+      その他 そのた
+      問い合わせ といあわせ
+      問合せ といあわせ
+      健診 けんしん
+      人間ドック にんげんどっく
+      ドック どっく
+      薬 くすり
+
+  - step_name: "受診歴_申込"
+    words: |
+      受診 じゅしん
+      あります あります
+      ありません ありません
+      初めて はじめて
+
+  - step_name: "胃カメラ_申込"
+    words: |
+      胃カメラ いかめら
+      希望 きぼう
+      希望します きぼうします
+      希望しません きぼうしません
+
+  - step_name: "胃カメラ方法_申込"
+    words: |
+      口 くち
+      鼻 はな
+
+  - step_name: "受診希望コース_申込_有"
+    words: |
+      健診 けんしん
+      人間ドック にんげんどっく
+      ドック どっく
+      コース こーす
+      わからない わからない
+
+  - step_name: "受診希望コース_申込_無"
+    words: |
+      健診 けんしん
+      人間ドック にんげんどっく
+      ドック どっく
+      コース こーす
+      わからない わからない
+
+  - step_name: "会社名_申込"
+    words: |
+      会社 かいしゃ
+      その他 そのた
+      個人 こじん
+
+  - step_name: "内容確認_その他"
+    words: |
+      問い合わせ といあわせ
+      質問 しつもん
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "【復唱原則禁止】聴取内容の復唱は生年月日のみ「○○ですね」1回だけ許可。氏名・電話番号・コース・予約日・変更内容・受診希望コース・追加オプションの復唱は全て禁止。聞き取れなくても再質問せずそのまま次へ進む（Customer Doc 1, 2）"
+  - "【再質問は無回答時のみ】内容不明瞭での再質問は不可。質問に全く返答がない場合のみ最大2回まで再促しOK（発話: 「申し訳ございません、ご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか？」）。3回目で END_聴取失敗 に遷移"
+  - "【胃カメラ分岐の質問順序厳守】胃カメラ有ルート（胃カメラ方法→予約希望日→コース→会社名）と無ルート（コース→予約希望日→会社名）で順序が異なる。Customer Doc 明記「絶対に指定順どおり」「途中で別の項目に飛んではいけない」"
+  - "【連絡先電話番号は聴取しない】Customer Doc 1-4-2 で明記。incoming_phone_number（着信番号）のみで携帯/固定判定（Script モジュール phone_type）。additionalPhoneNumber フィールドは function スキーマ互換のため context 定義に残すが実運用では値は入らない"
+  - "【非通知即時終話】非通知着信（incoming_phone_number が anonymous/空/0桁）は冒頭アナウンスを流さず即 END_非通知。Customer Doc 1-4-1 の専用文言「電話番号の前に\"186\"を追加...」を使用。status=2"
+  - "【数字認識キーワード】OpenAI プロンプトに以下の置換を含める: 「よん」「しー」「し」「よー」「C」「Sea」→4、「ご」「いつ」「Go」→5、「きゅう」「Q」「きゅー」→9 等（Customer Doc 1-7, 1-9）"
+  - "【誤認識救済語彙】OpenAI プロンプトに以下の置換を含める: 「検針」「返信」「天候診断」「返金控寸断」→「健診」、「人間ロック」「ドック」「ロック」「人間独」→「人間ドック」、「薬」「お薬」→「予約」、「取り直したい」「取り直す」「別の」「変えたい」「変える」「変えて」→「変更」、「やめる」「取り消し」「取り消す」「取消」「やめたい」→「キャンセル」（Customer Doc 5）"
+  - "【検診の例外】「検診」は原則「健診」扱いだが、「乳がん検診」「子宮がん検診」「子宮頸がん検診」など特定の検診名は除外して「検診」のまま扱う（Customer Doc 5）"
+  - "【日付補正】月日のみ発話→当年度を補完。10月以降の入電で1〜9月の日付発話→翌年扱い（Customer Doc 1-5）。「今日」「明日」「明後日」は着信日時から自動換算（Customer Doc 1-4）"
+  - "【過去日付の扱い】Customer Doc 1-4 に「未来の日付のみ受け付ける」記載あるが、復唱・再質問禁止ルールと衝突するため、発話原文をそのまま記録して Dr.JOY 側でスタッフが確認する運用とする（NON-BLOCKER N-6）"
+  - "【複数人氏名】2人目以降の氏名（カタカナ）・生年月日（yyyy-MM-dd）は reason に改行区切りで格納。1人目は patientName/patientDateOfBirth に格納（Customer Doc 3）"
+  - "【受診希望コース特定ルール】Customer Doc 1-3: リストに一致すれば正式名称、不一致なら発話原文をそのまま course に格納。「わからない」「不明」「覚えていない」は空欄。候補提示・再質問・繰り返し確認は禁止"
+  - "【コースリスト・オプションリスト未提供】Customer Doc セクション3・4が空欄（明示的に未提供）。顧客からリスト提供後に profile_words と OpenAI プロンプトに追加する作業が別途必要（NON-BLOCKER N-5）。現状は発話原文格納ルールのみで動作"
+  - "【FAQ対応なし】Customer Doc 1-2: RAG未使用。プロンプト外の質問は1回目「うまく聞き取りができませんでした。再度ご用件をお話しください」で再質問、2回目以降「代表電話の『03-6426-5933』におかけ直しください。お電話ありがとうございました。それでは失礼いたします。」で終話（status=2）"
+  - "【endpoint/smsFlag の格納先】Gen2 function に存在するが Gen3 では saveContextModel2DB に含めず、各 saveCompletionFlag2db のパラメータとして設定（CLAUDE.md 規則）"
+  - "【下の名前分岐を省略】Gen2 YAML では「苗字のみ発話時に『下のお名前もお伺いしてもよろしいですか？』」の分岐があったが、Gen3 では氏名聴取サブフローの標準リトライでカバーする方針。下の名前追加聴取は配置しない（NON-BLOCKER N-8）"
+  - "【携帯判定の差異】Customer Doc 1-6（終話文言判定）は 090/080/070 の11桁のみ携帯扱い、function.smsFlag 記述は 090/080/070/060。本フローでは 1-6 に従い 090/080/070 のみ携帯として終話分岐を行う（060 は現行日本国内で使われていないため実用上問題なし）"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "N-1: office_id（Dr.JOY管理画面で確認してIVRプロパティに設定）"
+    resolved: false
+  - item: "N-2: IVR着信電話番号（ARS番号）— Brekeke設定時に追加"
+    resolved: false
+  - item: "N-3: 営業時間（曜日・時間帯）の詳細 — Dr.JOY側スケジュール設定"
+    resolved: false
+  - item: "N-4: 環境指定（demo/prod）最終確認 — 移管ノート記載は prod"
+    resolved: false
+  - item: "N-5: 受診希望コースリスト / 追加オプションリストの提供（Customer Doc セクション3・4 が空欄）"
+    resolved: false
+  - item: "N-6: 過去日付発話時の扱い（発話原文保存で運用するが顧客と最終合意必要）"
+    resolved: false
+  - item: "N-7: 胃カメラ有無・受診歴の NO_RESULT 時のデフォルト挙動確認（有→胃カメラ方法、無/default→受診希望コース_申込_無）"
+    resolved: false
+  - item: "N-8: Gen2 の『苗字のみ発話時に下の名前追加聴取』分岐を Gen3 で省略する方針の確認"
+    resolved: false
+  - item: "N-9: 連絡先電話番号を聴取しない運用（Customer Doc 1-4-2 準拠）の確認"
+    resolved: false
+  - item: "N-10: 変更/キャンセル/その他 の smsFlag を Gen3 で -1（SMS送信なし）に統一する方針（Gen2 では変更/キャンセル=2）"
+    resolved: false
+  - item: "N-11: FAQ対応なし運用（プロンプト外の質問は代表電話 03-6426-5933 案内で終話）の確認"
+    resolved: false

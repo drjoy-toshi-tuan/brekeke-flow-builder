@@ -1,0 +1,77 @@
+# Pattern 6 (テストフロー) — intent_classifier_v2「カレス記念病院_診療_用件確認」spec 受入テスト【20ケース】
+#
+# spec: カレス記念病院_診療 の script_用件確認（4択メニュー: 予約/変更/キャンセル/その他お問い合わせ）。
+#   engine は認定済み intent_classifier_v2 (v2-evidence) と完全同一（wiring除きバイト一致確認済み）。
+#   本 spec は menu_代表spec（generated_menu.js）より evidence/rule が単純な部分集合
+#   （否定 rule・複合語彙イベント・operator/問い合わせ細分が無い）。
+#   検証対象は同ディレクトリ script.js（デプロイ正本の INPUT_MODULE のみ __INPUT_MODULE__ に置換）。
+#   ケースの正本は同ディレクトリ cases.tsv（oracle.py 経由で 20/20 PASS 確認済み）。
+#
+# 生成: python3 tools/build_part_acceptance_bivr.py intent_classifier_v2 \
+#         --spec modules/intent_classifier_v2/acceptance_test/カレス記念病院_診療_用件確認/p6_acceptance.yaml \
+#         --out  output/acceptance/intent_classifier_v2/intent_classifier_v2_karesu_yoken_p6.bivr
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$用件分類v2カレス記念病院診療spec"
+  flow_name: "テスト$用件分類v2カレス記念病院診療spec"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$用件分類v2カレス記念病院診療spec"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("=================================================");
+      $runner.getLogger().info("[TEST START] intent_classifier_v2 カレス記念病院_診療_用件確認 spec 受入 (20 cases)");
+      $runner.getLogger().info("=================================================");
+      $runner.setResult("ok");
+    next: INTENT_TEST
+
+  - step: INTENT_TEST
+    type: script_test_matrix
+    script_file: "script.js"
+    input_placeholder: "__INPUT_MODULE__"
+    final_next: 結果_完了
+    cases:
+      - {id: k01, input: "1", expected: "予約"}
+      - {id: k02, input: "２", expected: "変更"}
+      - {id: k03, input: "2ばんでおねがいします", expected: "変更"}
+      - {id: k04, input: "4", expected: "その他お問い合わせ"}
+      - {id: k05, input: "よんばん", expected: "その他お問い合わせ"}
+      - {id: k06, input: "よやくをお願いします", expected: "予約"}
+      - {id: k07, input: "変更したいです", expected: "変更"}
+      - {id: k08, input: "へんこうお願いします", expected: "変更"}
+      - {id: k09, input: "キャンセルしたいです", expected: "キャンセル"}
+      - {id: k10, input: "取り消しをお願いします", expected: "キャンセル"}
+      - {id: k11, input: "お問い合わせがあります", expected: "その他お問い合わせ"}
+      - {id: k12, input: "質問があります", expected: "その他お問い合わせ"}
+      - {id: k13, input: "予約しません", expected: "NO_RESULT"}
+      - {id: k14, input: "キャンセルしないでください", expected: "NO_RESULT"}
+      - {id: k15, input: "こんにちは", expected: "NO_RESULT"}
+      - {id: k16, input: "聞こえませんでした", expected: "REPEAT"}
+      - {id: k17, input: "えっとー、よやくをおねがいします", expected: "予約"}
+      - {id: k18, input: "予約を変更したいです", expected: "CLARIFY"}
+      - {id: k19, input: "はい", expected: "NO_RESULT"}
+      - {id: k20, input: "いいえ", expected: "NO_RESULT"}
+
+  - step: 結果_完了
+    type: announcement
+    prompt: "{tts_g:カレス記念病院診療 用件確認spec のテストが完了しました。ログでTEST FAILが0件であることを確認してください。}"
+    next: 切断
+
+  - step: 切断
+    type: termination

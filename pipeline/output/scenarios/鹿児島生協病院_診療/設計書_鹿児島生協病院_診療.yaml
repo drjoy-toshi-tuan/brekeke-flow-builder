@@ -1,0 +1,779 @@
+# 設計書 — 鹿児島生協病院 診療（眼科専用）
+# 生成元: @director エージェント
+# 生成日: 2026-04-22
+# 作業種別: Gen2→Gen3移管
+# 入力資料:
+#   - docs/migration/gen2_鹿児島生協病院_診療.md（移管ノート）
+#   - docs/reference/customer_docs/【診療1】：鹿児島生協病院.md（Gen2 元資料）
+# 確認レポート: docs/designs/確認レポート_鹿児島生協病院_診療_2026-04-22.md
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "鹿児島生協病院"
+  group_name: "鹿児島生協病院"
+  flow_name: "鹿児島生協病院$診療"
+  target_facility: "本院のみ（眼科専用）"
+  office_id: "TODO_要確認"
+  phone_number: "099-267-1455"
+  business_hours: "月〜土 8:30-11:30、月・木 13:45-16:00（初診NG アナウンス内で案内。Dr.JOY 側で営業時間制御する場合は acceptance_times を無効化）"
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "prod"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "鹿児島生協病院$診療"
+      role: "main"
+      description: "眼科専用：再診予約・予約変更・予約キャンセル・予約確認の受付（初診は弾く）"
+  subflows:
+    - name: "鹿児島生協病院$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "患者氏名（patientName）。復唱禁止（元資料 1-9 明記）"
+    - name: "鹿児島生協病院$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: |
+        連絡先電話番号（additionalPhoneNumber）。
+        incoming-classifier で携帯/固定/IP/非通知を 3 分岐。
+        携帯は着信番号を自動格納して「今おかけいただいている番号でよろしいですか？」復唱。
+        固定・IP・非通知・携帯否定時は手動聴取→Phone Normalization→復唱確認。
+        【手動タスク】サブフロー内リトライ 3 回失敗時に END_回答不可 TTS→切断を Brekeke IVR UI で追加すること。
+    - name: "鹿児島生協病院$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: |
+        患者生年月日（patientDateOfBirth）。
+        復唱文言は指定あり：「生年月日は{西暦4桁}年{1〜12の月}月{1〜31の日}日でよろしいですか？はい、そうです、または、いいえ、違います、のようにお答えください。」
+        リトライ上限 2（2 回失敗でブランクセット→用件別フロー分岐へ skip）。
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  鹿児島生協病院・眼科専用の AI 電話応対。受診歴のある患者からの「再診予約」「予約変更」「予約キャンセル」「予約確認」の 4 用件を受付ける。
+  初診（受診歴なし）患者は受付不可として受付時間を案内して終話。
+  各用件で患者氏名・連絡先電話番号・生年月日を聴取し、用件別の追加項目（予約希望日・次回予約有無・問い合わせ内容）を聴取して Dr.JOY に受付情報を登録する。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "鹿児島生協病院$診療"
+    diagram: |
+      冒頭(wait)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → END_非通知 → 切断
+            └─ 通常/携帯/固定 → 営業時間チェック(acceptance_times)
+                                  ├─ 時間外 → END_時間外 → 切断
+                                  └─ 受付可 → 冒頭_アナウンス(TTS)
+                                                └─ 受診歴確認(hearing, Yes/No)
+                                                      ├─ 無（初診） → END_初診受付不可 → 切断
+                                                      └─ 有（再診） → 用件聴取(hearing, enum → classification)
+                                                            └─ 患者氏名聴取(subflow)
+                                                                  → 患者電話番号聴取(subflow)
+                                                                        → 患者生年月日聴取(subflow)
+                                                                              → 用件別フロー分岐(context_match_router: classification)
+                                                                                    ├─ 再診/変更 → 予約変更_希望日聴取(hearing, text)
+                                                                                    │                 └─ 終話分岐_予約変更(context_match_router: classification)
+                                                                                    │                       ├─ 再診 → END_受付完了_再診(smsFlag=1)
+                                                                                    │                       └─ 変更 → END_受付完了_変更(smsFlag=1)
+                                                                                    ├─ キャンセル → キャンセル_次回予約有無(hearing, enum → next_reservation)
+                                                                                    │                   ├─ 有 → キャンセル_予約希望日(hearing, text)
+                                                                                    │                   │          → 最終確認_追加問合せ(hearing, text)
+                                                                                    │                   │              → END_キャンセル受付完了(smsFlag=2)
+                                                                                    │                   └─ 無 → 最終確認_追加問合せ(hearing, text)
+                                                                                    │                              → END_キャンセル受付完了(smsFlag=2)
+                                                                                    └─ 確認 → 確認_問い合わせ内容(hearing, text)
+                                                                                                └─ END_受付完了_確認(smsFlag=1)
+    notes: |
+      - 診療科 clinicalDepartment は「眼科」を固定値で保存（scaffold/generator が opening 直後に saveContext2DB を挟む）
+      - 電話番号サブフロー内の 3 回失敗時 END_回答不可 は confirmation_items の手動タスクで処理
+      - DOB サブフロー内の 2 回失敗時はブランクセットで用件別フロー分岐へ skip
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭 2 ブロック 1 セット ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 受診歴確認
+
+  # --- 受診歴確認（Pattern A: OpenAI 直後分岐）---
+  - step: 受診歴確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "有"
+        next: 用件聴取
+      - match: "無"
+        next: END_初診受付不可
+
+  # --- 用件聴取（Pattern B: 後段の用件別フロー分岐で処理。単線で次へ）---
+  - step: 用件聴取
+    type: hearing
+    output_format: enum
+    next: 患者氏名聴取
+
+  # --- 個人情報聴取サブフロー 3 連 ---
+  - step: 患者氏名聴取
+    type: subflow
+    flowname: "鹿児島生協病院$氏名聴取"
+    next: 患者電話番号聴取
+
+  - step: 患者電話番号聴取
+    type: subflow
+    flowname: "鹿児島生協病院$電話番号聴取"
+    next: 患者生年月日聴取
+
+  - step: 患者生年月日聴取
+    type: subflow
+    flowname: "鹿児島生協病院$生年月日聴取"
+    next: 用件別フロー分岐
+
+  # --- 用件別フロー分岐（Pattern B）---
+  - step: 用件別フロー分岐
+    type: context_match_router
+    reference_module: "classification"
+    conditions:
+      - match: "キャンセル"
+        next: キャンセル_次回予約有無
+      - match: "確認"
+        next: 確認_問い合わせ内容
+      - match: "default"
+        next: 予約変更_希望日聴取
+
+  # --- 再診・変更ルート ---
+  - step: 予約変更_希望日聴取
+    type: hearing
+    output_format: text
+    next: 終話分岐_予約変更
+
+  - step: 終話分岐_予約変更
+    type: context_match_router
+    reference_module: "classification"
+    conditions:
+      - match: "再診"
+        next: END_受付完了_再診
+      - match: "変更"
+        next: END_受付完了_変更
+
+  # --- 確認ルート ---
+  - step: 確認_問い合わせ内容
+    type: hearing
+    output_format: text
+    next: END_受付完了_確認
+
+  # --- キャンセルルート ---
+  - step: キャンセル_次回予約有無
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "有"
+        next: キャンセル_予約希望日
+      - match: "無"
+        next: 最終確認_追加問合せ
+
+  - step: キャンセル_予約希望日
+    type: hearing
+    output_format: text
+    next: 最終確認_追加問合せ
+
+  - step: 最終確認_追加問合せ
+    type: hearing
+    output_format: text
+    next: END_キャンセル受付完了
+
+  # --- 終話ブロック群 ---
+  - step: END_初診受付不可
+    type: termination
+    termination_ref: "END_初診受付不可"
+
+  - step: END_受付完了_再診
+    type: termination
+    termination_ref: "END_受付完了_再診"
+
+  - step: END_受付完了_変更
+    type: termination
+    termination_ref: "END_受付完了_変更"
+
+  - step: END_受付完了_確認
+    type: termination
+    termination_ref: "END_受付完了_確認"
+
+  - step: END_キャンセル受付完了
+    type: termination
+    termination_ref: "END_キャンセル受付完了"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "再診"
+      - id: "2"
+        order: "2"
+        value: "変更"
+      - id: "3"
+        order: "3"
+        value: "キャンセル"
+      - id: "4"
+        order: "4"
+        value: "確認"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "用件区分（眼科は初診を受付けないため「新規」「初診」は含まない）"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "患者氏名（カタカナ変換。復唱禁止）"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "Gen2 function で required だがフローでは聴取しない（空文字のまま dialogue_completed に渡す）"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "眼科"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "眼科固定値（opening 直後の saveContext2DB で「眼科」を保存）"
+
+  - context_name: "first_examination"
+    context_name_jp: "受診歴"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "受診歴確認の結果（有/無）。初診弾きに使用"
+
+  - context_name: "DesiredreservationDate"
+    context_name_jp: "予約希望日"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "フリーワード格納（日付形式に正規化しない。元資料 1-13 明記）"
+
+  - context_name: "next_reservation"
+    context_name_jp: "次回予約有無"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "キャンセル時のみ聴取（有/無）"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "和暦対応。リトライ上限 2（2 回失敗でブランクセット→skip）"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "連絡先電話番号（聴取）。復唱あり"
+
+  - context_name: "inquiry_details"
+    context_name_jp: "問い合わせ内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "キャンセル時の最終問い合わせ or 予約確認時の問い合わせ内容"
+
+  - context_name: "question"
+    context_name_jp: "最後の問い合わせ"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "確認用件時の問い合わせ内容（inquiry_details と重複するが Gen2 function 定義に従って保持）"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "1=通話完了、2=代表案内（初診弾き含む）、6=時間外"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "受診歴確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "first_examination"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "有"
+      - "無"
+    notes: |
+      Yes/No 救済語：肯定扱い=「肺 / いいです / が今 / PHVます / P」。
+      否定扱い=「初めて / 不審 / 電気」（「不審」「電気」は「初診」扱いでもあるため否定に振る）。
+      復唱禁止。
+
+  - order: 2
+    name: "用件聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "再診"
+      - "変更"
+      - "キャンセル"
+      - "確認"
+    notes: |
+      用件キーワード救済（classification 判定プロンプトに全部埋める）：
+      「印刷/定期/新薬/再診/最新/禁忌/大変」→ 再診、
+      「薬品」→ 変更、
+      「キャンセル」→ キャンセル、
+      「確認」→ 確認、
+      「薬/お薬/要約/通訳/集約/契約/主役/服薬」→ 予約（文脈から用件を推定）、
+      「不審/電気/でんき」→ 初診（再度「初診」扱いとなるが受診歴確認で既に弾き済のため通常ここには到達しない）。
+      復唱禁止（但し近しい語のみ「〇〇でよろしいですか？」と確認してよい）。
+
+  - order: 3
+    name: "予約変更_希望日聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "DesiredreservationDate"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "フリーワード格納（元資料 1-13 明記）。日付正規化しない。再診・変更共通ステップ。"
+
+  - order: 4
+    name: "確認_問い合わせ内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "question"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "予約確認時の問い合わせ内容（自由テキスト）"
+
+  - order: 5
+    name: "キャンセル_次回予約有無"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "next_reservation"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "有"
+      - "無"
+    notes: |
+      Yes/No 救済語同様（肺/いいです/が今/PHVます/P→肯定）。
+      肯定→有（→キャンセル_予約希望日へ）、否定→無（→最終確認_追加問合せへ）。
+
+  - order: 6
+    name: "キャンセル_予約希望日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "DesiredreservationDate"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "キャンセル時の次回予約希望日（次回予約有無=有の場合のみ聴取）。フリーワード格納。"
+
+  - order: 7
+    name: "最終確認_追加問合せ"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "inquiry_details"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "キャンセル用件時の最終問い合わせ内容（自由テキスト）"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "受診歴確認"
+    tts_announcement: "まず初めに、鹿児島生協病院の眼科を受診したことはありますか？はい、または、いいえ、でお答えください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "有"
+        - "無"
+      mapping:
+        - input: "はい / そうです / 肺 / いいです / が今 / PHVます / P（Yes/No 救済語含む肯定）"
+          output: "有"
+        - input: "いいえ / ちがいます / 初めて / 不審 / 電気 / でんき（否定・初診相当語）"
+          output: "無"
+      no_result_condition: "上記いずれにも該当せず用件を特定できない場合"
+    save_to: "first_examination"
+    next_step: "Pattern A 分岐：有→用件聴取、無→END_初診受付不可"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "用件聴取"
+    tts_announcement: "ご用件を、次の4つのうちの、いずれかでお話ください。「再診予約をする」、「予約日を変更する」、「予約をキャンセルする」、「予約の確認」。それでは、お話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "再診"
+        - "変更"
+        - "キャンセル"
+        - "確認"
+      mapping:
+        - input: "再診 / 再診予約 / 診察 / 印刷 / 定期 / 新薬 / 最新 / 禁忌 / 大変"
+          output: "再診"
+        - input: "変更 / 予約日を変更 / 日程を変える / 薬品"
+          output: "変更"
+        - input: "キャンセル / 取り消し / 取りやめ"
+          output: "キャンセル"
+        - input: "確認 / 予約の確認 / 自分の予約はいつか"
+          output: "確認"
+      no_result_condition: "上記いずれにも該当しない場合。近しい場合は『〇〇でよろしいですか？』と確認可（復唱禁止の例外）"
+    save_to: "classification"
+    next_step: "患者氏名聴取（単線、分岐は後段の用件別フロー分岐で実施）"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "予約変更_希望日聴取"
+    tts_announcement: "ご希望される予約日時を、「10月10日の午前9時」のように日付と時間をおっしゃってください。また、複数ある場合は続けて自由にお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "OpenAI 不要（text 保存）。STT 結果をそのまま保存"
+    save_to: "DesiredreservationDate"
+    next_step: "終話分岐_予約変更"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "確認_問い合わせ内容"
+    tts_announcement: "確認したい内容がございましたら、内容を簡潔におっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "OpenAI 不要（text 保存）"
+    save_to: "question"
+    next_step: "END_受付完了_確認"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "キャンセル_次回予約有無"
+    tts_announcement: "次回の予約希望はございますか？ございましたらご希望時期をお話ください。ない場合は「ありません」とおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "有"
+        - "無"
+      mapping:
+        - input: "はい / あります / 希望あり / 肺 / いいです / が今 / PHVます / P（Yes/No 救済語含む肯定）"
+          output: "有"
+        - input: "いいえ / ありません / ない / なし"
+          output: "無"
+      no_result_condition: "上記いずれにも該当しない場合"
+    save_to: "next_reservation"
+    next_step: "Pattern A 分岐：有→キャンセル_予約希望日、無→最終確認_追加問合せ"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "キャンセル_予約希望日"
+    tts_announcement: "ご希望される予約日時を、「10月10日の午前9時」のように日付と時間をおっしゃってください。また、複数ある場合は続けて自由にお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "OpenAI 不要（text 保存）"
+    save_to: "DesiredreservationDate"
+    next_step: "最終確認_追加問合せ"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "最終確認_追加問合せ"
+    tts_announcement: "確認したい内容がございましたら、内容を簡潔におっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "OpenAI 不要（text 保存）"
+    save_to: "inquiry_details"
+    next_step: "END_キャンセル受付完了"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須 — 削除禁止）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達（主要聴取項目）"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系 ---
+  - name: "END_初診受付不可"
+    condition: "受診歴確認 = 無（初診）"
+    tts_announcement: "恐れ入りますが、初めて受診される方のご予約はお受けできません。大変申し訳ございませんが予約なしでのご来院の上、受診をお願いします。鹿児島生協病院の眼科外来は午前中は月曜日から土曜日までの8時30分から11時30分、午後は月曜日と木曜日の13時45分から16時までの受付となっております。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_初診受付不可"
+
+  - name: "END_受付完了_再診"
+    condition: "再診予約受付完了（classification=再診、status=1）"
+    tts_announcement: "再診予約の申し込みを受付いたしました。3診療日以内に担当者から折り返し電話、もしくは、SMSにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了_再診"
+
+  - name: "END_受付完了_変更"
+    condition: "予約変更受付完了（classification=変更、status=1）"
+    tts_announcement: "予約変更の申し込みを受付いたしました。3診療日以内に担当者から折り返し電話、もしくは、SMSにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了_変更"
+
+  - name: "END_受付完了_確認"
+    condition: "予約確認受付完了（classification=確認、status=1）"
+    tts_announcement: "予約確認の申し込みを受付いたしました。3診療日以内に担当者から折り返し電話、もしくは、SMSにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了_確認"
+
+  - name: "END_キャンセル受付完了"
+    condition: "予約キャンセル受付完了（classification=キャンセル、status=1）※ smsFlag=2 は他施設と異なる"
+    tts_announcement: "予約キャンセルの申し込みを受付いたしました。3診療日以内に担当者から折り返し電話、もしくは、SMSにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "2"
+    completion_flag_name: "完了フラグ_キャンセル受付完了"
+
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内（眼科専用 + 当日予約用代表番号案内）"
+    announcement: |
+      お電話ありがとうございます。鹿児島生協病院の眼科専用、AI電話です。再診予約、予約変更、キャンセル、予約確認を承ります。なお当日の予約に関するお問い合わせは、<speak type="telephone" breakc="300ms">099-267-1455</speak>へおかけ直しください。
+
+  - module_name: "受診歴確認"
+    purpose: "受診歴の Yes/No 確認（初診弾き用）"
+    announcement: "まず初めに、鹿児島生協病院の眼科を受診したことはありますか？はい、または、いいえ、でお答えください。"
+
+  - module_name: "用件聴取"
+    purpose: "4 用件（再診/変更/キャンセル/確認）の選択"
+    announcement: "ご用件を、次の4つのうちの、いずれかでお話ください。「再診予約をする」、「予約日を変更する」、「予約をキャンセルする」、「予約の確認」。それでは、お話ください。"
+
+  - module_name: "予約変更_希望日聴取"
+    purpose: "再診・変更共通の予約希望日聴取（フリーワード）"
+    announcement: "ご希望される予約日時を、「10月10日の午前9時」のように日付と時間をおっしゃってください。また、複数ある場合は続けて自由にお話ください。"
+
+  - module_name: "確認_問い合わせ内容"
+    purpose: "予約確認用件時の問い合わせ内容聴取"
+    announcement: "確認したい内容がございましたら、内容を簡潔におっしゃってください。"
+
+  - module_name: "キャンセル_次回予約有無"
+    purpose: "キャンセル時の次回予約希望確認（Yes/No）"
+    announcement: "次回の予約希望はございますか？ございましたらご希望時期をお話ください。ない場合は「ありません」とおっしゃってください。"
+
+  - module_name: "キャンセル_予約希望日"
+    purpose: "キャンセル時の次回予約希望日聴取（有の場合のみ）"
+    announcement: "ご希望される予約日時を、「10月10日の午前9時」のように日付と時間をおっしゃってください。また、複数ある場合は続けて自由にお話ください。"
+
+  - module_name: "最終確認_追加問合せ"
+    purpose: "キャンセル用件時の最終問い合わせ"
+    announcement: "確認したい内容がございましたら、内容を簡潔におっしゃってください。"
+
+  - module_name: "END_初診受付不可"
+    purpose: "初診（受診歴なし）患者への受付不可案内＋診療時間案内"
+    announcement: "恐れ入りますが、初めて受診される方のご予約はお受けできません。大変申し訳ございませんが予約なしでのご来院の上、受診をお願いします。鹿児島生協病院の眼科外来は午前中は月曜日から土曜日までの8時30分から11時30分、午後は月曜日と木曜日の13時45分から16時までの受付となっております。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_受付完了_再診"
+    purpose: "再診予約受付完了"
+    announcement: "再診予約の申し込みを受付いたしました。3診療日以内に担当者から折り返し電話、もしくは、SMSにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_受付完了_変更"
+    purpose: "予約変更受付完了"
+    announcement: "予約変更の申し込みを受付いたしました。3診療日以内に担当者から折り返し電話、もしくは、SMSにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_受付完了_確認"
+    purpose: "予約確認受付完了"
+    announcement: "予約確認の申し込みを受付いたしました。3診療日以内に担当者から折り返し電話、もしくは、SMSにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_キャンセル受付完了"
+    purpose: "予約キャンセル受付完了（smsFlag=2）"
+    announcement: "予約キャンセルの申し込みを受付いたしました。3診療日以内に担当者から折り返し電話、もしくは、SMSにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_非通知"
+    purpose: "非通知着信拒否"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_時間外"
+    purpose: "受付時間外案内"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "主要聴取項目リトライ上限到達"
+    announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+# 眼科固定のため診療科辞書は不要。特殊キーワード（救済語）は OpenAI プロンプト側で処理する方針（STT 辞書に入れると誤変換を誘発する可能性があるため）。
+amivoice_dictionary: []
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "【眼科専用】診療科 clinicalDepartment は「眼科」を固定値で saveContext2DB に保存。受診科識別プロセスは不要（opening 直後に挟む）。"
+  - "【初診は受付不可】受診歴確認で「無」→ END_初診受付不可（受付時間案内を含む長文）で終話。初診扱い語（不審/電気/でんき）も否定側に振る。"
+  - "【復唱許可項目】生年月日と連絡先電話番号のみ。それ以外（氏名・受診歴・用件・予約希望日・次回予約有無・問い合わせ内容）はいついかなる時も復唱禁止。"
+  - "【生年月日復唱フレーズ指定】「生年月日は{西暦4桁}年{1〜12の月}月{1〜31の日}日でよろしいですか？はい、そうです、または、いいえ、違います、のようにお答えください。」形式。月日の先頭ゼロ禁止（「7月」OK、「07月」不可）、YYYYMMDD や「/」区切り禁止。年のみ「2001年」のように 0 含む可。生年月日聴取サブフロー側のプロパティで設定（prompter 担当）。"
+  - "【電話番号復唱フレーズ】「<speak type=\"telephone\" breakc=\"300ms\">{電話番号}</speak>、でよろしいですか？はい、そうです、または、いいえ、違います、のようにお答えください。」。SSML タグは元資料指示のため保持（通常 SSML 禁止だが施設指示優先）。"
+  - "【Yes/No 救済語】肯定扱い: 肺 / いいです / が今 / PHVます / P（否定側救済語なし）。受診歴確認・キャンセル_次回予約有無・電話番号復唱・生年月日復唱など全 Yes/No 判定の OpenAI prompt に埋める。"
+  - "【数字誤認識救済】「C / c / Ｃ / ｃ / for / ふぉー / フォー / しー / しい / し」→ 4、「ごー / ごお / ご」→ 5。診察券番号・電話番号の prompt 側で正規化（今フローでは電話番号のみ該当）。"
+  - "【用件キーワード救済】classification 判定プロンプトに埋める：「印刷/定期/新薬/再診/最新/禁忌/大変」→ 再診、「薬品」→ 変更、「不審/電気/でんき」→ 初診（否定扱い）、「薬/お薬/要約/通訳/集約/契約/主役/服薬」→ 予約（文脈推定）。"
+  - "【「もしもし」単独発話】「お声は届いております。」とアナウンスし直前質問を再案内。他発話が混ざっている場合は「もしもし」を無視して他内容で判断。全聴取ブロックの OpenAI prompt 共通ルール。"
+  - "【予約希望日はフリーワード格納】DesiredreservationDate は日付形式に正規化しない。STT 結果をそのまま text 保存（元資料 1-13 明記）。"
+  - "【複数情報一度発話】入電者が一度に複数情報を発話した場合、既取得項目は再質問・復唱しない。全 OpenAI prompt に反映。"
+  - "【DOB リトライ上限 2】2 回認識失敗で patientDateOfBirth をブランクセットし、エラー案内せず次の質問（用件別フロー分岐）へ skip。生年月日聴取サブフロー側で処理。"
+  - "【電話番号 3 回失敗】END_回答不可「ご回答の確認ができませんでしたのでこちらからお電話失礼させていただきます。それでは失礼いたします。」で終話。Gen3 サブフロー内完結のため termination_patterns には入れず confirmation_items で Brekeke IVR UI 手動追加タスク化。"
+  - "【smsFlag 特例】キャンセル用件 smsFlag=2（他施設は 1 が多いが、鹿児島生協診療は 2）。Dr.JOY 側の SMS テンプレート割り当てで smsFlag=2 専用テンプレートを用意すること。"
+  - "【施設情報】所在地=鹿児島県 鹿児島市 谷山 中央5丁目20-10、代表電話=099-267-1455。代表番号は冒頭アナウンスで当日予約用として、また初診受付不可アナウンス（受付時間案内を含む）で使用。"
+
+# --- セクション12: 要確認事項 ---
+confirmation_items:
+  - item: "office_id を Dr.JOY 管理画面から取得して basic_info.office_id に設定"
+    resolved: false
+  - item: "use_acceptance_times の判定：Dr.JOY 側で営業時間制御する場合は false、フロー側で時間外アナウンスを出したい場合は true のまま"
+    resolved: false
+  - item: "非通知アナウンス文言（テンプレートデフォルトで本番稼働可か顧客確認）"
+    resolved: false
+  - item: "時間外アナウンス文言（use_acceptance_times=true の場合のみ）"
+    resolved: false
+  - item: "clinicalDepartment=「眼科」固定値セット方法の最終確認（opening 直後に saveContext2DB を挟む設計）"
+    resolved: false
+  - item: "medicalCardNumber コンテキストを Dr.JOY 画面に表示するか（Gen2 function required だが聴取しない。空のままでよいか）"
+    resolved: false
+  - item: "SMS 文面 smsFlag=1 用（再診/変更/確認）を Dr.JOY 管理画面で設定"
+    resolved: false
+  - item: "SMS 文面 smsFlag=2 用（キャンセル専用）を Dr.JOY 管理画面で設定 ※他施設と異なる特例"
+    resolved: false
+  - item: "【手動タスク・人間（Brekeke IVR UI）】電話番号聴取サブフロー内の 3 回失敗時に END_回答不可 TTS「ご回答の確認ができませんでしたのでこちらからお電話失礼させていただきます。それでは失礼いたします。」→ 切断モジュールを追加（Custom Jump to Flow から親フロー END へ接続不可のためサブフロー内で完結させる）"
+    resolved: false
+  - item: "認証設定（優先順位：生年月日/電話番号/診察券番号）を Dr.JOY 管理画面で設定"
+    resolved: false
+  - item: "Dr.JOY 画面の表示設定（確認画面表示 ○/×）を Dr.JOY 管理画面で設定"
+    resolved: false

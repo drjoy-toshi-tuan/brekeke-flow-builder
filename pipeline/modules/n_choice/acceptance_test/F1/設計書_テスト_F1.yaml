@@ -1,0 +1,88 @@
+# Pattern 6 (テストフロー) — n_choice 決定論エンジン 単体受入テスト（発信元3分類 config）
+#
+# 検証対象: modules/n_choice/acceptance_test/script_caller_type.js
+#   = 正本テンプレ modules/n_choice/script.js を「発信元3分類」config で充填した具体版
+#     （エンジンは正本と同一。DTMF_MAP/KEYWORD_PATTERNS のみ発信元データ。{{INPUT_MODULE}} は placeholder のまま）。
+#
+# 狙い: n_choice エンジンを Brekeke 実機 (Nashorn/ES5) で単体実行し、オラクル↔実機パリティを確証する。
+#   P7 連結はラベル注入のみで、DTMF 数字入力(1/2/3)・全角・キーワード変種・AmiVoice重複・正規化を実機検証していない。
+#   本テストでそれらを全入力耐性として単体検証する（オラクル test_oracle.py 29/29 と同一ケース）。
+#   ※ n_choice は複数設問で使い回す汎用エンジン。本テストは「発信元 config」で代表検証する
+#     （他設問=患者区分/担当者/F1 は同一エンジン＋config データ差のみ。DTMF/keyword 機構の検証は本テストで担保）。
+#
+# 確認: Brekeke ログを grep "[TEST FAIL]" で 0 件なら全 PASS。末尾 "[TEST DONE]" で全 29 ケース完走。
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$F1仕分け"
+  flow_name: "テスト$F1仕分け"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$F1仕分け"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] n_choice 決定論エンジン 単体受入 (F1仕分け config, 17 ケース)");
+      $runner.getLogger().info("対象: script_f1.js (正本 script.js を F1仕分け config 充填) / オラクル 17/17 PASS 済");
+      $runner.getLogger().info("grep [TEST FAIL] = 0 なら実機も全 PASS");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: matrix
+
+  - step: matrix
+    type: script_test_matrix
+    script_file: "./script_f1.js"
+    input_placeholder: "{{INPUT_MODULE}}"
+    final_next: ログ_終了
+    cases:
+      - {id: t01, input: "1", expected: "相談予約"}
+      - {id: t02, input: "2", expected: "受診"}
+      - {id: t03, input: "１", expected: "相談予約"}
+      - {id: t04, input: "２", expected: "受診"}
+      - {id: t05, input: "9", expected: "NO_RESULT"}
+      - {id: t06, input: "0", expected: "NO_RESULT"}
+      - {id: t07, input: "1です", expected: "相談予約"}
+      - {id: t08, input: "相談したい", expected: "相談予約"}
+      - {id: t09, input: "予約の相談です", expected: "相談予約"}
+      - {id: t10, input: "相談予約をお願いします", expected: "相談予約"}
+      - {id: t11, input: "受診したい", expected: "受診"}
+      - {id: t12, input: "診察してほしい", expected: "受診"}
+      - {id: t13, input: "診ていただきたい", expected: "受診"}
+      - {id: t14, input: "受診の予約", expected: "受診"}
+      - {id: t15, input: "えーっと", expected: "NO_RESULT"}
+      - {id: t16, input: "あのー", expected: "NO_RESULT"}
+      - {id: t17, input: "今日はいい天気", expected: "NO_RESULT"}
+
+  - step: ログ_終了
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST DONE] n_choice F1仕分け config 単体受入 全 17 ケース完走");
+      $runner.setResult("done");
+    next: 終了
+
+  - step: 終了
+    type: termination
+    termination_ref: "END_テスト終了"
+
+termination_patterns:
+  - name: "END_テスト終了"
+    condition: "テスト完走"
+    tts_announcement: "テストを終了します。"
+    status: "1"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_テスト終了"

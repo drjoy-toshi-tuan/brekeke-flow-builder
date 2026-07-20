@@ -1,0 +1,111 @@
+# Pattern 6 (テストフロー) — 用件抽出 決定論パーサ v2 (inquiry_extractor) 単体受入テスト
+#
+# 検証対象: docs/brekeke/script_templates/inquiry_extractor.js（production 正本テンプレート）
+#   （自由発話の STT テキストを直接解析し、用件種別＋各スロット値＋取得有無フラグ＋用件概要文へ分解。OpenAI不使用）
+#
+# このテストの狙い:
+#   - Python オラクル (test_oracle.py) と同一ケースを Brekeke 実機 (Nashorn/ES5.1) で単体実行し
+#     オラクル↔実機のパリティ (canonical 文字列一致) を確証する。
+#   - script_file で production 正本テンプレを **そのまま** 読み込む。input_placeholder "{{INPUT_MODULE}}" を
+#     case ごとの <id>_in に置換するだけ（getModuleResult fallback 経路でパーサを検証）。
+#     テンプレの context-first 読み取り（{{CONTEXT_FIELD}}）は test では空振り→ fallback で <id>_in を読む。
+#   - 照合は setResult の canonical 文字列（<用件種別>‖<スロット>@<flag>‖…‖SUMMARY:<用件概要文>）で行う。
+#     production の setObject 撒き出しは context 経由のため本単体テストでは照合しない（Pattern 7 連結で確認）。
+#
+# ケース構成 (26 = test_oracle.py CASES と一致):
+#   用件種別3分類(5) / 評価順(3) / 氏名マーカー(5) / 電話(3) / 生年月日(2) / 診察券(3) / 予約日格納先(2) / フル(1) / こぼれ(2)
+#
+# 実機検証時の確認方法:
+#   Brekeke ログを grep "[TEST FAIL]" して件数 0 なら全 PASS。末尾に "[TEST DONE]" で完走。
+#
+# モジュール数: dispatch 1 + 26×5 + frame 4 = 135 (1コール900上限内)。
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$用件抽出"
+  flow_name: "テスト$用件抽出"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$用件抽出"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] 用件抽出 決定論パーサ v2 単体受入テスト (26 ケース)");
+      $runner.getLogger().info("対象: docs/brekeke/script_templates/inquiry_extractor.js / オラクル 26/26 PASS 済");
+      $runner.getLogger().info("grep [TEST FAIL] = 0 なら実機も全 PASS");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: matrix
+
+  - step: matrix
+    type: script_test_matrix
+    script_file: "../../../docs/brekeke/script_templates/inquiry_extractor.js"
+    input_placeholder: "{{INPUT_MODULE}}"
+    final_next: ログ_終了
+    cases:
+      # --- 用件種別 3分類 ---
+      - {id: new_full, input: "来週の月曜日に内科を予約したいです。山田太郎と申します。電話番号は09012345678です。", expected: "新規‖内科@取得済‖来週月曜日@取得済‖@未取得‖@未取得‖09012345678@取得済‖@未取得‖@未取得‖SUMMARY:新規のご予約、内科、来週月曜日、でお間違いないですか？"}
+      - {id: change_dt, input: "予約を変更したいんですけど、6月20日の10時の予約です。", expected: "変更‖@未取得‖@未取得‖6月20日10時@取得済‖@未取得‖@未取得‖@未取得‖@未取得‖SUMMARY:ご予約の変更、6月20日10時、でお間違いないですか？"}
+      - {id: cancel, input: "予約をキャンセルしたいです。来週火曜の予約です。", expected: "キャンセル‖@未取得‖@未取得‖来週火曜@取得済‖@未取得‖@未取得‖@未取得‖@未取得‖SUMMARY:ご予約のキャンセル、来週火曜、でお間違いないですか？"}
+      - {id: inquiry_q, input: "駐車場はありますか？", expected: "問い合わせ‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖SUMMARY:お問い合わせ、でお間違いないですか？"}
+      - {id: inquiry_hours, input: "診療時間を教えてください。", expected: "問い合わせ‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖SUMMARY:お問い合わせ、でお間違いないですか？"}
+      # --- 用件種別 評価順（precision優先）---
+      - {id: order_change_over_new, input: "予約を変更したいです。", expected: "変更‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖SUMMARY:ご予約の変更、でお間違いないですか？"}
+      - {id: order_cancel_over, input: "予約を取り消したいです。", expected: "キャンセル‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖SUMMARY:ご予約のキャンセル、でお間違いないですか？"}
+      - {id: new_kakaritai, input: "田中先生にかかりたいです。", expected: "新規‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖SUMMARY:新規のご予約、でお間違いないですか？"}
+      # --- 氏名（inquiry_extractorでは抽出しない・overflow_extractorで後段回収）---
+      - {id: name_suffix, input: "佐藤花子と申します。", expected: "問い合わせ‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖SUMMARY:お問い合わせ、でお間違いないですか？"}
+      - {id: name_prefix_wa, input: "私は鈴木一郎です。", expected: "問い合わせ‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖SUMMARY:お問い合わせ、でお間違いないですか？"}
+      - {id: name_prefix_namae, input: "名前は高橋恵子です。", expected: "問い合わせ‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖SUMMARY:お問い合わせ、でお間違いないですか？"}
+      - {id: name_honorific_strip, input: "山本と申します。", expected: "問い合わせ‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖SUMMARY:お問い合わせ、でお間違いないですか？"}
+      - {id: name_thirdparty_skip, input: "田中先生に診てもらいたいです。", expected: "新規‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖SUMMARY:新規のご予約、でお間違いないですか？"}
+      # --- 電話番号 ---
+      - {id: phone_hyphen, input: "電話は090-1234-5678です。", expected: "問い合わせ‖@未取得‖@未取得‖@未取得‖@未取得‖09012345678@取得済‖@未取得‖@未取得‖SUMMARY:お問い合わせ、でお間違いないですか？"}
+      - {id: phone_fullwidth, input: "０９０１２３４５６７８までお願いします。", expected: "問い合わせ‖@未取得‖@未取得‖@未取得‖@未取得‖09012345678@取得済‖@未取得‖@未取得‖SUMMARY:お問い合わせ、でお間違いないですか？"}
+      - {id: phone_10digit, input: "0312345678に折り返してください。", expected: "問い合わせ‖@未取得‖@未取得‖@未取得‖@未取得‖0312345678@取得済‖@未取得‖@未取得‖SUMMARY:お問い合わせ、でお間違いないですか？"}
+      # --- 生年月日（元号/西暦付き）---
+      - {id: bday_era, input: "生年月日は昭和60年4月1日です。山田と申します。", expected: "問い合わせ‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖昭和60年4月1日@取得済‖@未取得‖SUMMARY:お問い合わせ、でお間違いないですか？"}
+      - {id: bday_seireki, input: "1985年4月1日生まれです。", expected: "問い合わせ‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖1985年4月1日@取得済‖@未取得‖SUMMARY:お問い合わせ、でお間違いないですか？"}
+      # --- 診察券番号（ラベル必須・電話と分離）---
+      - {id: card_label, input: "診察券番号は12345です。", expected: "問い合わせ‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖12345@取得済‖SUMMARY:お問い合わせ、でお間違いないですか？"}
+      - {id: card_vs_phone, input: "電話は09012345678、診察券は6789です。", expected: "問い合わせ‖@未取得‖@未取得‖@未取得‖@未取得‖09012345678@取得済‖@未取得‖6789@取得済‖SUMMARY:お問い合わせ、でお間違いないですか？"}
+      - {id: card_no_label, input: "番号は12345です。", expected: "問い合わせ‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖SUMMARY:お問い合わせ、でお間違いないですか？"}
+      # 実機で発覚（2026-07-08）: 生年月日の年(1950)を診察券番号として誤取得していた回帰。順不同でも年を拾わないこと
+      - {id: card_after_bday_phone, input: "山田太郎です。生年月日は1950年3月3日電話番号は09065765660診察券番号は1123456です。ちょっと予約が取りたくて電話しました。", expected: "新規‖@未取得‖@未取得‖@未取得‖@未取得‖09065765660@取得済‖1950年3月3日@取得済‖1123456@取得済‖SUMMARY:新規のご予約、でお間違いないですか？"}
+      - {id: card_after_bday_seireki, input: "生年月日は1950年3月3日で、診察券番号は778899です。", expected: "問い合わせ‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖1950年3月3日@取得済‖778899@取得済‖SUMMARY:お問い合わせ、でお間違いないですか？"}
+      # --- 予約日の格納先（新規=予約希望日 / 変更=予約日時）---
+      - {id: new_desired, input: "新規で予約したいです。明日の午後3時希望です。", expected: "新規‖@未取得‖明日午後3時@取得済‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖SUMMARY:新規のご予約、明日午後3時、でお間違いないですか？"}
+      - {id: change_dt2, input: "予約変更で、来週水曜日に変えたいです。", expected: "変更‖@未取得‖@未取得‖来週水曜日@取得済‖@未取得‖@未取得‖@未取得‖@未取得‖SUMMARY:ご予約の変更、来週水曜日、でお間違いないですか？"}
+      # --- フル（新規）---
+      - {id: new_all, input: "整形外科を新規で予約したいです。来週金曜の14時で、私は伊藤次郎です。電話は08011112222、診察券番号は55667です。", expected: "新規‖整形外科@取得済‖来週金曜14時@取得済‖@未取得‖@未取得‖08011112222@取得済‖@未取得‖55667@取得済‖SUMMARY:新規のご予約、整形外科、来週金曜14時、でお間違いないですか？"}
+      # --- こぼれ（→FAQ）---
+      - {id: fallthrough, input: "ちょっと聞きたいことがあって電話しました。", expected: "問い合わせ‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖SUMMARY:お問い合わせ、でお間違いないですか？"}
+      - {id: empty, input: "", expected: "問い合わせ‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖@未取得‖SUMMARY:お問い合わせ、でお間違いないですか？"}
+
+  - step: ログ_終了
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST DONE] 用件抽出 決定論パーサ v2 単体受入テスト 26 ケース 完走");
+      $runner.getLogger().info("Brekeke ログを grep [TEST FAIL] で件数確認 (0 なら全 PASS)");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: 終了
+
+  - step: 終了
+    type: termination

@@ -1,0 +1,1248 @@
+# 設計書 -- 横浜労災病院 診療
+# 生成元: @director エージェント
+# 生成日: 2026/04/03
+# 確認レポート: output/scenarios/横浜労災病院_診療/確認レポート_20260403.md
+# BLOCKER: B-1 office_id 未確定
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "横浜労災病院"
+  group_name: "横浜労災"
+  flow_name: "横浜労災$診療_20260403"
+  target_facility: "横浜労災病院（本院のみ）"
+  office_id: "TODO_要確認"
+  phone_number: "05017255489"
+  business_hours: "平日 8:15〜17:00"
+  flow_type: "subflow"
+  work_type: "new"
+  environment: "demo"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "横浜労災$診療_20260403"
+      role: "main"
+      description: "冒頭チェーン → 診療/健診分岐 → 用件分岐(四択) → 診療科・紹介状・予約日等聴取 → サブフロー遷移(個人情報) → 終話"
+  subflows:
+    - name: "横浜労災$氏名聴取"
+      target: "氏名聴取"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。個人情報サブフロー.bivr を完全コピー"
+
+    - name: "横浜労災$生年月日聴取"
+      target: "生年月日聴取"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。復唱あり"
+
+    - name: "横浜労災$診察券番号聴取"
+      target: "診察券番号聴取"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。7桁。わからない分岐あり"
+
+    - name: "横浜労災$電話番号聴取"
+      target: "電話番号聴取"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9/10/11 準拠。incoming-classifier で携帯/固定分岐。復唱あり"
+
+# --- セクション3: フローの目的 ---
+purpose: >
+  患者からの電話を受け、診療/健診を判別し、診療の場合は用件（予約・予約変更・キャンセル・予約確認）を聴取する。
+  用件に応じて診療科・紹介状の有無・紹介元医療機関名・医師名・現在の予約日・変更理由・確認内容等を聴取し、
+  患者情報（氏名・生年月日・診察券番号・連絡先電話番号）を個人情報聴取サブフローで収集して折り返し受付を自動化する。
+  健診はオペレーター転送、受付不可診療科は案内終話、リハビリはオペレーター転送とする。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "横浜労災$診療_20260403"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → 非通知_アナウンス(TTS) → 完了フラグ_非通知(status=2, smsFlag=-1) → 切断
+            └─ 通常 → acceptance_times
+                        ├─ 時間外/TIMEOUT/ERROR → 時間外_アナウンス(TTS) → 完了フラグ_時間外(status=6, smsFlag=-1) → 切断
+                        └─ 受付可(true) → 冒頭_アナウンス(TTS)
+                                            → 注意事項_アナウンス(TTS)
+                                            → 診療健診(TTS)
+                                            → 入力_診療健診(AmiVoice STT)
+                                            → OpenAI_診療健診(generate_by_OpenAI)
+                                                ├─ 健診 → 転送_健診(TTS) → Call Transfer(045-474-8882)
+                                                ├─ 診療 → 用件聴取ルートへ
+                                                └─ NO_RESULT → リトライ_診療健診
+                                                                  ├─ Retry → 診療健診(TTS)
+                                                                  └─ No more → END_上限エラー(TTS) → 完了フラグ_上限(status=2, smsFlag=-1) → 切断
+
+      ─── 用件聴取ルート ───
+      用件(TTS)
+        → 入力_用件(AmiVoice STT)
+        → OpenAI_用件(generate_by_OpenAI)
+            ├─ 予約 → ★予約ルート
+            ├─ 予約変更 → ★予約変更キャンセルルート
+            ├─ キャンセル → ★予約変更キャンセルルート
+            ├─ 予約確認 → ★予約確認ルート
+            └─ NO_RESULT → リトライ_用件
+                              ├─ Retry → 用件(TTS)
+                              └─ No more → END_上限エラー(TTS) → 完了フラグ_上限 → 切断
+
+      ─── ★予約ルート ───
+      saveContext_用件_予約 → 紹介状確認(TTS)
+        → 入力_紹介状確認(AmiVoice STT)
+        → OpenAI_紹介状確認(generate_by_OpenAI)
+            ├─ あり → saveContext_紹介状_あり → 診療科_予約(TTS)
+            │           → 入力_診療科_予約(AmiVoice STT)
+            │           → OpenAI_診療科_予約(generate_by_OpenAI)
+            │               ├─ グループ1 → END_終話1(TTS) → 完了フラグ_終話1(status=2, smsFlag=-1) → 切断
+            │               ├─ グループ2 → END_終話2(TTS) → 完了フラグ_終話2(status=2, smsFlag=-1) → 切断
+            │               ├─ リハビリ → 転送_リハビリ(TTS) → Call Transfer(045-474-8882)
+            │               ├─ グループ4 → saveContext_診療科 → 紹介元(TTS)
+            │               │               → 入力_紹介元(AmiVoice STT) → OpenAI_紹介元 → saveContext_紹介元
+            │               │               → 医師名(TTS)
+            │               │               → 入力_医師名(AmiVoice STT) → OpenAI_医師名 → saveContext_医師名
+            │               │               → ★個人情報聴取サブフロー遷移
+            │               └─ NO_RESULT → リトライ_診療科_予約
+            │                                 ├─ Retry → 診療科_予約(TTS)
+            │                                 └─ No more → END_上限エラー → 切断
+            ├─ いいえ → saveContext_紹介状_なし → 診療科_紹介なし(TTS)
+            │           → 入力_診療科_紹介なし(AmiVoice STT)
+            │           → OpenAI_診療科_紹介なし(generate_by_OpenAI)
+            │               ├─ グループ1 → END_終話1(TTS) → 完了フラグ_終話1 → 切断
+            │               ├─ グループ2 → END_終話2(TTS) → 完了フラグ_終話2 → 切断
+            │               ├─ グループ3 → END_終話3(TTS) → 完了フラグ_終話3(status=2, smsFlag=-1) → 切断
+            │               ├─ リハビリ → 転送_リハビリ(TTS) → Call Transfer(045-474-8882)
+            │               ├─ グループ4 → saveContext_診療科 → 選定療養費_説明(TTS) → ★個人情報聴取サブフロー遷移
+            │               └─ NO_RESULT → リトライ_診療科_紹介なし
+            │                                 ├─ Retry → 診療科_紹介なし(TTS)
+            │                                 └─ No more → END_上限エラー → 切断
+            └─ NO_RESULT → リトライ_紹介状確認
+                              ├─ Retry → 紹介状確認(TTS)
+                              └─ No more → END_上限エラー → 切断
+
+      ─── ★予約変更キャンセルルート ───
+      saveContext_用件_変更キャンセル → 現在の予約日(TTS)
+        → 入力_現在の予約日(AmiVoice STT)
+        → OpenAI_現在の予約日 → saveContext_予約日
+        → 当日確認(TTS)
+        → 入力_当日確認(AmiVoice STT)
+        → OpenAI_当日確認(generate_by_OpenAI)
+            ├─ はい（当日）→ 転送_当日変更(TTS) → Call Transfer(045-474-8882)
+            ├─ いいえ → 診療科_変更(TTS)
+            │           → 入力_診療科_変更(AmiVoice STT)
+            │           → OpenAI_診療科_変更(generate_by_OpenAI)
+            │               ├─ リハビリ → 転送_リハビリ(TTS) → Call Transfer(045-474-8882)
+            │               └─ その他全て → saveContext_診療科_変更 → 変更理由(TTS)
+            │                                → 入力_変更理由(AmiVoice STT) → OpenAI_変更理由 → saveContext_変更理由
+            │                                → ★個人情報聴取サブフロー遷移
+            └─ NO_RESULT → リトライ_当日確認
+                              ├─ Retry → 当日確認(TTS)
+                              └─ No more → END_上限エラー → 切断
+
+      ─── ★予約確認ルート ───
+      saveContext_用件_確認 → 確認内容(TTS)
+        → 入力_確認内容(AmiVoice STT)
+        → OpenAI_確認内容 → saveContext_確認内容
+        → ★個人情報聴取サブフロー遷移
+
+      ─── ★個人情報聴取サブフロー遷移（共通合流点）───
+      Custom Jump to Flow → 横浜労災$氏名聴取 → (返却)
+        → Custom Jump to Flow → 横浜労災$生年月日聴取 → (返却)
+        → Custom Jump to Flow → 横浜労災$診察券番号聴取 → (返却)
+        → Custom Jump to Flow → 横浜労災$電話番号聴取 → (返却、携帯=1/その他=2)
+            ├─ 携帯(1) → END_終話4(TTS) → 完了フラグ_受付完了_SMS(status=1, smsFlag=1) → 切断
+            └─ その他(2) → END_終話4(TTS) → 完了フラグ_受付完了_noSMS(status=1, smsFlag=-1) → 切断
+
+      ─── メインフロー内終話パターン ───
+      END_終話1 → 切断（グループ1受付不可）
+      END_終話2 → 切断（グループ2受付不可）
+      END_終話3 → 切断（グループ3紹介状なし）
+      END_終話4 → 切断（受付完了）
+      END_上限エラー → 切断
+      END_時間外 → 切断
+      END_非通知 → 切断
+    notes: |
+      - acceptance_times使用（平日 8:15〜17:00）
+      - 診療科聴取が3箇所（予約+紹介あり、予約+紹介なし、予約変更/キャンセル）に分かれる
+      - 予約変更/キャンセルルートの診療科はグループ分岐不要（リハビリのみ転送）
+      - 個人情報聴取は全ルートの共通合流点
+
+  - flow_name: "横浜労災$氏名聴取"
+    diagram: |
+      CLAUDE.md Rule 9 準拠。個人情報サブフロー.bivr の氏名聴取フローを完全コピー。
+      フロー名プレフィックスのみ「横浜労災$」に置換。構造・接続・スクリプトは一切変更不可。
+    notes: "リファレンスbivr完全コピー"
+
+  - flow_name: "横浜労災$生年月日聴取"
+    diagram: |
+      CLAUDE.md Rule 9 準拠。個人情報サブフロー.bivr の生年月日聴取フローを完全コピー。
+      フロー名プレフィックスのみ「横浜労災$」に置換。復唱あり。
+    notes: "リファレンスbivr完全コピー。復唱あり"
+
+  - flow_name: "横浜労災$診察券番号聴取"
+    diagram: |
+      CLAUDE.md Rule 9 準拠。個人情報サブフロー.bivr の診察券番号聴取フローを完全コピー。
+      フロー名プレフィックスのみ「横浜労災$」に置換。
+      PDFの指示: 7桁の番号。「わからない」分岐あり。
+    notes: "リファレンスbivr完全コピー。7桁、わからない分岐あり"
+
+  - flow_name: "横浜労災$電話番号聴取"
+    diagram: |
+      CLAUDE.md Rule 9/10/11 準拠。個人情報サブフロー.bivr の電話番号聴取フローを完全コピー。
+      フロー名プレフィックスのみ「横浜労災$」に置換。
+      incoming-classifier で携帯/固定分岐。復唱あり。
+      結果返却: 1=携帯、2=その他
+    notes: "リファレンスbivr完全コピー。携帯/その他判定結果をメインフローに返却"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - order: "1"
+        value: "予約"
+      - order: "2"
+        value: "予約変更"
+      - order: "3"
+        value: "キャンセル"
+      - order: "4"
+        value: "予約確認"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件選択結果"
+
+  - context_name: "category"
+    context_name_jp: "診療健診区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - order: "1"
+        value: "診療"
+      - order: "2"
+        value: "健診"
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "冒頭の診療/健診分岐結果"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values:
+      # グループ1（受付不可 -- 紹介元から直接問い合わせ案内）
+      - order: "1"
+        value: "血液内科"
+      - order: "2"
+        value: "腫瘍内科"
+      - order: "3"
+        value: "放射線治療科"
+      # グループ2（受付不可 -- 新規予約不可）
+      - order: "4"
+        value: "放射線診断科"
+      - order: "5"
+        value: "放射線IVR科"
+      - order: "6"
+        value: "緩和支持治療科"
+      - order: "7"
+        value: "救急科"
+      - order: "8"
+        value: "救急災害医療部"
+      - order: "9"
+        value: "麻酔科"
+      # グループ3（紹介状なしの場合受付不可）
+      - order: "10"
+        value: "小児科"
+      - order: "11"
+        value: "形成外科"
+      - order: "12"
+        value: "産科分娩部"
+      - order: "13"
+        value: "婦人部"
+      - order: "14"
+        value: "女性ヘルスケア部"
+      - order: "15"
+        value: "産婦人科"
+      - order: "16"
+        value: "外科"
+      - order: "17"
+        value: "呼吸器外科"
+      # グループ4（受付可）
+      - order: "18"
+        value: "糖尿病内科"
+      - order: "19"
+        value: "膠原病内科"
+      - order: "20"
+        value: "精神科"
+      - order: "21"
+        value: "眼科"
+      - order: "22"
+        value: "泌尿器科"
+      - order: "23"
+        value: "消化器外科"
+      - order: "24"
+        value: "脊椎脊髄外科"
+      - order: "25"
+        value: "心臓血管外科"
+      - order: "26"
+        value: "内分泌内科"
+      - order: "27"
+        value: "腎臓内科"
+      - order: "28"
+        value: "脳神経外科"
+      - order: "29"
+        value: "消化器内科"
+      - order: "30"
+        value: "新生児内科"
+      - order: "31"
+        value: "耳鼻咽喉科"
+      - order: "32"
+        value: "頭頚部外科"
+      - order: "33"
+        value: "歯科口腔外科口腔内科"
+      - order: "34"
+        value: "乳腺外科"
+      - order: "35"
+        value: "手末梢神経外科"
+      - order: "36"
+        value: "脳神経内科"
+      - order: "37"
+        value: "皮膚科"
+      - order: "38"
+        value: "代謝内科"
+      - order: "39"
+        value: "リウマチ科"
+      - order: "40"
+        value: "心療内科"
+      - order: "41"
+        value: "呼吸器内科"
+      - order: "42"
+        value: "循環器内科"
+      - order: "43"
+        value: "小児外科"
+      - order: "44"
+        value: "整形外科"
+      - order: "45"
+        value: "人工関節外科"
+      - order: "46"
+        value: "脳神経血管内治療科"
+      # リハビリ（転送対象）
+      - order: "47"
+        value: "リハビリ"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "グループ1=order1-3(受付不可/紹介元案内), グループ2=order4-9(受付不可/新規不可), グループ3=order10-17(紹介状なし時不可), グループ4=order18-46(受付可), リハビリ=order47(転送)"
+
+  - context_name: "referralLetter"
+    context_name_jp: "紹介状"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "あり/なし"
+
+  - context_name: "referralHospital"
+    context_name_jp: "紹介元医療機関名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "紹介状あり時のみ聴取"
+
+  - context_name: "referralDoctor"
+    context_name_jp: "医師名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "紹介状あり時のみ聴取。「ない」の場合は空"
+
+  - context_name: "currentAppointmentDate"
+    context_name_jp: "現在の予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約変更/キャンセルルートのみ聴取"
+
+  - context_name: "changeReason"
+    context_name_jp: "変更理由"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約変更ルートのみ聴取"
+
+  - context_name: "confirmationContent"
+    context_name_jp: "確認内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約確認ルートのみ聴取"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "7桁"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "患者氏名（フルネーム）"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "患者生年月日"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "聴取する電話番号"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "0"
+        order: "0"
+        value: "途中切断"
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "転送"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "0=途中切断 1=未処理 2=代表案内 3=転送 6=時間外"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "受電日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: true
+    notes: "通話ID自動格納"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "診療健診"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "category"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "診療"
+      - "健診"
+    notes: "二択。3/10修正: シンジョウ・賃料をprofile_wordsで対応"
+
+  - order: 2
+    name: "用件"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "予約"
+      - "予約変更"
+      - "キャンセル"
+      - "予約確認"
+    notes: "四択"
+
+  - order: 3
+    name: "紹介状確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "referralLetter"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "あり"
+      - "いいえ"
+    notes: "肯定/否定。予約ルートのみ"
+
+  - order: 4
+    name: "診療科_予約"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "グループ1"
+      - "グループ2"
+      - "グループ3"
+      - "グループ4"
+      - "リハビリ"
+    notes: "予約ルートの診療科。紹介状ありの場合はグループ3もグループ4と同様に受付可（紹介状なしの場合のみグループ3は終話3）"
+
+  - order: 5
+    name: "紹介元医療機関名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "referralHospital"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "自由発話。紹介状あり時のみ"
+
+  - order: 6
+    name: "医師名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "referralDoctor"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "自由発話。「ない」の場合は空文字保存。紹介状あり時のみ"
+
+  - order: 7
+    name: "現在の予約日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "currentAppointmentDate"
+    openai_processing: "convert"
+    output_format: "date_text"
+    output_labels: []
+    notes: "日付形式。予約変更/キャンセルルートのみ"
+
+  - order: 8
+    name: "当日確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: null
+    openai_processing: "judge"
+    output_format: "label"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "肯定/否定。当日の場合は転送。保存不要（分岐判定のみ）"
+
+  - order: 9
+    name: "診療科_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "リハビリ"
+      - "その他"
+    notes: "予約変更/キャンセルルートの診療科。リハビリのみ転送、それ以外はグループ分岐不要"
+
+  - order: 10
+    name: "変更理由"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "changeReason"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "自由発話。予約変更ルートのみ"
+
+  - order: 11
+    name: "確認内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "confirmationContent"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "自由発話。予約確認ルートのみ"
+
+  # 以下はサブフロー（CLAUDE.md Rule 9 完全コピー）
+  - order: 12
+    name: "氏名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientName"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "サブフロー。リファレンスbivr完全コピー"
+
+  - order: 13
+    name: "生年月日"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 8
+    retry_count: 2
+    echo_back: true
+    save_to: "patientDateOfBirth"
+    openai_processing: "convert"
+    output_format: "date_text"
+    output_labels: []
+    notes: "サブフロー。復唱あり。リファレンスbivr完全コピー"
+
+  - order: 14
+    name: "診察券番号"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 10
+    retry_count: 2
+    echo_back: true
+    save_to: "medicalCardNumber"
+    openai_processing: "normalize"
+    output_format: "number"
+    output_labels: []
+    notes: "サブフロー。復唱あり。7桁。わからない分岐あり。リファレンスbivr完全コピー"
+
+  - order: 15
+    name: "電話番号"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 11
+    retry_count: 2
+    echo_back: true
+    save_to: "additionalPhoneNumber"
+    openai_processing: "normalize"
+    output_format: "number"
+    output_labels: []
+    notes: "サブフロー。復唱あり。incoming-classifierで携帯/固定分岐。リファレンスbivr完全コピー"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "診療健診"
+    tts_announcement: "本日のご用件は、診療、または健診、どちらに関するお問い合わせでしょうか。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "診療"
+        - "健診"
+        - "NO_RESULT"
+      mapping:
+        - input: "「診療」「しんりょう」「シンジョウ」「賃料」「診察」「受診」を含む"
+          output: "診療"
+        - input: "「健診」「けんしん」「健康診断」「人間ドック」を含む"
+          output: "健診"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "category"
+    next_step: "診療→用件聴取 / 健診→転送_健診"
+    retry_failure: "end_failure"
+
+  - step_name: "用件"
+    tts_announcement: "ご用件を次の中からお選びください。予約、予約変更、キャンセル、予約確認、お話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "予約"
+        - "予約変更"
+        - "キャンセル"
+        - "予約確認"
+        - "NO_RESULT"
+      mapping:
+        - input: "「予約」「よやく」「予約したい」「予約希望」を含む（変更・キャンセル・確認を含まない）"
+          output: "予約"
+        - input: "「変更」「へんこう」「予約変更」を含む"
+          output: "予約変更"
+        - input: "「キャンセル」「取り消し」「やめたい」を含む"
+          output: "キャンセル"
+        - input: "「確認」「かくにん」「予約確認」を含む"
+          output: "予約確認"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "classification"
+    next_step: "予約→紹介状確認 / 予約変更・キャンセル→現在の予約日 / 予約確認→確認内容"
+    retry_failure: "end_failure"
+
+  - step_name: "紹介状確認"
+    tts_announcement: "紹介状はお持ちでしょうか。「はい」または「いいえ」でお答えください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "あり"
+        - "いいえ"
+        - "NO_RESULT"
+      mapping:
+        - input: "「はい」「あります」「持っています」「あり」を含む"
+          output: "あり"
+        - input: "「いいえ」「ありません」「持っていません」「なし」を含む"
+          output: "いいえ"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "referralLetter"
+    next_step: "あり→診療科_予約 / いいえ→診療科_紹介なし"
+    retry_failure: "end_failure"
+
+  - step_name: "診療科_予約"
+    tts_announcement: "ご希望の診療科名をお話しください。わからない場合は、確認の上おかけ直しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "グループ1"
+        - "グループ2"
+        - "グループ3"
+        - "グループ4"
+        - "リハビリ"
+        - "NO_RESULT"
+      mapping:
+        - input: "血液内科、腫瘍内科、放射線治療科"
+          output: "グループ1"
+        - input: "放射線診断科、放射線IVR科、緩和支持治療科、救急科、救急災害医療部、麻酔科"
+          output: "グループ2"
+        - input: "小児科、形成外科、産科分娩部、婦人部、女性ヘルスケア部、産婦人科、外科、呼吸器外科"
+          output: "グループ3"
+        - input: "糖尿病内科、膠原病内科、精神科、眼科、泌尿器科、消化器外科、脊椎脊髄外科、心臓血管外科、内分泌内科、腎臓内科、脳神経外科、消化器内科、新生児内科、耳鼻咽喉科、頭頚部外科、歯科口腔外科口腔内科、乳腺外科、手末梢神経外科、脳神経内科、皮膚科、代謝内科、リウマチ科、心療内科、呼吸器内科、循環器内科、小児外科、整形外科、人工関節外科、脳神経血管内治療科"
+          output: "グループ4"
+        - input: "リハビリ、リハビリテーション"
+          output: "リハビリ"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "リストにない診療科名"
+    save_to: "clinicalDepartment"
+    next_step: "紹介状ありの場合: グループ1→終話1, グループ2→終話2, グループ3/4→紹介元聴取, リハビリ→転送。紹介状なしの場合: グループ1→終話1, グループ2→終話2, グループ3→終話3, グループ4→選定療養費説明, リハビリ→転送"
+    retry_failure: "end_failure"
+
+  - step_name: "紹介元医療機関名"
+    tts_announcement: "紹介元の医療機関名をお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "医療機関名テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "医療機関名テキスト（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "referralHospital"
+    next_step: "医師名"
+    retry_failure: "end_failure"
+
+  - step_name: "医師名"
+    tts_announcement: "紹介状に医師の指定がありましたらお話しください。ない場合は「ない」とお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "医師名テキスト"
+        - "なし"
+      mapping:
+        - input: "医師名を含む音声"
+          output: "医師名テキスト（フリーテキスト）"
+        - input: "「ない」「ありません」「特にありません」を含む"
+          output: "なし"
+      no_result_condition: "音声認識結果が空"
+    save_to: "referralDoctor"
+    next_step: "個人情報聴取サブフロー遷移"
+    retry_failure: "end_failure"
+
+  - step_name: "現在の予約日"
+    tts_announcement: "現在の予約日を「4月1日」のように日付でお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "日付テキスト"
+      mapping:
+        - input: "日付として解釈可能な音声"
+          output: "YYYY-MM-DD形式の日付テキスト"
+      no_result_condition: "日付として解釈不能"
+    save_to: "currentAppointmentDate"
+    next_step: "当日確認"
+    retry_failure: "end_failure"
+
+  - step_name: "当日確認"
+    tts_announcement: "変更希望は本日の予約でしょうか？「はい」または「いいえ」でお答えください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+        - "NO_RESULT"
+      mapping:
+        - input: "「はい」「そうです」「本日です」「今日です」を含む"
+          output: "はい"
+        - input: "「いいえ」「違います」「本日ではない」を含む"
+          output: "いいえ"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: null
+    next_step: "はい→転送_当日変更 / いいえ→診療科_変更"
+    retry_failure: "end_failure"
+
+  - step_name: "診療科_変更"
+    tts_announcement: "ご希望の診療科名をお話しください。わからない場合は、確認の上おかけ直しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "リハビリ"
+        - "その他"
+        - "NO_RESULT"
+      mapping:
+        - input: "リハビリ、リハビリテーション"
+          output: "リハビリ"
+        - input: "上記以外の診療科名"
+          output: "その他"
+        - input: "診療科名として認識不可"
+          output: "NO_RESULT"
+      no_result_condition: "診療科名として認識不可"
+    save_to: "clinicalDepartment"
+    next_step: "リハビリ→転送_リハビリ / その他→変更理由"
+    retry_failure: "end_failure"
+
+  - step_name: "変更理由"
+    tts_announcement: "予約変更の理由を簡潔にお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "変更理由テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "変更理由テキスト（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "changeReason"
+    next_step: "個人情報聴取サブフロー遷移"
+    retry_failure: "end_failure"
+
+  - step_name: "確認内容"
+    tts_announcement: "確認をしたい内容に関して、簡潔にお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "確認内容テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "確認内容テキスト（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "confirmationContent"
+    next_step: "個人情報聴取サブフロー遷移"
+    retry_failure: "end_failure"
+
+  # サブフローの聴取ステップはリファレンスbivr完全コピーのため詳細省略
+  - step_name: "氏名"
+    tts_announcement: "お名前をお伺いします。フルネームの前に「名前は」をつけてお話しください。どうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["氏名テキスト"]
+      mapping:
+        - input: "音声認識結果"
+          output: "氏名テキスト（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "patientName"
+    next_step: "生年月日"
+    retry_failure: "skip"
+
+  - step_name: "生年月日"
+    tts_announcement: "それでは、生年月日を西暦からお話しください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["valid", "不正値", "2桁_0007", "2桁_0831", "2桁_3263"]
+      mapping:
+        - input: "8桁の有効な日付"
+          output: "valid"
+      no_result_condition: "音声認識結果が空または解析不能"
+    save_to: "patientDateOfBirth"
+    next_step: "診察券番号"
+    retry_failure: "skip"
+
+  - step_name: "診察券番号"
+    tts_announcement: "診察券番号をお伺いします。7桁の番号をお話しください。番号がわからない場合は、わからない とお話しください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["番号テキスト", "わからない"]
+      mapping:
+        - input: "数字の並び"
+          output: "番号テキスト"
+        - input: "わからない"
+          output: "わからない"
+      no_result_condition: "認識不可"
+    save_to: "medicalCardNumber"
+    next_step: "電話番号"
+    retry_failure: "skip"
+
+  - step_name: "電話番号"
+    tts_announcement: "ご連絡先のお電話番号は、今おかけいただいている番号でよろしいですか？"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["正規化済み電話番号"]
+      mapping:
+        - input: "10〜11桁の数値"
+          output: "正規化済み電話番号"
+      no_result_condition: "電話番号として不正な形式"
+    save_to: "additionalPhoneNumber"
+    next_step: "終話チェーン"
+    retry_failure: "end_failure"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  - name: "END_終話4_SMS"
+    condition: "全聴取完了（正常終話）かつ携帯電話"
+    tts_announcement: "お電話内容を確認いたしました。2診療日以内に担当者から折り返し電話、もしくはショートメールにてご連絡いたします。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了_SMS"
+
+  - name: "END_終話4_noSMS"
+    condition: "全聴取完了（正常終話）かつ携帯以外"
+    tts_announcement: "お電話内容を確認いたしました。2診療日以内に担当者から折り返し電話、もしくはショートメールにてご連絡いたします。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_受付完了_noSMS"
+
+  - name: "END_終話1"
+    condition: "グループ1（血液内科・腫瘍内科・放射線治療科）を選択"
+    tts_announcement: "ご希望の診療科につきましては、ご紹介の病院から直接、横浜労災病院へお問い合わせいただくようお伝えください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_終話1"
+
+  - name: "END_終話2"
+    condition: "グループ2（放射線診断科・放射線IVR科・緩和支持治療科・救急科・救急災害医療部・麻酔科）を選択"
+    tts_announcement: "恐れ入りますが、ご希望された診療科は、新規予約を受け付けておりません。他の医療機関での受診をお願いいたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_終話2"
+
+  - name: "END_終話3"
+    condition: "グループ3（小児科・形成外科等）を選択かつ紹介状なし"
+    tts_announcement: "大変申し訳ございません。紹介状をお持ちでない場合は受付することができません。紹介状をお持ちの上、改めておかけ直しください。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_終話3"
+
+  - name: "END_時間外"
+    condition: "acceptance_times で時間外と判定"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_非通知"
+    condition: "incoming-classifier で非通知と判定"
+    tts_announcement: "お手数をおかけしますが、発信者番号を通知して再度お電話ください。電話番号の前に「186」を追加いただくことで発信者番号を通知していただくことができます。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_上限エラー"
+    condition: "リトライ上限到達"
+    tts_announcement: "恐れ入ります。ご回答がうまく認識できませんでした。AIからの質問にご回答いただいていた場合は、お手数ですが再度お話しください。別途ご質問がある場合は、当院の代表電話へお掛け直しください。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_上限エラー"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: true
+  routing_keys:
+    - "phonetype"
+  patterns:
+    - condition: "phonetype=携帯"
+      sms_flag: "1"
+      notes: "携帯電話の場合はSMS送信あり"
+    - condition: "phonetype=その他"
+      sms_flag: "-1"
+      notes: "固定電話等の場合はSMS送信なし"
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  # メインフロー
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。横浜労災病院の予約専用AI電話です。"
+
+  - module_name: "注意事項_アナウンス"
+    purpose: "注意事項説明"
+    announcement: "これより、AIの案内に沿ってお話しください。また、AIのアナウンスが完全に終了してからお話しください。お電話終了後、2診療日以内に担当者が電話またはSMSでご連絡いたします。"
+
+  - module_name: "診療健診"
+    purpose: "診療/健診の二択聴取"
+    announcement: "本日のご用件は、診療、または健診、どちらに関するお問い合わせでしょうか。どうぞ。"
+
+  - module_name: "用件"
+    purpose: "用件四択聴取"
+    announcement: "ご用件を次の中からお選びください。予約、予約変更、キャンセル、予約確認、お話しください。どうぞ。"
+
+  - module_name: "紹介状確認"
+    purpose: "紹介状の有無確認"
+    announcement: "紹介状はお持ちでしょうか。「はい」または「いいえ」でお答えください。どうぞ。"
+
+  - module_name: "診療科_予約"
+    purpose: "診療科聴取（予約ルート）"
+    announcement: "ご希望の診療科名をお話しください。わからない場合は、確認の上おかけ直しください。どうぞ。"
+
+  - module_name: "診療科_紹介なし"
+    purpose: "診療科聴取（紹介状なしルート）"
+    announcement: "ご希望の診療科名をお話しください。わからない場合は、確認の上おかけ直しください。どうぞ。"
+
+  - module_name: "選定療養費_説明"
+    purpose: "選定療養費の説明"
+    announcement: "紹介状をお持ちでない場合、選定療養費7,700円がかかります。あらかじめご了承ください。"
+
+  - module_name: "紹介元"
+    purpose: "紹介元医療機関名聴取"
+    announcement: "紹介元の医療機関名をお話しください。どうぞ。"
+
+  - module_name: "医師名"
+    purpose: "医師名聴取"
+    announcement: "紹介状に医師の指定がありましたらお話しください。ない場合は「ない」とお話しください。どうぞ。"
+
+  - module_name: "現在の予約日"
+    purpose: "現在の予約日聴取"
+    announcement: "現在の予約日を「4月1日」のように日付でお話しください。どうぞ。"
+
+  - module_name: "当日確認"
+    purpose: "当日予約の確認"
+    announcement: "変更希望は本日の予約でしょうか？「はい」または「いいえ」でお答えください。どうぞ。"
+
+  - module_name: "診療科_変更"
+    purpose: "診療科聴取（変更/キャンセルルート）"
+    announcement: "ご希望の診療科名をお話しください。わからない場合は、確認の上おかけ直しください。どうぞ。"
+
+  - module_name: "変更理由"
+    purpose: "変更理由聴取"
+    announcement: "予約変更の理由を簡潔にお話しください。どうぞ。"
+
+  - module_name: "確認内容"
+    purpose: "確認内容聴取"
+    announcement: "確認をしたい内容に関して、簡潔にお話しください。どうぞ。"
+
+  - module_name: "転送_健診"
+    purpose: "健診転送アナウンス"
+    announcement: "健診に関するご予約に関しましては、担当窓口にお繋ぎいたしますので、そのままお待ちください。"
+
+  - module_name: "転送_当日変更"
+    purpose: "当日変更転送アナウンス"
+    announcement: "当日の変更に関しましては、予約センターで受付いたします。お繋ぎいたしますので、そのままお待ちください。"
+
+  - module_name: "転送_リハビリ"
+    purpose: "リハビリ転送アナウンス"
+    announcement: "担当オペレーターにお繋ぎいたしますので、そのままお待ちください。"
+
+  - module_name: "END_終話1"
+    purpose: "グループ1受付不可終話"
+    announcement: "ご希望の診療科につきましては、ご紹介の病院から直接、横浜労災病院へお問い合わせいただくようお伝えください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_終話2"
+    purpose: "グループ2受付不可終話"
+    announcement: "恐れ入りますが、ご希望された診療科は、新規予約を受け付けておりません。他の医療機関での受診をお願いいたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_終話3"
+    purpose: "グループ3紹介状なし終話"
+    announcement: "大変申し訳ございません。紹介状をお持ちでない場合は受付することができません。紹介状をお持ちの上、改めておかけ直しください。それでは失礼いたします。"
+
+  - module_name: "END_終話4"
+    purpose: "受付完了終話"
+    announcement: "お電話内容を確認いたしました。2診療日以内に担当者から折り返し電話、もしくはショートメールにてご連絡いたします。それでは失礼いたします。"
+
+  - module_name: "時間外_アナウンス"
+    purpose: "時間外案内"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知案内"
+    announcement: "お手数をおかけしますが、発信者番号を通知して再度お電話ください。電話番号の前に「186」を追加いただくことで発信者番号を通知していただくことができます。それでは失礼いたします。"
+
+  - module_name: "END_上限エラー"
+    purpose: "リトライ上限終話"
+    announcement: "恐れ入ります。ご回答がうまく認識できませんでした。AIからの質問にご回答いただいていた場合は、お手数ですが再度お話しください。別途ご質問がある場合は、当院の代表電話へお掛け直しください。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "診療健診"
+    words: |
+      診療 しんりょう
+      健診 けんしん
+      健康診断 けんこうしんだん
+      人間ドック にんげんどっく
+      診察 しんさつ
+      受診 じゅしん
+
+  - step_name: "用件"
+    words: |
+      予約 よやく
+      予約変更 よやくへんこう
+      変更 へんこう
+      キャンセル きゃんせる
+      予約確認 よやくかくにん
+      確認 かくにん
+      取り消し とりけし
+
+  - step_name: "紹介状確認"
+    words: |
+      はい はい
+      いいえ いいえ
+      あります あります
+      ありません ありません
+
+  - step_name: "診療科_予約"
+    words: |
+      血液内科 けつえきないか
+      腫瘍内科 しゅようないか
+      放射線治療科 ほうしゃせんちりょうか
+      放射線診断科 ほうしゃせんしんだんか
+      放射線IVR科 ほうしゃせんあいぶいあーるか
+      緩和支持治療科 かんわしじちりょうか
+      救急科 きゅうきゅうか
+      救急災害医療部 きゅうきゅうさいがいいりょうぶ
+      麻酔科 ますいか
+      小児科 しょうにか
+      形成外科 けいせいげか
+      産科分娩部 さんかぶんべんぶ
+      婦人部 ふじんぶ
+      女性ヘルスケア部 じょせいへるすけあぶ
+      産婦人科 さんふじんか
+      外科 げか
+      呼吸器外科 こきゅうきげか
+      糖尿病内科 とうにょうびょうないか
+      膠原病内科 こうげんびょうないか
+      精神科 せいしんか
+      眼科 がんか
+      泌尿器科 ひにょうきか
+      消化器外科 しょうかきげか
+      脊椎脊髄外科 せきついせきずいげか
+      心臓血管外科 しんぞうけっかんげか
+      内分泌内科 ないぶんぴつないか
+      腎臓内科 じんぞうないか
+      脳神経外科 のうしんけいげか
+      消化器内科 しょうかきないか
+      新生児内科 しんせいじないか
+      耳鼻咽喉科 じびいんこうか
+      頭頚部外科 とうけいぶげか
+      歯科口腔外科口腔内科 しかこうくうげかこうくうないか
+      乳腺外科 にゅうせんげか
+      手末梢神経外科 てまっしょうしんけいげか
+      脳神経内科 のうしんけいないか
+      皮膚科 ひふか
+      代謝内科 たいしゃないか
+      リウマチ科 りうまちか
+      心療内科 しんりょうないか
+      呼吸器内科 こきゅうきないか
+      循環器内科 じゅんかんきないか
+      小児外科 しょうにげか
+      整形外科 せいけいげか
+      人工関節外科 じんこうかんせつげか
+      脳神経血管内治療科 のうしんけいけっかんないちりょうか
+      リハビリ りはびり
+      リハビリテーション りはびりてーしょん
+
+  - step_name: "当日確認"
+    words: |
+      はい はい
+      いいえ いいえ
+
+  - step_name: "診療科_変更"
+    words: |
+      リハビリ りはびり
+      リハビリテーション りはびりてーしょん
+
+  - step_name: "氏名"
+    words: "(氏名辞書を設定)"
+
+  - step_name: "生年月日"
+    words: "(和暦辞書 + month辞書 + day辞書を設定)"
+
+  - step_name: "診察券番号"
+    words: |
+      わからない わからない
+
+  - step_name: "電話番号確認"
+    words: |
+      はい はい
+      いいえ いいえ
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "3/10修正対応: 診療/健診の聴取で「シンジョウ」「賃料」と文字起こしされても「診療」として認識するよう、OpenAIプロンプトおよびprofile_wordsで対応すること"
+  - "全転送先が同一番号（045-474-8882）。健診転送、当日変更転送、リハビリ転送はすべて同じ番号だがTTSアナウンス文言が異なる"
+  - "診療科グループ分岐が予約ルートで重要。紹介状ありの場合はグループ3もグループ4と同様に受付可。紹介状なしの場合のみグループ3は終話3（受付不可）"
+  - "予約変更/キャンセルルートの診療科聴取ではグループ分岐不要。リハビリのみ転送、それ以外は一律で変更理由聴取→個人情報聴取に進む"
+  - "acceptance_times使用（平日 8:15〜17:00）。具体的なスケジュール設定はDr.JOY側"
+  - "個人情報聴取サブフローはリファレンスbivrを完全コピー（CLAUDE.md Rule 9）。氏名・生年月日・診察券番号・電話番号の4サブフロー"
+  - "電話番号聴取サブフローのphonetype結果（携帯=1/その他=2）でメインフロー側のsmsFlag分岐を行う"
+  - "デモ電話番号: 05017255489、ID: yokohama-demo、PASS: yokohama0509"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "office_id"
+    resolved: false
+  - item: "対象環境（デモ/本番）の確認。デモで仮設定中"
+    resolved: false
+  - item: "時間外アナウンスの発話文言（PDFに記載なし。仮文言で設定中）"
+    resolved: false
+  - item: "smsFlag分岐ルール（携帯=SMS送信あり/その他=なし）の確認"
+    resolved: false
+  - item: "予約変更/キャンセルルートの診療科でグループ分岐が不要であることの確認"
+    resolved: false
+  - item: "診療科の類義語リスト（CSV）の提供。現在は基本的な読み仮名のみで設定"
+    resolved: false

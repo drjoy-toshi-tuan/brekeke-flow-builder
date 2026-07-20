@@ -1,0 +1,138 @@
+# Pattern 6 (テストフロー) — n_choice 決定論エンジン 単体受入テスト（用件7分類 INQUIRY_BASE / #271）
+#
+# 検証対象: modules/n_choice/acceptance_test/用件/script_用件.js
+#   = 正本テンプレ modules/n_choice/script.js を「用件7分類」INQUIRY_BASE config で
+#     enriched 充填した具体版（エンジンは正本と同一 engine_hash 672765065988…）。
+#     enriched = scaffold の _enrich_nchoice_config（#279 ③）が施設デプロイ時に自動付与する
+#     TOKEN_MAP（数字キー 1-5 の音声表記「N番/音読み/漢数字」）を含む＝施設デプロイ版とハッシュ一致。
+#   spec_hash（enriched）= c2b37e6e7bbb603bb61226b5289572f08c5be4b21fd4e88acaac487d73f9f141
+#
+# 狙い: n_choice エンジン＋用件 config を Brekeke 実機 (Nashorn/ES5) で単体実行し、オラクル↔実機
+#   パリティを確証する。用件は #271（被覆スコアカード逆設計・全施設95万発話）でストア手渡しされた
+#   INQUIRY_BASE を VFB 正本エンジンで調達したもの（oracle 33/33・lint 0）。
+#   本テストは bare 33 ケース＋enriched 音声（いちばん/にばん/二番/ご 等）＋全角 DTMF を全入力耐性として
+#   単体検証する（enriched config で 49/49 オラクル PASS 済）。
+#   ※ 用件はデプロイ時 enriched で認定（浜口決定 2026-07-07）＝施設再ビルドで拾う汎用部品。
+#
+# 確認: Brekeke ログを grep "[TEST FAIL]" で 0 件なら全 PASS。末尾 "[TEST DONE]" で全 49 ケース完走。
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$用件分類"
+  flow_name: "テスト$用件分類"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$用件分類"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] n_choice 決定論エンジン 単体受入 (用件 INQUIRY_BASE enriched, 49 ケース)");
+      $runner.getLogger().info("対象: script_用件.js (正本 script.js を用件 config enriched 充填) / オラクル 49/49 PASS 済");
+      $runner.getLogger().info("engine_hash 672765065988… (認定済 n_choice v4) / spec_hash c2b37e6e…");
+      $runner.getLogger().info("grep [TEST FAIL] = 0 なら実機も全 PASS");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: matrix
+
+  - step: matrix
+    type: script_test_matrix
+    script_file: "./script_用件.js"
+    input_placeholder: "{{INPUT_MODULE}}"
+    final_next: ログ_終了
+    cases:
+      # --- DTMF（単一数字・半角）---
+      - {id: dt1, input: "1", expected: "予約新規"}
+      - {id: dt2, input: "2", expected: "予約変更"}
+      - {id: dt3, input: "3", expected: "予約キャンセル"}
+      - {id: dt4, input: "4", expected: "予約確認"}
+      - {id: dt5, input: "5", expected: "健診"}
+      - {id: dt0, input: "0", expected: "その他"}
+      # --- DTMF（全角正規化）---
+      - {id: dz2, input: "２", expected: "予約変更"}
+      - {id: dz3, input: "３", expected: "予約キャンセル"}
+      - {id: dz0, input: "０", expected: "その他"}
+      - {id: dt9, input: "９", expected: "NO_RESULT"}
+      # --- 数字＋語尾 trim ---
+      - {id: ds1, input: "1です", expected: "予約新規"}
+      - {id: ds3, input: "３でお願いします", expected: "予約キャンセル"}
+      # --- enriched TOKEN（#279 ③ 音声表記：音読み/漢数字/N番）---
+      - {id: v1a, input: "いちばん", expected: "予約新規"}
+      - {id: v1b, input: "一番", expected: "予約新規"}
+      - {id: v2a, input: "に", expected: "予約変更"}
+      - {id: v2b, input: "にばん", expected: "予約変更"}
+      - {id: v2c, input: "二番", expected: "予約変更"}
+      - {id: v3a, input: "さんばん", expected: "予約キャンセル"}
+      - {id: v3b, input: "三", expected: "予約キャンセル"}
+      - {id: v4a, input: "よん", expected: "予約確認"}
+      - {id: v5a, input: "ご", expected: "健診"}
+      - {id: v5b, input: "五番", expected: "健診"}
+      # --- keyword: 予約新規（generic 予約・受診）---
+      - {id: k01, input: "予約をお願いします", expected: "予約新規"}
+      - {id: k02, input: "受診したいです", expected: "予約新規"}
+      - {id: k03, input: "診察してほしい", expected: "予約新規"}
+      - {id: k04, input: "外来にかかりたい", expected: "予約新規"}
+      - {id: k05, input: "初めての受診です", expected: "予約新規"}
+      # --- STT 化け → 予約新規（ようやく/要約/薬）---
+      - {id: s01, input: "ようやく", expected: "予約新規"}
+      - {id: s02, input: "要約です", expected: "予約新規"}
+      - {id: s03, input: "薬を取る", expected: "予約新規"}
+      # --- compound: 予約変更（先勝ち）---
+      - {id: c01, input: "予約を変更したいです", expected: "予約変更"}
+      - {id: c02, input: "日時を変えたい", expected: "予約変更"}
+      - {id: c03, input: "薬を変更する", expected: "予約変更"}
+      - {id: c04, input: "予約日をずらしたい", expected: "予約変更"}
+      # --- compound: 予約キャンセル ---
+      - {id: c05, input: "予約をキャンセルしたい", expected: "予約キャンセル"}
+      - {id: c06, input: "予約を取り消したいです", expected: "予約キャンセル"}
+      # --- compound: 予約確認 ---
+      - {id: c07, input: "予約の確認です", expected: "予約確認"}
+      - {id: c08, input: "予約が取れてるか確認したい", expected: "予約確認"}
+      # --- compound: 健診（健診 が 予約 より先）---
+      - {id: c09, input: "健診の予約です", expected: "健診"}
+      - {id: c10, input: "人間ドックを受けたい", expected: "健診"}
+      # --- keyword: 疑義照会（薬局B2B・語マーカーのみ）---
+      - {id: g01, input: "疑義照会です", expected: "疑義照会"}
+      - {id: g02, input: "疑義紹介", expected: "疑義照会"}
+      # --- keyword: その他・折返し ---
+      - {id: o01, input: "その他の問い合わせです", expected: "その他"}
+      - {id: o02, input: "折り返しのお電話です", expected: "その他"}
+      # --- NO_RESULT（off-frame＝用件でない / フィラー）---
+      - {id: nr1, input: "もしもし", expected: "NO_RESULT"}
+      - {id: nr2, input: "特にありません", expected: "NO_RESULT"}
+      - {id: nr3, input: "えーっと", expected: "NO_RESULT"}
+      - {id: nr4, input: "今日はいい天気", expected: "NO_RESULT"}
+      - {id: nr5, input: "よろしくお願いします", expected: "NO_RESULT"}
+
+  - step: ログ_終了
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST DONE] n_choice 用件 config 単体受入 全 49 ケース完走");
+      $runner.setResult("done");
+    next: 終了
+
+  - step: 終了
+    type: termination
+    termination_ref: "END_テスト終了"
+
+termination_patterns:
+  - name: "END_テスト終了"
+    condition: "テスト完走"
+    tts_announcement: "テストを終了します。"
+    status: "1"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_テスト終了"

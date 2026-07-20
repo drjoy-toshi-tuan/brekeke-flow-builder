@@ -1,0 +1,676 @@
+# 設計書 -- 井上病院 発熱外来
+# 生成元: @director エージェント
+# 生成日: 2026/05/07
+# 確認レポート: output/scenarios/井上病院_発熱外来/確認レポート_井上病院_発熱外来_20260507.md
+# 元資料: commubo抽出/【002】井上病院｜【003】ユアクリニック秋葉原｜【004】井上病院附属診療所/【0005井上病院】発熱外来1_M_本番/
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "井上病院"
+  scenario_name: "発熱外来"
+  group_name: "井上病院"
+  flow_name: "井上病院$発熱外来"
+  target_facility: "井上病院（発熱外来専用ダイヤル）"
+  office_id: "TODO_要確認"
+  phone_number: "TODO_要確認"          # 着信用 050 番号は IVR プロパティで設定
+  business_hours: "平日 10:00〜12:00（午前のみ短時間枠）"
+  flow_type: "subflow"
+  work_type: "gen1_migration"
+  environment: "prod"
+
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+# 当日発熱外来予約専用ダイヤルのため、用件分類は不要（全件＝発熱外来当日予約）。
+# 個人情報聴取（氏名・生年月日・電話番号・診察券番号）は標準サブフロー4本に切り出す。
+# Dr.JOY API 連携（在庫取得・予約登録）は augment ブロックで暫定配置（Brekeke 側で Dr.JOY 専用モジュール実装が必要）。
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "井上病院$発熱外来"
+      role: "main"
+      description: "冒頭挨拶 → 在庫取得（Dr.JOY API）→ 在庫判定 → 注意事項 → 高校生未満案内 → 本人/受診歴聴取 → 個人情報聴取4本（条件分岐: 初診なら診察券スキップ）→ 性別聴取 → 連絡先聴取 → 予約登録（Dr.JOY API）→ 終話"
+
+  subflows:
+    - name: "井上病院$診察券番号聴取"
+      target: "診察券番号聴取"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "受診歴ありルートのみ通過。標準サブフロー（DTMF + STT 両対応）を使用。Gen1 では「わからない」回答時に END_診察券無し で次へ進めるため、Gen3 でも標準サブフローの『わからない』分岐に依存（NON-BLOCKER N-3）"
+
+    - name: "井上病院$氏名聴取"
+      target: "氏名聴取"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "標準氏名聴取サブフロー（PatientName 1 枠ルール準拠）"
+
+    - name: "井上病院$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "復唱あり（DOB Re-confirmation）。和暦/西暦変換あり"
+
+    - name: "井上病院$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "復唱あり（Phone Normalization + Re-confirmation）。incoming-classifier で携帯/固定判別"
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  井上病院の発熱外来 (当日予約専用) AI 電話。当日の予約枠在庫を Dr.JOY API から取得し、
+  空きがある場合のみ患者属性を聴取してDr.JOY に予約登録する。
+  - 用件分類は不要（全件＝発熱当日予約）
+  - 受付時間は平日 10:00〜12:00（午前のみ短時間枠）
+  - 高校生未満は予約不可（案内のみで案内的にゲート、強制切断はせず患者の判断に委ねる）
+  - 受診歴の有無で診察券番号聴取の有無を分岐（初診→スキップ / 受診歴あり→聴取）
+  - 性別聴取（男性/女性）あり（発熱外来特有、他フローには無い）
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "井上病院$発熱外来"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → 非通知_アナウンス(TTS) → 完了フラグ_非通知(status=2) → 切断
+            └─ 通常/携帯/固定 → acceptance_times（受付時間: 平日 10:00〜12:00）
+                                  ├─ 時間外 → 時間外_アナウンス(TTS) → 完了フラグ_時間外(status=6) → 切断
+                                  └─ 受付可 → 冒頭_アナウンス(TTS)
+                                                → 在庫取得 [augment: Dr.JOY API GET_EMPTY_FRAME → HAS_EMPTY_FRAME context へ保存]
+                                                → 在庫判定 [context_match_router on 在庫取得]
+                                                    ├─ "0"   → 予約枠終了_アナウンス(TTS) → 完了フラグ_予約枠終了(status=2) → 切断
+                                                    └─ other → 注意事項(TTS)
+                                                                → 高校生未満案内(TTS)
+                                                                → 本人確認(hearing enum: 本人/家族, save_to=callerSubject)
+                                                                → 当院受診確認(hearing enum: 初診/受診歴あり, save_to=firstVisit)
+                                                                    ├─ 初診           → 氏名聴取 sub
+                                                                    └─ other(受診歴あり) → 診察券番号聴取 sub → 氏名聴取 sub
+                                                                          → 生年月日聴取 sub
+                                                                          → 性別(hearing enum: 男性/女性, save_to=gender)
+                                                                          → 電話番号聴取 sub
+                                                                          → 予約登録 [augment: Dr.JOY API BOOKING_AI]
+                                                                              ├─ success → 予約完了_アナウンス(TTS) → 完了フラグ_予約完了(status=1, smsFlag=1) → 切断
+                                                                              └─ other(failure) → 予約失敗_アナウンス(TTS) → 完了フラグ_予約失敗(status=2) → 切断
+
+      全 hearing リトライ失敗 (本人確認 / 当院受診確認 / 性別 / 各サブフロー内) → 代表電話案内(TTS) → 完了フラグ_聴取失敗(status=3) → 切断
+    notes: |
+      - 入電時間判別.yaml は date_of_call_classifier 配置を取らず acceptance_times 単体で吸収
+        （Dr.JOY 管理画面で平日 10:00〜12:00 のスケジュールを設定）
+      - 高校生未満ゲートは announcement のみ（強制切断なし、もう一度発話の再生機構は Gen3 で省略）
+      - 本人確認 hearing は Yes/No 双方とも当院受診確認に進む（保存値は callerSubject に記録するのみ、分岐に使用しない）
+      - 受診歴ありルートは 診察券番号聴取 → 氏名聴取 / 初診ルートは直接 氏名聴取
+      - Dr.JOY API モジュール（在庫取得・予約登録）は augment 暫定配置。実装方針は NON-BLOCKER N-1
+      - リトライ失敗時の終話は END_聴取失敗（代表電話案内）に集約
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭ブロック（opening + 冒頭_アナウンス の 2 ブロック 1 セット）---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 在庫取得
+
+  # --- 在庫取得（Dr.JOY API GET_EMPTY_FRAME）---
+  - step: 在庫取得
+    type: augment
+    augment_pattern: new_module
+    augment_purpose: |
+      Dr.JOY API GET_EMPTY_FRAME — 当日発熱外来空き枠数を取得し HAS_EMPTY_FRAME context に整数値を保存する。
+      Brekeke 標準モジュールには無い Dr.JOY 専用 API 連携モジュールが必要。
+      scaffold は placeholder Script を生成して完走させる想定。
+      実運用時は Brekeke 側で本物の API 連携モジュール（`drjoy^...$GET_EMPTY_FRAME` 等）に差し替え必須。
+    next: 在庫判定
+
+  # --- 在庫判定（HAS_EMPTY_FRAME == 0 → 予約枠終了 / それ以外 → 続行）---
+  - step: 在庫判定
+    type: context_match_router
+    reference_module: 在庫取得
+    conditions:
+      - match: "0"
+        next: END_予約枠終了
+      - match: "other"
+        next: 注意事項
+
+  # --- 注意事項アナウンス（途中切断警告）---
+  - step: 注意事項
+    type: announcement
+    next: 高校生未満案内
+
+  # --- 高校生未満ゲート（案内のみ、強制切断なし）---
+  - step: 高校生未満案内
+    type: announcement
+    next: 本人確認
+
+  # --- 本人確認 hearing（Yes/No 双方とも次へ進む。保存のみ）---
+  - step: 本人確認
+    type: hearing
+    output_format: enum
+    save_to: callerSubject
+    output_labels: ["本人", "家族"]
+    retry_failure: end_failure
+    conditions:
+      - match: "other"   # 本人/家族 のいずれでも当院受診確認に進む（Subject 切替の伏線情報のみ）
+        next: 当院受診確認
+
+  # --- 当院受診確認 hearing（初診/受診歴あり で診察券聴取の有無を分岐）---
+  - step: 当院受診確認
+    type: hearing
+    output_format: enum
+    save_to: firstVisit
+    output_labels: ["初診", "受診歴あり"]
+    retry_failure: end_failure
+    conditions:
+      - match: "初診"
+        next: 氏名聴取
+      - match: "other"   # 受診歴あり 含む（NO_RESULT は OpenAI リトライへ。保険として受診歴ありに倒す）
+        next: 診察券番号聴取
+
+  # --- 診察券番号聴取（受診歴ありルートのみ通過）---
+  - step: 診察券番号聴取
+    type: subflow
+    flowname: "井上病院$診察券番号聴取"
+    next: 氏名聴取
+
+  # --- 氏名聴取 ---
+  - step: 氏名聴取
+    type: subflow
+    flowname: "井上病院$氏名聴取"
+    next: 生年月日聴取
+
+  # --- 生年月日聴取（復唱あり、和暦/西暦変換）---
+  - step: 生年月日聴取
+    type: subflow
+    flowname: "井上病院$生年月日聴取"
+    next: 性別
+
+  # --- 性別 hearing（発熱外来特有）---
+  - step: 性別
+    type: hearing
+    output_format: enum
+    save_to: gender
+    output_labels: ["男性", "女性"]
+    retry_failure: end_failure
+    conditions:
+      - match: "other"   # 男性/女性 のいずれでも電話番号聴取に進む
+        next: 電話番号聴取
+
+  # --- 電話番号聴取（復唱あり、incoming-classifier で携帯/固定判別）---
+  - step: 電話番号聴取
+    type: subflow
+    flowname: "井上病院$電話番号聴取"
+    next: 予約登録
+
+  # --- 予約登録（Dr.JOY API BOOKING_AI）---
+  - step: 予約登録
+    type: augment
+    augment_pattern: new_module
+    augment_purpose: |
+      Dr.JOY API BOOKING_AI — 取得した患者情報・連絡先で Dr.JOY に発熱外来予約を登録する。
+      success → END_予約完了（SMS送信あり）/ failure → END_予約失敗（System overload 救済 termination）。
+      Brekeke 標準モジュールには無い Dr.JOY 専用 API 連携モジュールが必要。
+      scaffold は placeholder Script を生成して完走させる想定。
+      実運用時は Brekeke 側で本物の API 連携モジュール（`drjoy^...$BOOKING_AI` 等）に差し替え必須。
+    conditions:
+      - match: "success"
+        next: END_予約完了
+      - match: "other"   # failure / error / timeout すべて含む（System overload 救済へ）
+        next: END_予約失敗
+
+  # --- 終話ブロック群 ---
+  - step: END_予約完了
+    type: termination
+    termination_ref: END_予約完了
+
+  - step: END_予約枠終了
+    type: termination
+    termination_ref: END_予約枠終了
+
+  - step: END_予約失敗
+    type: termination
+    termination_ref: END_予約失敗
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "発熱外来予約"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本フローは発熱外来予約専用のため固定値『発熱外来予約』のみ"
+
+  - context_name: "patientName"
+    context_name_jp: "患者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "氏名聴取サブフローで取得"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "受診歴ありルートのみ取得（初診ルートはスキップ）"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日(和暦)"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "生年月日聴取サブフローで取得（DOB Re-confirmation で復唱）"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "電話番号聴取サブフローで取得（Phone Normalization + Re-confirmation で復唱）"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "callerSubject"
+    context_name_jp: "発信者"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "本人"
+      - id: "2"
+        order: "2"
+        value: "家族"
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "発信者が本人か家族か（PatientName subject 切替の伏線情報、フロー分岐には使用しない）"
+
+  - context_name: "firstVisit"
+    context_name_jp: "受診歴"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "初診"
+      - id: "2"
+        order: "2"
+        value: "受診歴あり"
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "当院受診歴の有無。診察券番号聴取の要否を分岐"
+
+  - context_name: "gender"
+    context_name_jp: "性別"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "男性"
+      - id: "2"
+        order: "2"
+        value: "女性"
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "発熱外来特有の聴取項目（他フローには無い）"
+
+  - context_name: "emptyFrameCount"
+    context_name_jp: "在庫枠数"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "Dr.JOY API GET_EMPTY_FRAME が返す空き枠数（HAS_EMPTY_FRAME 相当）。0 で予約枠終了に分岐"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "聴取失敗"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=未処理(予約完了) 2=代表案内(予約枠終了/予約失敗/非通知) 3=聴取失敗(代表電話案内) 6=時間外"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "システム自動取得"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値"
+
+# --- セクション6: 聴取項目一覧 ---
+# DTMF 入力なし（Gen1 から踏襲）。全 hearing AmiVoice STT 音声入力。
+hearing_items:
+  - order: 1
+    name: "本人確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "callerSubject"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels: ["本人", "家族"]
+    notes: "Yes/No を本人/家族に分類。フロー分岐には使用せず双方とも当院受診確認に進む。Gen1 互換: PatientName subject 切替の伏線情報"
+
+  - order: 2
+    name: "当院受診確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "firstVisit"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels: ["初診", "受診歴あり"]
+    notes: "「当院のご受診は、初めてですか？」 Yes(初診)→診察券スキップ / No(受診歴あり)→診察券聴取"
+
+  - order: 3
+    name: "性別"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "gender"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels: ["男性", "女性"]
+    notes: "発熱外来特有。男性/女性 双方とも電話番号聴取に進む（記録のみ）。STT 救済語（弾性=男性, 助成=女性, オス/メス, 生命/異常部 等）は OpenAI 正規化で吸収"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "本人確認"
+    tts_announcement: "診察を受けるご本人様からのお電話ですか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "本人"
+        - "家族"
+        - "NO_RESULT"
+      mapping:
+        - input: "はい / そうです / はい本人です / 本人 / 私 / 私です / 自分 / 大丈夫"
+          output: "本人"
+        - input: "いいえ / 違います / 家族 / 親 / 妻 / 夫 / 息子 / 娘 / 母 / 父"
+          output: "家族"
+      no_result_condition: "上記いずれにも該当しない発話。リトライへ"
+    save_to: "callerSubject"
+    next_step: "当院受診確認"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "当院受診確認"
+    tts_announcement: "それでは、当院のご受診は、初めてですか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "初診"
+        - "受診歴あり"
+        - "NO_RESULT"
+      mapping:
+        - input: "はい / そうです / 初めて / 初めてです / 初診 / 来たことない / 一度もない"
+          output: "初診"
+        - input: "いいえ / 違います / 前にも / 何度か / 何回か / あります / 通っている / かかっている / 受診歴あり / 診察券持ってる"
+          output: "受診歴あり"
+      no_result_condition: "上記いずれにも該当しない発話。リトライへ。リトライ失敗時は受診歴ありルート（診察券聴取）に倒す（other 分岐）"
+    save_to: "firstVisit"
+    next_step: "（条件分岐: 初診 → 氏名聴取 / other（受診歴あり） → 診察券番号聴取）"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "性別"
+    tts_announcement: "次に、性別をお伺いいたします。男性、もしくは女性でお答えください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "男性"
+        - "女性"
+        - "NO_RESULT"
+      mapping:
+        - input: "男性 / 男 / おとこ / オトコ / だんせい / ダンセイ / オス / 弾性 / 男です"
+          output: "男性"
+        - input: "女性 / 女 / おんな / オンナ / じょせい / ジョセイ / メス / 助成 / 生命 / 女です"
+          output: "女性"
+      no_result_condition: "上記いずれにも該当しない発話（異常部 / 配送です 等の音響的曖昧語含む）。リトライへ"
+    save_to: "gender"
+    next_step: "電話番号聴取"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須） ---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外（平日 10:00〜12:00 以外）"
+    tts_announcement: "本日の受付時間は終了いたしました。受付時間は、平日10時から12時となります。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達（本人確認/当院受診確認/性別 hearing および各サブフロー内のリトライ失敗合流先）"
+    tts_announcement: "お電話が遠いようで、回答が確認できませんでした。恐れ入りますが、代表電話へご連絡下さい。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系（発熱外来予約完了）---
+  - name: "END_予約完了"
+    condition: "BOOKING_AI 成功（全聴取完了 + Dr.JOY 予約登録成功）"
+    tts_announcement: "ご予約の申し込みを受付ました。予約についてのご連絡を、ショートメッセージ、またはお電話にてご連絡いたします。それでは、失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約完了"
+
+  # --- 異常系（在庫枠終了 / API 失敗）---
+  - name: "END_予約枠終了"
+    condition: "在庫取得結果 HAS_EMPTY_FRAME == 0（当日予約枠が完売）"
+    tts_announcement: "申し訳ございません。本日の予約受付枠は、終了いたしました。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_予約枠終了"
+
+  - name: "END_予約失敗"
+    condition: "BOOKING_AI 失敗（System overload 救済）"
+    tts_announcement: "予約を承ることができませんでした。恐れ入りますが再度電話を掛けなおしていただき、最初から予約手続きを行ってください。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_予約失敗"
+
+# --- smsFlag 分岐（携帯/固定で文言分岐させない方針）---
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+# 当日予約専用ダイヤルのため RAG なし
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "施設案内（挨拶）"
+    announcement: "お電話ありがとうございます。井上病院の発熱外来、AI電話です。"
+
+  - module_name: "注意事項"
+    purpose: "途中切断警告（在庫判定通過後・受診歴聴取前）"
+    announcement: "このお電話は、途中で電話を切ると予約確定できませんのでご注意ください。"
+
+  - module_name: "高校生未満案内"
+    purpose: "高校生未満ゲート（案内のみ）"
+    announcement: "本窓口は、高校生未満の場合、ご予約を承ることができません。診察を希望される方が高校生未満の場合はお電話をお切りください。"
+
+  - module_name: "本人確認"
+    purpose: "本人/家族 確認の問いかけ"
+    announcement: "診察を受けるご本人様からのお電話ですか？"
+
+  - module_name: "当院受診確認"
+    purpose: "受診歴有無の問いかけ（診察券聴取分岐用）"
+    announcement: "それでは、当院のご受診は、初めてですか？"
+
+  - module_name: "性別"
+    purpose: "性別聴取の問いかけ（発熱外来特有）"
+    announcement: "次に、性別をお伺いいたします。男性、もしくは女性でお答えください。"
+
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知着信の終話"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "時間外_アナウンス"
+    purpose: "受付時間外の終話（平日 10:00〜12:00 案内）"
+    announcement: "本日の受付時間は終了いたしました。受付時間は、平日10時から12時となります。お電話ありがとうございました。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ上限到達の終話（代表電話案内）"
+    announcement: "お電話が遠いようで、回答が確認できませんでした。恐れ入りますが、代表電話へご連絡下さい。"
+
+  - module_name: "END_予約完了"
+    purpose: "発熱外来予約完了の終話（SMS送信あり）"
+    announcement: "ご予約の申し込みを受付ました。予約についてのご連絡を、ショートメッセージ、またはお電話にてご連絡いたします。それでは、失礼いたします。"
+
+  - module_name: "END_予約枠終了"
+    purpose: "当日予約枠完売時の終話"
+    announcement: "申し訳ございません。本日の予約受付枠は、終了いたしました。お電話ありがとうございました。"
+
+  - module_name: "END_予約失敗"
+    purpose: "BOOKING_AI 失敗時の終話（System overload 救済）"
+    announcement: "予約を承ることができませんでした。恐れ入りますが再度電話を掛けなおしていただき、最初から予約手続きを行ってください。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "本人確認"
+    words: |
+      本人 ほんにん
+      ご本人 ごほんにん
+      家族 かぞく
+      息子 むすこ
+      娘 むすめ
+      妻 つま
+      夫 おっと
+
+  - step_name: "当院受診確認"
+    words: |
+      初診 しょしん
+      初めて はじめて
+      受診 じゅしん
+      受診歴 じゅしんれき
+      当院 とういん
+      何度か なんどか
+      診察券 しんさつけん
+
+  - step_name: "性別"
+    words: |
+      男性 だんせい
+      女性 じょせい
+      男 おとこ
+      女 おんな
+      オス オス
+      メス メス
+      弾性 だんせい
+      助成 じょせい
+      生命 せいめい
+      異常部 いじょうぶ
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "当日発熱外来予約専用ダイヤル。用件分類は不要（全件＝発熱当日予約一本道）。"
+  - "受付時間: 平日 10:00〜12:00（午前のみ短時間枠）。Dr.JOY 管理画面の acceptance_times スケジュールで設定。Gen1 yaml の入電時間判別.yaml では 9〜18 時で記述されているが、Gen1 終話 TTS 文言は 10:00〜12:00 が正（NON-BLOCKER N-6）"
+  - "Dr.JOY API 連携モジュール（在庫取得 = GET_EMPTY_FRAME, 予約登録 = BOOKING_AI）は augment 暫定配置。実装方針は NON-BLOCKER N-1。Brekeke 側で Dr.JOY 専用 API 連携モジュールが必要"
+  - "在庫取得結果 HAS_EMPTY_FRAME を context_match_router で 0/other 分岐。0=予約枠終了、other(>0)=正規ルート。API 失敗時の挙動も other 分岐に倒れるため、フェイルセーフが必要な場合は要再設計（NON-BLOCKER N-7）"
+  - "高校生未満ゲートは announcement のみで強制切断はせず（Gen1 互換）。Gen1 にあった「もう一度」発話による再生機構は Gen3 で省略（NON-BLOCKER N-2）"
+  - "本人確認 hearing は Yes/No 双方とも当院受診確認に進む（保存値 callerSubject はフロー分岐に使用しない、Dr.JOY 画面での記録用）。NON-BLOCKER N-4"
+  - "受診歴ありルートで「診察券番号わからない / 持ってない」と答えた場合、標準診察券番号聴取サブフロー内の END_診察券無し 分岐に依存して次へ進む。Gen3 の標準サブフローがこれをハンドリングしているか要確認（NON-BLOCKER N-3）"
+  - "性別聴取（hearing）は発熱外来特有。男性/女性 双方とも電話番号聴取に進む（記録のみ、フロー分岐に使用しない）"
+  - "完了挨拶は携帯/固定で文言分岐しない（Gen1 互換、smsFlag=1 で SMS 送信を試行、固定の場合は Dr.JOY 側で電話折り返しに切替）。NON-BLOCKER N-5"
+  - "DTMF 入力対応なし（Gen1 から踏襲）。すべて AmiVoice STT 音声入力。標準サブフロー（電話番号/診察券番号/生年月日聴取）は内部で DTMF を受け付けるが、本フローでは案内しない"
+  - "リトライ回数は全 hearing 3 回上限（Gen1 の count再質問 を踏襲）"
+  - "Gen1 の連結 TTS（「それでは、」「続いて、」「次に」「ありがとうございます。最後に、」）は当院受診確認・性別の hearing TTS にマージ済み。サブフロー直前のものは省略（独立 announcement ブロック化禁止のため）"
+  - "終話 status 値: 1=予約完了 / 2=非通知・予約枠終了・予約失敗（代表案内扱い）/ 3=聴取失敗 / 6=時間外。CLAUDE.md の許可値リスト（1/2/3/6/7/8/9）に準拠"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "B-1: office_id（Dr.JOY 管理画面で確認 — 設計書には不要）"
+    resolved: false
+  - item: "B-2: 着信用 050 番号（IVR プロパティで設定 — 設計書には不要）"
+    resolved: false
+  - item: "N-1: 在庫取得（GET_EMPTY_FRAME）/ 予約登録（BOOKING_AI）の Dr.JOY API 連携モジュール実装方針。augment placeholder のままだと scaffold は Script placeholder を生成する。Brekeke 側で Dr.JOY 専用モジュール（drjoy^... 系）を用意するか、scaffold_generator に新ブロック型として追加するかを確認"
+    resolved: false
+  - item: "N-2: 高校生未満ゲートで Gen1 にあった「もう一度」発話による案内再生機構を Gen3 で残すか、announcement のみで省略して良いか確認（現状省略）"
+    resolved: false
+  - item: "N-3: 受診歴ありルートで「診察券番号わからない/持ってない」と答えた場合の挙動。標準診察券番号聴取サブフロー内の END_診察券無し 分岐がメインフローに復帰して氏名聴取に進む想定だが、サブフロー実装と整合するか確認"
+    resolved: false
+  - item: "N-4: 本人確認 hearing の保存値 callerSubject を Dr.JOY 画面に表示するか、内部記録のみとするか。現状は CLASSIFICATION で表示する設定"
+    resolved: false
+  - item: "N-5: 終話_予約完了 で smsFlag=1（SMS送信）に固定。携帯/固定で分岐させずに固定でも SMS 送信を試行する方針で良いか確認（Gen1 互換で「ショートメッセージ、またはお電話にて」と案内）"
+    resolved: false
+  - item: "N-6: 受付時間 平日 10:00〜12:00 で確定して良いか確認。Gen1 入電時間判別.yaml は 9〜18 時で記述（古い設定の名残）、Gen1 時間外案内 TTS は 10:00〜12:00 で記述（最新設定）。最新の時間が正と判断"
+    resolved: false
+  - item: "N-7: 在庫取得 API 失敗時のフェイルセーフ。現状は other 分岐で正規ルートに進むが、API 失敗時は予約登録不可の可能性が高いため、明示的に END_予約枠終了 に倒す設計に変更すべきか確認"
+    resolved: false
+  - item: "N-8: Gen1 の連結 TTS（「それでは、」「続いて、」「次に」「ありがとうございます。最後に、」）のうち、サブフロー直前のもの（生年月日聴取/電話番号聴取/氏名聴取/診察券番号聴取）は Gen3 で省略。UX 観点で残すべきか確認"
+    resolved: false
+  - item: "N-9: status 値割当（予約完了=1, 非通知=2, 予約枠終了=2, 予約失敗=2, 聴取失敗=3, 時間外=6）で良いか確認。特に予約失敗（System overload）と予約枠終了を区別したい場合は別 status 値の検討が必要"
+    resolved: false

@@ -1,0 +1,86 @@
+# Pattern 6 (テストフロー) - 予約希望日入力 (4桁DTMF) 正規化スクリプト 370 ケース
+#
+# 検証対象: 浜口さん側既存スクリプト「予約希望日入力（4桁DTMF）」を
+# {{INPUT_MODULE}} 焼き込み形式に変換したもの (test_scaffold_generator 内 template)
+# 修正点: maxDays[2] = 28 → 29 (2/29 有効化、2026-05-26 浜口さん指示)
+#
+# ケース構成 (370 ケース):
+#   - 有効 366: MMDD で maxDays Feb=29 を通る全組合せ (auto_generate_valid)
+#       0101..0131, 0201..0229, 0301..0331, 0401..0430, 0501..0531,
+#       0601..0630, 0701..0731, 0801..0831, 0901..0930, 1001..1031,
+#       1101..1130, 1201..1231
+#       期待値: 入力と同じ MMDD
+#   - 無効 4: NO_RESULT 期待ケース
+#       inv_0230 (Feb 30): 月OK・日越え
+#       inv_0431 (Apr 31): 月OK・日越え
+#       inv_1301 (month=13): 月オーバー
+#       inv_0000 (zero):    月日ゼロ
+#
+# モジュール構成 (matrix が 1 dispatch + 5モジュール×370ケース = 1851 モジュールに展開):
+#   <matrix_name>            : dispatch (pass-through inline_script)
+#   <id>_in                  : テスト入力を $runner.setResult("MMDD")
+#   <id>_norm                : 焼き込み正規化スクリプト
+#   <id>_cmr                 : ContextMatchRouter (norm 出力 == expected)
+#   <id>_pass / <id>_fail    : ログ出力 (info / error)、次 case の <next_id>_in へ
+#
+# ログ書式:
+#   [TEST PASS] v0101 in=0101 exp=0101
+#   [TEST FAIL] inv_0230 in=0230 exp=NO_RESULT
+#
+# 実機検証時の確認方法:
+#   Brekeke ログを grep "TEST FAIL" して件数 0 なら全 PASS。
+#   FAIL があれば該当 case_id をシナリオから特定して原因究明。
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$予約希望日入力_正規化"
+  flow_name: "テスト$予約希望日入力_正規化"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$予約希望日入力_正規化"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] 予約希望日入力 正規化 (370 ケース)");
+      $runner.getLogger().info("有効 366 (2/29 含む) + 無効 4 (0230/0431/1301/0000)");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: matrix
+
+  - step: matrix
+    type: dtmf_date_test_matrix
+    auto_generate_valid: true
+    additional_cases:
+      - {id: inv_0230, input: "0230", expected: "NO_RESULT"}
+      - {id: inv_0431, input: "0431", expected: "NO_RESULT"}
+      - {id: inv_1301, input: "1301", expected: "NO_RESULT"}
+      - {id: inv_0000, input: "0000", expected: "NO_RESULT"}
+    final_next: ログ_終了
+
+  - step: ログ_終了
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST END] 予約希望日入力 正規化 (370 ケース)");
+      $runner.getLogger().info("Brekeke ログを grep [TEST FAIL] で件数確認");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: 終了
+
+  - step: 終了
+    type: termination

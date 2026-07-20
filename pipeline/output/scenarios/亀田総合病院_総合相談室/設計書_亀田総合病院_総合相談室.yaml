@@ -1,0 +1,1092 @@
+# 設計書 — 亀田総合病院 総合相談室
+# 生成元: @director エージェント
+# 生成日: 2026-06-11
+# 確認レポート: output/scenarios/亀田総合病院_総合相談室/確認レポート_亀田総合病院_総合相談室_20260611.md
+#
+# ⚠️ TTS 文言は元資料に無いため director がドラフト起草（全文言「顧客確定前提のドラフト」）。
+# ⚠️ PATCH_BOX（亀田_flat.md）に従い 1フロー型フラット・個人情報インライン hearing・用件分類は OpenAI で構築。
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "亀田総合病院"
+  scenario_name: "総合相談室"
+  group_name: "亀田総合病院_総合相談室_20260611"
+  flow_name: "亀田総合病院_総合相談室_20260611$総合相談室"
+  target_facility: "本院（総合相談室）のみ"
+  office_id: "TODO_要確認"
+  phone_number: "04-7099-1223"          # 総合相談室 代表（着信）番号。元資料記載
+  business_hours: "なし（要確認 — 元資料に営業時間外の扱いの記載なし）"
+  flow_type: "1flow"
+  work_type: "gen1_migration"           # drawio(Gen1相当)/顧客手書き図からの新設移管
+  environment: "demo"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+# PATCH_BOX 亀田_flat.md 指定により 1フロー型フラット。
+# 個人情報聴取（患者氏名・連絡先電話番号）はインライン hearing として scenario_flow に直接配置。
+# subflow ブロック / Jump to Flow は使用しない。RAG/FAQ も無し。subflows[] は空。
+flow_structure:
+  type: "1flow"
+  flows:
+    - name: "亀田総合病院_総合相談室_20260611$総合相談室"
+      role: "main"
+      description: "総合相談室直通(04-7099-1223)への受電を一次応答。発信元(患者本人・家族/連携医療機関/行政)と用件を判定し、相談室・大代表への転送、伝言・折返し受付、定型案内、予約センターかけ直し案内を行う。"
+  subflows: []                          # 1フロー型のため空。個人情報はインライン hearing。
+
+# --- セクション3: フローの目的 ---
+purpose: >
+  亀田総合病院 総合相談室（一次受けが MSW・PSW・看護師の専門職）の直通番号への受電を AI が一次応答する。
+  発信元（患者本人・家族／連携医療機関／行政の3分類）と用件を判定し、(1)相談室業務に関係する電話のみ受け、
+  (2)予約関連は予約センターかけ直し案内で弾き、(3)大代表の用件・誤着信は大代表へ転送、
+  (4)担当者特定可・特定不可・catch-all は伝言/折返し受付または相談室転送に振り分ける。
+  顧客大原則（2026-06-10 浜口確定）: 「相談室業務に直接関係する電話のみ受け付け、予約関連は受け付けずに弾く」。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "亀田総合病院_総合相談室_20260611$総合相談室"
+    diagram: |
+      冒頭(wait)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → END_非通知(framework既定・要否は顧客確認)
+            └─ 通常 → 冒頭_アナウンス
+                         → 発信元確認(enum: 患者本人・家族 / 連携医療機関 / 行政)
+                             ├─ 患者本人・家族 → 用件確認(enum)
+                             │     ├─ 相談       → 相談区分確認(enum: 入院/外来/新規)
+                             │     │     ├─ 入院 → 担当者確認_入院(わかる/わからない)
+                             │     │     │     ├─ わかる   → 患者氏名確認 → 担当者名聴取 → 折返し_用件内容
+                             │     │     │     └─ わからない → 相談室転送(7177)
+                             │     │     ├─ 外来 → 担当者確認_外来(わかる/わからない)
+                             │     │     │     ├─ わかる   → 患者氏名確認 → 担当者名聴取 → 折返し_用件内容
+                             │     │     │     └─ わからない → F1仕分け
+                             │     │     └─ 新規 → F1仕分け
+                             │     ├─ 大代表    → 大代表転送(04-7092-2211・誤着信)
+                             │     ├─ 予約       → END_予約センター案内(弾く)
+                             │     ├─ 定型案内   → 定型案内 → END_定型案内
+                             │     └─ その他     → 折返し_氏名 → 折返し_用件内容
+                             ├─ 連携医療機関 → 担当者確認_連携(わかる/わからない)
+                             │     ├─ わかる   → 担当者名聴取 → 折返し_用件内容
+                             │     └─ わからない → 相談室転送(7177)
+                             ├─ 行政        → 担当者確認_行政(わかる/わからない)
+                             │     ├─ わかる   → 担当者名聴取 → 折返し_用件内容
+                             │     └─ わからない → 相談室転送(7177)
+                             └─ その他       → 折返し_氏名 → 折返し_用件内容
+
+      F1仕分け(enum: 相談予約/受診)  ※新規(new_q) と 外来・担当者特定不可(D2) の両方から合流
+        ├─ 相談予約 → 相談室転送(7177)
+        ├─ 受診     → END_予約センター案内(弾く)
+        └─ その他   → 相談室転送(7177)
+
+      折返しパイプライン(伝言・折返し受付)
+        折返し_用件内容(text) → 折返し_連絡先電話番号(text・復唱) → END_折返し受付
+        （catch-all 入口のみ 折返し_氏名 を先頭に経由）
+
+      転送(call_transfer・方式/実番号はプロパティ/TODO)
+        相談室転送(7177) / 大代表転送(04-7092-2211)
+          ├─ 成功 → END_転送成功(status=3・自動生成)
+          └─ 失敗 → END_転送失敗(status=9・自動生成)
+    notes: >
+      営業時間チェックは元資料に記載がないため配置しない（use_acceptance_times: false）。
+      incoming-classifier の非通知分岐は framework 既定。要否は顧客確認（確認レポート参照）。
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭 ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: false
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 発信元確認
+
+  # --- 発信元3分類（DTMF/音声を収集 → n_choice 決定論分類。OpenAIゼロ）---
+  - step: 発信元確認
+    type: hearing
+    output_format: text          # 収集のみ（OpenAI無し）。分類は後段 script(n_choice)
+    save_to: ""                  # 生値は保存しない。script が callerType にラベル保存
+    next: 発信元_分類
+  - step: 発信元_分類
+    type: script
+    script_template: n_choice
+    reference_module: 入力_発信元確認
+    template_params:
+      INPUT_MODULE: "入力_発信元確認"
+      CONTEXT_NAME: "callerType"
+      CONTEXT_DISPLAY_TYPE: "TEXT"
+      DTMF_MAP: '{"1":"患者本人・家族","2":"連携医療機関","3":"行政"}'
+      TOKEN_MAP: '[]'
+      DIGIT_KEYWORD_PATTERNS: '[]'
+      COMPOUND_PATTERNS: '[]'
+      KEYWORD_PATTERNS: '[{"regex":"本人|家族|患者|母|父|親|息子|娘","result":"患者本人・家族"},{"regex":"クリニック|診療所|病院|医療機関|医院|連携先","result":"連携医療機関"},{"regex":"市役所|役所|役場|保健所|行政|地域包括|包括支援|福祉課","result":"行政"}]'
+    conditions:
+      - match: "患者本人・家族"
+        next: 用件確認
+      - match: "連携医療機関"
+        next: 担当者確認_連携
+      - match: "行政"
+        next: 担当者確認_行政
+      - match: "other"          # NO_RESULT/判定不能 → 折返し受付に集約（顧客確認事項 N-3）
+        next: 折返し_氏名
+
+  # --- 用件分類（自由発話 → inquiry_classifier 決定論分類。OpenAIゼロ）---
+  - step: 用件確認
+    type: hearing
+    output_format: text          # 収集のみ。分類は後段 script(inquiry_classifier)
+    save_to: ""
+    next: 用件_分類
+  - step: 用件_分類
+    type: script
+    script_template: inquiry_classifier
+    reference_module: 入力_用件確認
+    template_params:
+      INPUT_MODULE: "入力_用件確認"
+      CONTEXT_NAME: "classification"
+      CONTEXT_DISPLAY_TYPE: "CLASSIFICATION"
+    conditions:
+      - match: "相談"
+        next: 相談区分確認
+      - match: "大代表"
+        next: 大代表転送
+      - match: "予約"
+        next: END_予約センター案内    # 予約関連は弾く（顧客大原則）
+      - match: "定型案内"
+        next: 定型案内
+      - match: "other"               # その他/NO_RESULT → 折返し受付
+        next: 折返し_氏名
+
+  # --- 相談区分(C0): 入院/外来/新規（DTMF/音声 → n_choice。OpenAIゼロ）---
+  - step: 相談区分確認
+    type: hearing
+    output_format: text
+    save_to: ""
+    next: 相談区分_分類
+  - step: 相談区分_分類
+    type: script
+    script_template: n_choice
+    reference_module: 入力_相談区分確認
+    template_params:
+      INPUT_MODULE: "入力_相談区分確認"
+      CONTEXT_NAME: "patientCategory"
+      CONTEXT_DISPLAY_TYPE: "TEXT"
+      DTMF_MAP: '{"1":"入院","2":"外来","3":"新規"}'
+      TOKEN_MAP: '[]'
+      DIGIT_KEYWORD_PATTERNS: '[]'
+      COMPOUND_PATTERNS: '[]'
+      KEYWORD_PATTERNS: '[{"regex":"入院","result":"入院"},{"regex":"外来|通院","result":"外来"},{"regex":"新規|初めて|はじめて|初診","result":"新規"}]'
+    conditions:
+      - match: "入院"
+        next: 担当者確認_入院
+      - match: "外来"
+        next: 担当者確認_外来
+      - match: "新規"
+        next: F1仕分け
+      - match: "other"               # 区分不明/NO_RESULT → F1で相談/予約に仕分け
+        next: F1仕分け
+
+  # --- 担当者わかるか(入院)（DTMF/音声 → n_choice。OpenAIゼロ）---
+  - step: 担当者確認_入院
+    type: hearing
+    output_format: text
+    save_to: ""
+    next: 担当者確認_入院_分類
+  - step: 担当者確認_入院_分類
+    type: script
+    script_template: n_choice
+    reference_module: 入力_担当者確認_入院
+    template_params:
+      INPUT_MODULE: "入力_担当者確認_入院"
+      CONTEXT_NAME: "staffKnown"
+      CONTEXT_DISPLAY_TYPE: "TEXT"
+      DTMF_MAP: '{"1":"わかる","2":"わからない"}'
+      TOKEN_MAP: '[]'
+      DIGIT_KEYWORD_PATTERNS: '[]'
+      COMPOUND_PATTERNS: '[]'
+      KEYWORD_PATTERNS: '[{"regex":"わからない|わかりません|分からない|分かりません|わかりかね|分かりかね|わからな|分からな|不明|いいえ|知らない|知りません|知らな","result":"わからない"},{"regex":"わかる|わかります|分かる|分かります|^はい|存じ|知って","result":"わかる"}]'
+    conditions:
+      - match: "わかる"
+        next: 患者氏名確認
+      - match: "other"               # わからない/NO_RESULT → 相談室7177
+        next: 相談室転送
+
+  # --- 担当者わかるか(外来)（DTMF/音声 → n_choice。OpenAIゼロ）---
+  - step: 担当者確認_外来
+    type: hearing
+    output_format: text
+    save_to: ""
+    next: 担当者確認_外来_分類
+  - step: 担当者確認_外来_分類
+    type: script
+    script_template: n_choice
+    reference_module: 入力_担当者確認_外来
+    template_params:
+      INPUT_MODULE: "入力_担当者確認_外来"
+      CONTEXT_NAME: "staffKnown"
+      CONTEXT_DISPLAY_TYPE: "TEXT"
+      DTMF_MAP: '{"1":"わかる","2":"わからない"}'
+      TOKEN_MAP: '[]'
+      DIGIT_KEYWORD_PATTERNS: '[]'
+      COMPOUND_PATTERNS: '[]'
+      KEYWORD_PATTERNS: '[{"regex":"わからない|わかりません|分からない|分かりません|わかりかね|分かりかね|わからな|分からな|不明|いいえ|知らない|知りません|知らな","result":"わからない"},{"regex":"わかる|わかります|分かる|分かります|^はい|存じ|知って","result":"わかる"}]'
+    conditions:
+      - match: "わかる"
+        next: 患者氏名確認
+      - match: "other"               # わからない/NO_RESULT → F1仕分け
+        next: F1仕分け
+
+  # --- 担当者わかるか(連携医療機関)（DTMF/音声 → n_choice。OpenAIゼロ）---
+  - step: 担当者確認_連携
+    type: hearing
+    output_format: text
+    save_to: ""
+    next: 担当者確認_連携_分類
+  - step: 担当者確認_連携_分類
+    type: script
+    script_template: n_choice
+    reference_module: 入力_担当者確認_連携
+    template_params:
+      INPUT_MODULE: "入力_担当者確認_連携"
+      CONTEXT_NAME: "staffKnown"
+      CONTEXT_DISPLAY_TYPE: "TEXT"
+      DTMF_MAP: '{"1":"わかる","2":"わからない"}'
+      TOKEN_MAP: '[]'
+      DIGIT_KEYWORD_PATTERNS: '[]'
+      COMPOUND_PATTERNS: '[]'
+      KEYWORD_PATTERNS: '[{"regex":"わからない|わかりません|分からない|分かりません|わかりかね|分かりかね|わからな|分からな|不明|いいえ|知らない|知りません|知らな","result":"わからない"},{"regex":"わかる|わかります|分かる|分かります|^はい|存じ|知って","result":"わかる"}]'
+    conditions:
+      - match: "わかる"
+        next: 担当者名聴取
+      - match: "other"               # わからない/NO_RESULT → 相談室7177
+        next: 相談室転送
+
+  # --- 担当者わかるか(行政)（DTMF/音声 → n_choice。OpenAIゼロ）---
+  - step: 担当者確認_行政
+    type: hearing
+    output_format: text
+    save_to: ""
+    next: 担当者確認_行政_分類
+  - step: 担当者確認_行政_分類
+    type: script
+    script_template: n_choice
+    reference_module: 入力_担当者確認_行政
+    template_params:
+      INPUT_MODULE: "入力_担当者確認_行政"
+      CONTEXT_NAME: "staffKnown"
+      CONTEXT_DISPLAY_TYPE: "TEXT"
+      DTMF_MAP: '{"1":"わかる","2":"わからない"}'
+      TOKEN_MAP: '[]'
+      DIGIT_KEYWORD_PATTERNS: '[]'
+      COMPOUND_PATTERNS: '[]'
+      KEYWORD_PATTERNS: '[{"regex":"わからない|わかりません|分からない|分かりません|わかりかね|分かりかね|わからな|分からな|不明|いいえ|知らない|知りません|知らな","result":"わからない"},{"regex":"わかる|わかります|分かる|分かります|^はい|存じ|知って","result":"わかる"}]'
+    conditions:
+      - match: "わかる"
+        next: 担当者名聴取
+      - match: "other"               # わからない/NO_RESULT → 相談室7177
+        next: 相談室転送
+
+  # --- F1仕分け（新規 と 外来・特定不可 の両合流。DTMF/音声 → n_choice。OpenAIゼロ）---
+  - step: F1仕分け
+    type: hearing
+    output_format: text
+    save_to: ""
+    next: F1_分類
+  - step: F1_分類
+    type: script
+    script_template: n_choice
+    reference_module: 入力_F1仕分け
+    template_params:
+      INPUT_MODULE: "入力_F1仕分け"
+      CONTEXT_NAME: "inquiryType"
+      CONTEXT_DISPLAY_TYPE: "TEXT"
+      DTMF_MAP: '{"1":"相談予約","2":"受診"}'
+      TOKEN_MAP: '[]'
+      DIGIT_KEYWORD_PATTERNS: '[]'
+      COMPOUND_PATTERNS: '[]'
+      KEYWORD_PATTERNS: '[{"regex":"相談予約|相談|予約の相談","result":"相談予約"},{"regex":"受診|診察|診て|外来","result":"受診"}]'
+    conditions:
+      - match: "相談予約"
+        next: 相談室転送            # 相談予約 7177（相談室業務）
+      - match: "受診"
+        next: END_予約センター案内  # 受診=予約関連 → 弾く
+      - match: "other"             # 不明/NO_RESULT は相談室業務寄りに倒す（弾かない）
+        next: 相談室転送
+
+  # --- 患者氏名確認（入院/外来 担当者特定可 — インライン hearing）---
+  # PATCH_BOX(亀田_flat.md) 指定の 1フロー型フラットを維持するため、Dr.JOY 標準の magic field
+  # patientName（サブフロー必須）は使わず、伝言用の中立フィールド contactName(氏名) に保存する。
+  - step: 患者氏名確認
+    type: hearing
+    output_format: text
+    save_to: contactName
+    echo_back: false
+    next: 担当者名聴取
+    retry_failure: skip            # 聞き取れなくても折返し受付へ進む
+
+  # --- 担当者名聴取（context記録のみ・個別取次なし）---
+  - step: 担当者名聴取
+    type: hearing
+    output_format: text
+    save_to: staffName
+    echo_back: false
+    next: 折返し_用件内容
+    retry_failure: skip
+
+  # --- 折返し_氏名（catch-all 入口の氏名聴取）---
+  # 患者氏名確認 と同様、magic field patientName は使わず中立フィールド contactName(氏名) に保存。
+  - step: 折返し_氏名
+    type: hearing
+    output_format: text
+    save_to: contactName
+    echo_back: false
+    next: 折返し_用件内容
+    retry_failure: skip
+
+  # --- 折返し_用件内容（伝言・自由発話）---
+  - step: 折返し_用件内容
+    type: hearing
+    output_format: text
+    save_to: reason
+    echo_back: false
+    next: 折返し_連絡先電話番号
+    retry_failure: skip
+
+  # --- 折返し_連絡先電話番号（復唱あり）---
+  - step: 折返し_連絡先電話番号
+    type: hearing
+    output_format: text
+    save_to: additionalPhoneNumber
+    echo_back: true
+    next: END_折返し受付
+    retry_failure: end_failure     # 連絡先が取れなければ折返し不可 → 聴取失敗終話
+
+  # --- 定型案内（コンテンツ未受領→プロパティ placeholder, TODO）---
+  - step: 定型案内
+    type: announcement
+    next: END_定型案内
+
+  # --- 転送（call_transfer・方式/実番号はプロパティ/TODO）---
+  - step: 相談室転送
+    type: call_transfer
+    transfer_type: "Blind Transfer"
+    on_failure_announcement: "申し訳ございません。ただいまおつなぎできませんでした。恐れ入りますが、改めておかけ直しください。お電話ありがとうございました。"
+    # 転送先=相談室内線 7177。実番号・転送方式(内線A/050外線B)はプロパティで設定（TODO）
+
+  - step: 大代表転送
+    type: call_transfer
+    transfer_type: "Blind Transfer"
+    on_failure_announcement: "申し訳ございません。ただいまおつなぎできませんでした。恐れ入りますが、改めておかけ直しください。お電話ありがとうございました。"
+    # 転送先=大代表 04-7092-2211（誤着信扱い）。実番号・転送方式はプロパティで設定（TODO）
+
+  # --- 終話ブロック ---
+  - step: END_折返し受付
+    type: termination
+    termination_ref: "END_折返し受付"
+
+  - step: END_予約センター案内
+    type: termination
+    termination_ref: "END_予約センター案内"
+
+  - step: END_定型案内
+    type: termination
+    termination_ref: "END_定型案内"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "相談"
+      - id: "2"
+        order: "2"
+        value: "大代表"
+      - id: "3"
+        order: "3"
+        value: "予約"
+      - id: "4"
+        order: "4"
+        value: "定型案内"
+      - id: "5"
+        order: "5"
+        value: "その他"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "患者本人・家族系の用件区分"
+
+  - context_name: "contactName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: >
+      伝言・折返し用の氏名（患者氏名確認＝相談対象患者の氏名 / 折返し_氏名＝発信者氏名）を
+      インライン hearing で保存する中立フィールド。PATCH_BOX(亀田_flat.md) の 1フロー型フラット
+      （サブフロー不使用）を維持するため、サブフロー必須となる Dr.JOY 標準 magic field patientName は
+      使用しない。Dr.JOY 画面の患者名スロットへ連携する必要がある場合は要確認（確認レポート参照）。
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "折返し先として聴取する電話番号"
+
+  - context_name: "reason"
+    context_name_jp: "用件内容（伝言）"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "伝言・折返しパスで聴取する自由発話の用件内容"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "転送"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+      - id: "9"
+        order: "9"
+        value: "転送失敗"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=未処理(折返し受付) 2=案内(予約センター/定型) 3=転送成功 6=時間外 9=転送失敗"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: ""
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値。displayType/itemDefault/deletable は変更不可"
+
+  # --- 施設固有フィールド（itemDefault: false, deletable: false）---
+  - context_name: "callerType"
+    context_name_jp: "発信元区分"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "発信元3分類の結果（患者本人・家族 / 連携医療機関 / 行政）"
+
+  - context_name: "patientCategory"
+    context_name_jp: "相談区分"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "C0 相談区分（入院 / 外来 / 新規）"
+
+  - context_name: "staffKnown"
+    context_name_jp: "担当者特定可否"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "担当者がわかるか（わかる / わからない）。ルーティング兼記録用"
+
+  - context_name: "inquiryType"
+    context_name_jp: "相談予約_受診区分"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "F1仕分けの結果（相談予約 / 受診）"
+
+  - context_name: "staffName"
+    context_name_jp: "担当者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "担当者特定可パスで聴取した担当者名。個別取次は行わず折返し時にスタッフが使用"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "発信元確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: ""
+    openai_processing: "none"
+    output_format: "text"
+    notes: "収集のみ（OpenAI無し）。DTMF 1=患者本人・家族,2=連携医療機関,3=行政＋音声は後段 script(n_choice) で分類し callerType へ保存"
+
+  - order: 2
+    name: "用件確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: ""
+    openai_processing: "none"
+    output_format: "text"
+    notes: "収集のみ（OpenAI無し）。自由発話を後段 script(inquiry_classifier) で分類し classification へ保存"
+
+  - order: 3
+    name: "相談区分確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: ""
+    openai_processing: "none"
+    output_format: "text"
+    notes: "収集のみ（OpenAI無し）。DTMF/音声を後段 script(n_choice) で分類し patientCategory へ保存"
+
+  - order: 4
+    name: "担当者確認_入院"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: ""
+    openai_processing: "none"
+    output_format: "text"
+    notes: "収集のみ（OpenAI無し）。DTMF/音声を後段 script(n_choice) で分類し staffKnown へ保存"
+
+  - order: 5
+    name: "担当者確認_外来"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: ""
+    openai_processing: "none"
+    output_format: "text"
+    notes: "収集のみ（OpenAI無し）。DTMF/音声を後段 script(n_choice) で分類し staffKnown へ保存"
+
+  - order: 6
+    name: "担当者確認_連携"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: ""
+    openai_processing: "none"
+    output_format: "text"
+    notes: "収集のみ（OpenAI無し）。DTMF/音声を後段 script(n_choice) で分類し staffKnown へ保存"
+
+  - order: 7
+    name: "担当者確認_行政"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: ""
+    openai_processing: "none"
+    output_format: "text"
+    notes: "収集のみ（OpenAI無し）。DTMF/音声を後段 script(n_choice) で分類し staffKnown へ保存"
+
+  - order: 8
+    name: "F1仕分け"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: ""
+    openai_processing: "none"
+    output_format: "text"
+    notes: "収集のみ（OpenAI無し）。DTMF/音声を後段 script(n_choice) で分類し inquiryType へ保存"
+
+  - order: 9
+    name: "患者氏名確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "contactName"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "自由発話の氏名。output_format text のため OpenAI 正規化なし。中立フィールド contactName に保存"
+
+  - order: 10
+    name: "担当者名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "staffName"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "担当者名を context 記録（個別取次なし）"
+
+  - order: 11
+    name: "折返し_氏名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "contactName"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "catch-all 入口の発信者氏名。中立フィールド contactName に保存"
+
+  - order: 12
+    name: "折返し_用件内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "伝言・自由発話の用件内容"
+
+  - order: 13
+    name: "折返し_連絡先電話番号"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 15
+    retry_count: 2
+    echo_back: true
+    save_to: "additionalPhoneNumber"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "市外局番から DTMF 入力。echo_back で復唱確認（肯定/否定）"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "発信元確認"
+    tts_announcement: "{tts_g:はじめに、お電話をくださった方についてお伺いします。患者ご本人またはご家族の方は1を、連携先の医療機関の方は2を、行政機関の方は3を、ダイヤルでご入力ください。}"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "患者本人・家族"
+        - "連携医療機関"
+        - "行政"
+      mapping:
+        - input: "DTMF 1 または「本人」「家族」「患者」を含む発話"
+          output: "患者本人・家族"
+        - input: "DTMF 2 または「クリニック」「診療所」「病院」「医療機関」等を含む発話"
+          output: "連携医療機関"
+        - input: "DTMF 3 または「市役所」「役所」「保健所」「行政」「地域包括」等を含む発話"
+          output: "行政"
+      no_result_condition: "上記いずれにも該当しない / 無言"
+    save_to: "callerType"
+    next_step: "用件確認 / 担当者確認_連携 / 担当者確認_行政 / 折返し_氏名(other)"
+    retry_failure: "end_failure"
+
+  - step_name: "用件確認"
+    tts_announcement: "{tts_g:ご用件をお話しください。総合相談室へのご相談、当院の代表番号へのご用件、ご予約に関するご用件などについて承ります。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "相談"
+        - "大代表"
+        - "予約"
+        - "定型案内"
+        - "その他"
+      mapping:
+        - input: "総合相談室への相談・退院調整・ケアマネ連携 等"
+          output: "相談"
+        - input: "代表電話・他部署・誤って相談室にかけた 等"
+          output: "大代表"
+        - input: "外来予約・受診予約・予約変更・予約確認 等の予約関連（広めに検知）"
+          output: "予約"
+        - input: "場所・受付時間・各種番号の問い合わせ 等の定型案内"
+          output: "定型案内"
+      no_result_condition: "上記いずれにも明確に該当しない / 判定不能 → その他（折返し受付へ）"
+    save_to: "classification"
+    next_step: "相談区分確認 / 大代表転送 / END_予約センター案内 / 定型案内 / 折返し_氏名(other)"
+    retry_failure: "end_failure"
+
+  - step_name: "相談区分確認"
+    tts_announcement: "{tts_g:ご相談についてお伺いします。入院中の患者さまに関するご相談は1を、外来の患者さまに関するご相談は2を、新規のご相談は3を、ダイヤルでご入力ください。}"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "入院"
+        - "外来"
+        - "新規"
+      mapping:
+        - input: "DTMF 1 または「入院」を含む発話"
+          output: "入院"
+        - input: "DTMF 2 または「外来」を含む発話"
+          output: "外来"
+        - input: "DTMF 3 または「新規」「初めて」を含む発話"
+          output: "新規"
+      no_result_condition: "上記いずれにも該当しない → F1仕分けへ"
+    save_to: "patientCategory"
+    next_step: "担当者確認_入院 / 担当者確認_外来 / F1仕分け"
+    retry_failure: "end_failure"
+
+  - step_name: "担当者確認_入院"
+    tts_announcement: "{tts_g:ご担当者のお名前はおわかりでしょうか。おわかりの場合は1を、わからない場合は2を、ダイヤルでご入力ください。}"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "わかる"
+        - "わからない"
+      mapping:
+        - input: "DTMF 1 または「わかる」「はい」"
+          output: "わかる"
+        - input: "DTMF 2 または「わからない」「いいえ」"
+          output: "わからない"
+      no_result_condition: "判定不能 → わからない相当（相談室転送）"
+    save_to: "staffKnown"
+    next_step: "患者氏名確認 / 相談室転送(other)"
+    retry_failure: "end_failure"
+
+  - step_name: "担当者確認_外来"
+    tts_announcement: "{tts_g:ご担当者のお名前はおわかりでしょうか。おわかりの場合は1を、わからない場合は2を、ダイヤルでご入力ください。}"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "わかる"
+        - "わからない"
+      mapping:
+        - input: "DTMF 1 または「わかる」「はい」"
+          output: "わかる"
+        - input: "DTMF 2 または「わからない」「いいえ」"
+          output: "わからない"
+      no_result_condition: "判定不能 → わからない相当（F1仕分け）"
+    save_to: "staffKnown"
+    next_step: "患者氏名確認 / F1仕分け(other)"
+    retry_failure: "end_failure"
+
+  - step_name: "担当者確認_連携"
+    tts_announcement: "{tts_g:ご担当者のお名前はおわかりでしょうか。おわかりの場合は1を、わからない場合は2を、ダイヤルでご入力ください。}"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "わかる"
+        - "わからない"
+      mapping:
+        - input: "DTMF 1 または「わかる」「はい」"
+          output: "わかる"
+        - input: "DTMF 2 または「わからない」「いいえ」"
+          output: "わからない"
+      no_result_condition: "判定不能 → わからない相当（相談室転送）"
+    save_to: "staffKnown"
+    next_step: "担当者名聴取 / 相談室転送(other)"
+    retry_failure: "end_failure"
+
+  - step_name: "担当者確認_行政"
+    tts_announcement: "{tts_g:ご担当者のお名前はおわかりでしょうか。おわかりの場合は1を、わからない場合は2を、ダイヤルでご入力ください。}"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "わかる"
+        - "わからない"
+      mapping:
+        - input: "DTMF 1 または「わかる」「はい」"
+          output: "わかる"
+        - input: "DTMF 2 または「わからない」「いいえ」"
+          output: "わからない"
+      no_result_condition: "判定不能 → わからない相当（相談室転送）"
+    save_to: "staffKnown"
+    next_step: "担当者名聴取 / 相談室転送(other)"
+    retry_failure: "end_failure"
+
+  - step_name: "F1仕分け"
+    tts_announcement: "{tts_g:ご用件についてお伺いします。ご相談のご予約に関することは1を、受診に関することは2を、ダイヤルでご入力ください。}"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "相談予約"
+        - "受診"
+      mapping:
+        - input: "DTMF 1 または「相談」「相談の予約」"
+          output: "相談予約"
+        - input: "DTMF 2 または「受診」「診察」「外来予約」等"
+          output: "受診"
+      no_result_condition: "判定不能 → 相談室業務寄り（相談室転送）"
+    save_to: "inquiryType"
+    next_step: "相談室転送 / END_予約センター案内 / 相談室転送(other)"
+    retry_failure: "end_failure"
+
+  - step_name: "患者氏名確認"
+    tts_announcement: "{tts_g:患者さまのお名前を、姓と名の順に、フルネームでおっしゃってください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "聴取できない場合は次へ進む（skip）"
+    save_to: "contactName"
+    next_step: "担当者名聴取"
+    retry_failure: "skip"
+
+  - step_name: "担当者名聴取"
+    tts_announcement: "{tts_g:ご担当者のお名前をおっしゃってください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "聴取できない場合は次へ進む（skip）"
+    save_to: "staffName"
+    next_step: "折返し_用件内容"
+    retry_failure: "skip"
+
+  - step_name: "折返し_氏名"
+    tts_announcement: "{tts_g:お名前を、姓と名の順に、フルネームでおっしゃってください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "聴取できない場合は次へ進む（skip）"
+    save_to: "contactName"
+    next_step: "折返し_用件内容"
+    retry_failure: "skip"
+
+  - step_name: "折返し_用件内容"
+    tts_announcement: "{tts_g:ご用件の内容をお話しください。担当者へお伝えし、折り返しご連絡いたします。お話しが終わりましたら、そのままお待ちください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "聴取できない場合は次へ進む（skip）"
+    save_to: "reason"
+    next_step: "折返し_連絡先電話番号"
+    retry_failure: "skip"
+
+  - step_name: "折返し_連絡先電話番号"
+    tts_announcement: "{tts_g:折り返しのご連絡先となるお電話番号を、市外局番からダイヤルでご入力ください。入力が終わりましたら、シャープを押してください。}"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "聴取できない場合はリトライ。上限到達で聴取失敗終話"
+    save_to: "additionalPhoneNumber"
+    next_step: "END_折返し受付"
+    retry_failure: "end_failure"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（framework 既定・削除禁止）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外（本フローでは非稼働。framework 既定として保持）"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系 ---
+  - name: "END_折返し受付"
+    condition: "伝言・折返しパス完了（用件内容＋連絡先聴取済み）"
+    tts_announcement: "ご用件を承りました。担当者よりお電話にて折り返しご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_折返し受付"
+  - name: "END_予約センター案内"
+    condition: "予約関連の用件（用件確認=予約 / F1仕分け=受診）— 弾く"
+    tts_announcement: "ご予約や受診に関するお問い合わせは、予約センターにて承っております。恐れ入りますが、予約センターまでおかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_予約センター案内"
+  - name: "END_定型案内"
+    condition: "定型案内（場所・受付時間・番号案内等）完了"
+    tts_announcement: "お問い合わせいただきありがとうございました。"
+    status: "2"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_定型案内"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: false                  # 本フローは SMS 要素なし（全終話 sms_flag=0 / 異常系 -1）
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "none"                 # RAG/FAQ なし
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション8c: Dr.JOY 電話帳エントリ ---
+phonebook:
+  enabled: false                  # 電話帳ベース送信元判定は使用しない（患者本人入電主体）
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内（自動応答である旨）"
+    announcement: "{tts_g:お電話ありがとうございます。こちらは亀田総合病院 総合相談室の自動音声応答です。ご用件をお伺いいたしますので、音声ガイダンスに従ってお話しください。}"
+  - module_name: "発信元確認"
+    purpose: "発信元3分類の聴取"
+    announcement: "{tts_g:はじめに、お電話をくださった方についてお伺いします。患者ご本人またはご家族の方は1を、連携先の医療機関の方は2を、行政機関の方は3を、ダイヤルでご入力ください。}"
+  - module_name: "用件確認"
+    purpose: "用件3分岐+定型案内の聴取（音声）"
+    announcement: "{tts_g:ご用件をお話しください。総合相談室へのご相談、当院の代表番号へのご用件、ご予約に関するご用件などについて承ります。}"
+  - module_name: "相談区分確認"
+    purpose: "相談区分(入院/外来/新規)の聴取"
+    announcement: "{tts_g:ご相談についてお伺いします。入院中の患者さまに関するご相談は1を、外来の患者さまに関するご相談は2を、新規のご相談は3を、ダイヤルでご入力ください。}"
+  - module_name: "担当者確認_入院"
+    purpose: "担当者特定可否の聴取（入院）"
+    announcement: "{tts_g:ご担当者のお名前はおわかりでしょうか。おわかりの場合は1を、わからない場合は2を、ダイヤルでご入力ください。}"
+  - module_name: "担当者確認_外来"
+    purpose: "担当者特定可否の聴取（外来）"
+    announcement: "{tts_g:ご担当者のお名前はおわかりでしょうか。おわかりの場合は1を、わからない場合は2を、ダイヤルでご入力ください。}"
+  - module_name: "担当者確認_連携"
+    purpose: "担当者特定可否の聴取（連携医療機関）"
+    announcement: "{tts_g:ご担当者のお名前はおわかりでしょうか。おわかりの場合は1を、わからない場合は2を、ダイヤルでご入力ください。}"
+  - module_name: "担当者確認_行政"
+    purpose: "担当者特定可否の聴取（行政）"
+    announcement: "{tts_g:ご担当者のお名前はおわかりでしょうか。おわかりの場合は1を、わからない場合は2を、ダイヤルでご入力ください。}"
+  - module_name: "F1仕分け"
+    purpose: "相談予約か受診かの仕分け"
+    announcement: "{tts_g:ご用件についてお伺いします。ご相談のご予約に関することは1を、受診に関することは2を、ダイヤルでご入力ください。}"
+  - module_name: "患者氏名確認"
+    purpose: "患者氏名の聴取"
+    announcement: "{tts_g:患者さまのお名前を、姓と名の順に、フルネームでおっしゃってください。}"
+  - module_name: "担当者名聴取"
+    purpose: "担当者名の聴取（context記録）"
+    announcement: "{tts_g:ご担当者のお名前をおっしゃってください。}"
+  - module_name: "折返し_氏名"
+    purpose: "catch-all 入口の発信者氏名聴取"
+    announcement: "{tts_g:お名前を、姓と名の順に、フルネームでおっしゃってください。}"
+  - module_name: "折返し_用件内容"
+    purpose: "伝言・用件内容の自由発話聴取"
+    announcement: "{tts_g:ご用件の内容をお話しください。担当者へお伝えし、折り返しご連絡いたします。お話しが終わりましたら、そのままお待ちください。}"
+  - module_name: "折返し_連絡先電話番号"
+    purpose: "折返し先電話番号の聴取"
+    announcement: "{tts_g:折り返しのご連絡先となるお電話番号を、市外局番からダイヤルでご入力ください。入力が終わりましたら、シャープを押してください。}"
+  - module_name: "定型案内"
+    purpose: "定型案内（コンテンツ未受領 → 暫定 placeholder。番号・内容受領後にプロパティで差し替え）"
+    announcement: "{tts_g:お問い合わせいただきありがとうございます。ご案内内容につきましては、ただいま準備を進めております。}"   # TODO: 案内コンテンツ未受領（確認レポート N-5）
+  - module_name: "相談室転送"
+    purpose: "総合相談室(内線7177)への転送ガイダンス"
+    announcement: "{tts_g:総合相談室におつなぎいたします。少々お待ちください。}"
+  - module_name: "大代表転送"
+    purpose: "大代表(04-7092-2211)への転送ガイダンス（誤着信）"
+    announcement: "{tts_g:担当の部署におつなぎいたします。少々お待ちください。}"
+  - module_name: "END_折返し受付"
+    purpose: "折返し受付完了の終話"
+    announcement: "{tts_g:ご用件を承りました。担当者よりお電話にて折り返しご連絡いたします。お電話ありがとうございました。}"
+  - module_name: "END_予約センター案内"
+    purpose: "予約関連を弾く（予約センターかけ直し案内）終話"
+    announcement: "{tts_g:ご予約や受診に関するお問い合わせは、予約センターにて承っております。恐れ入りますが、予約センターまでおかけ直しください。お電話ありがとうございました。}"   # TODO: 予約センター番号を案内に含めるかは番号受領後にプロパティ差し替え（確認レポート N-6）
+  - module_name: "END_定型案内"
+    purpose: "定型案内後の終話"
+    announcement: "{tts_g:お問い合わせいただきありがとうございました。}"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "用件確認"
+    words: |
+      相談 そうだん
+      予約 よやく
+      受診 じゅしん
+      入院 にゅういん
+      退院 たいいん
+      転院 てんいん
+      紹介 しょうかい
+      代表 だいひょう
+      大代表 だいだいひょう
+      地域連携 ちいきれんけい
+      ケアマネ けあまね
+      退院調整 たいいんちょうせい
+  - step_name: "折返し_用件内容"
+    words: |
+      折り返し おりかえし
+      伝言 でんごん
+      担当者 たんとうしゃ
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "PATCH_BOX（亀田_flat.md）により 1フロー型フラットで構築。個人情報（患者氏名・連絡先）はインライン hearing、サブフロー/Jump to Flow は不使用。"
+  - "用件分類系の enum 判定は generate_by_OpenAI で実装（A3「決定論デフォルト」に対する初号の暫定例外。OPENAI_EXCEPTION: callerType / classification / patientCategory / staffKnown / inquiryType）。"
+  - "顧客大原則（2026-06-10 浜口確定）: 相談室業務に直接関係する電話のみ受け、予約関連はどの分岐で出ても END_予約センター案内 で弾く。用件確認の OpenAI プロンプトは予約系発話を広めに検知する方向でチューニングする。"
+  - "担当者個別取次は今回実装しない（内線/PHS 対応表が無いため）。担当者名は staffName に context 記録し、折返し時にスタッフが繋ぐ運用。担当者特定可パスは全て伝言・折返しパスへ合流。"
+  - "F1仕分けは『新規の相談(new_q)』と『外来・担当者特定不可(D2)』の両方から合流させる（顧客イメージと drawio の両解釈を包含）。最終形は病院に確認（確認レポート N-4）。"
+  - "転送は call_transfer で抽象化。転送方式（内線A / 050外線B）と実番号はプロパティ/TODO（相談室=内線7177、大代表=04-7092-2211）。情シス確認待ち。"
+  - "営業時間チェック（acceptance_times）は元資料に時間外の扱いが無いため配置しない（use_acceptance_times: false）。END_時間外 は framework 既定として termination_patterns に保持するがフローからは参照されない。"
+  - "incoming-classifier の非通知分岐は framework 既定。非通知・国際入電ガードの要否は顧客確認（確認レポート N-2）。"
+  - "TTS 文言は元資料に無いため全文ドラフト（顧客確定前提）。定型案内コンテンツ・予約センター番号は未受領のため placeholder（TODO）。"
+  - "call_transfer ブロックが2つ（相談室転送・大代表転送）あるため、scaffold が END_転送成功(status=3)/END_転送失敗(status=9)を自動生成する。両転送が同じ END へ合流する想定。"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "office_id（施設ID）— Dr.JOY 管理画面で取得"
+    resolved: false
+  - item: "非通知・国際入電ガードの要否（framework 既定の非通知終話を使うか）"
+    resolved: false
+  - item: "営業時間外動作の要否（現状 acceptance_times なしで構築）"
+    resolved: false
+  - item: "発信元分類・用件 catch-all の無言/判定不能時の遷移先（現状: 折返し受付へ集約）の妥当性"
+    resolved: false
+  - item: "new_q（新規の相談）→ F1 と 外来・担当者特定不可 → F1 の両合流配線の最終形（病院確認）"
+    resolved: false
+  - item: "定型案内の案内コンテンツ（場所・受付時間・番号等）— 未受領。受領後プロパティ差し替え"
+    resolved: false
+  - item: "予約センター番号 — 未受領。END_予約センター案内に番号を含めるか（番号受領後プロパティ差し替え）"
+    resolved: false
+  - item: "転送方式（内線A / 050外線B）と実番号設定（相談室7177 / 大代表04-7092-2211）— 情シス確認待ち。プロパティで設定"
+    resolved: false
+  - item: "TTS 全文言（ドラフト・顧客確定前提）の最終確認"
+    resolved: false
+  - item: "各終話の status / sms_flag の運用妥当性（折返し=1, 予約センター案内=2, 定型案内=2, 全 sms_flag=0）"
+    resolved: false
+  - item: "担当者個別取次を今回実装しない方針（担当者名は context 記録のみ）の顧客最終合意"
+    resolved: false
+  - item: >
+      氏名フィールドの扱い: PATCH_BOX(亀田_flat.md) の 1フロー型フラット（サブフロー不使用）を維持するため、
+      患者氏名確認・折返し_氏名 を Dr.JOY 標準 magic field patientName ではなく中立フィールド contactName(氏名) に保存している
+      （qa_validator E-12 は patientName の hearing インライン配置をサブフロー必須として CRITICAL 検出するため）。
+      Dr.JOY 画面の標準「患者名」スロットへの連携が必要であれば、(a) サブフロー化 or (b) Dr.JOY 側マッピングのいずれで対応するか確認。
+    resolved: false

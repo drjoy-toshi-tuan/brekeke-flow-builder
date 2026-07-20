@@ -1,0 +1,1135 @@
+# 設計書 — 八尾徳洲会総合病院 診療
+# 生成元: @director エージェント
+# 生成日: 2026/05/01
+# 確認レポート: output/scenarios/八尾徳洲会総合病院_診療/確認レポート_八尾徳洲会総合病院_診療_20260501.md
+# ベース: docs/migration/gen1_八尾徳洲会総合病院_診療.md (Gen1→Gen3 移管) + commubo抽出 yaml 14 本
+#
+# ⚠️ BLOCKER あり: 歯科夕診日チェック（隔週火木交互）の判定ロジック仕様が不明。
+# 設計書では時間外は END_時間外 に統合（夕診日案内ルート未実装）。確認レポート B-1 参照。
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "八尾徳洲会総合病院"
+  scenario_name: "診療"
+  group_name: "八尾徳洲会総合病院"
+  flow_name: "八尾徳洲会総合病院$診療"
+  target_facility: "八尾徳洲会総合病院（本院のみ）"
+  office_id: "TODO_要確認"
+  phone_number: "072-993-8501"
+  business_hours: "日曜祝日除く、月曜日〜金曜日 8:00-16:00 / 土曜日 8:00-11:00 / 12月31日〜1月4日は年末年始休止"
+  flow_type: "subflow"
+  work_type: "gen1_migration"
+  environment: "prod"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "八尾徳洲会総合病院$診療"
+      role: "main"
+      description: "冒頭チェーン → 用件確認 (4用件 + 健診 + 予約以外) → 診療科 (CMR で歯科/健診/病児/検査/わからない/分岐なし) → 用件別固有聴取 → 個人情報サブフロー連鎖 → 終話"
+
+  subflows:
+    - name: "八尾徳洲会総合病院$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。静的JSONコピー。Gen1仕様: 氏名は復唱しない（元 yaml では「ありがとうございます」と短い完了 TTS のみ）"
+
+    - name: "八尾徳洲会総合病院$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。静的JSONコピー。DOB Re-confirmation あり"
+
+    - name: "八尾徳洲会総合病院$診察券番号聴取"
+      target: "診察券番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。静的JSONコピー。8桁以内、「分からない」分岐あり"
+
+    - name: "八尾徳洲会総合病院$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9/10 準拠。静的JSONコピー。incoming-classifier→携帯確認/連絡先聴取→Phone Normalization→復唱確認→携帯判別→結果返却。元 yaml の「終話電話番号確認.yaml」(入電番号取得済みなら案内のみ) はサブフロー内部の incoming-classifier ベース処理に集約"
+
+# --- セクション3: フローの目的 ---
+purpose: "八尾徳洲会総合病院 (072-993-8501) への予約専用ダイヤル。患者からの電話を受け、用件 (予約変更 / 予約キャンセル / 予約確認 / 歯科口腔外科 / 健診センター / 予約以外) を判定し、用件と診療科に応じて (a) AI 受付 → 個人情報聴取 → 折り返し対応、(b) 歯科部署/健診センターへの転送、(c) 代表電話案内、(d) 予約以外案内 のいずれかに振り分ける。新規予約は受け付けない。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "八尾徳洲会総合病院$診療"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → 完了フラグ_非通知(saveCompletionFlag2db, status=2, smsFlag=-1)
+            │            → 非通知_アナウンス(TTS) → 切断
+            └─ 通常/携帯/固定/その他 → acceptance_times
+                          ├─ 時間外 → 完了フラグ_時間外(saveCompletionFlag2db, status=6, smsFlag=-1)
+                          │            → 時間外_アナウンス(TTS, 年末年始 12/31-1/4 休止文言含む) → 切断
+                          └─ 受付可 → 冒頭_アナウンス(TTS)
+
+      ─── 用件確認 ───
+      冒頭_アナウンス → 用件確認(TTS+STT+OpenAI+Retry+save2db, echo_back=true)
+        ├─ 予約変更 → 用件_共通_診療科(TTS)
+        ├─ 予約キャンセル → 用件_共通_診療科(TTS)
+        ├─ 予約確認 → 用件_共通_診療科(TTS)
+        ├─ 歯科口腔外科 → 歯科時間判定_8時半(date_of_call_classifier)
+        ├─ 健診センター → 健診時間判定_11時(date_of_call_classifier)
+        ├─ 予約以外 → END_予約以外(TTS) → 切断
+        └─ other → END_聴取失敗(TTS) → 切断
+
+      ─── 用件_共通_診療科（予約変更/キャンセル/確認 共通）───
+      用件_共通_診療科(TTS+STT+OpenAI+Retry+save2db, no_result_default=登録なし)
+        ├─ 歯科口腔外科 → 歯科時間判定_8時半
+        ├─ 健診センター → 健診時間判定_11時
+        ├─ 病児保育診察 → END_病児保育案内(TTS) → 切断
+        ├─ 検査名 → END_代表案内(TTS) → 切断
+        ├─ わからない → CMR_用件後段
+        └─ other (=分岐なし診療科) → CMR_用件後段
+
+      ─── CMR_用件後段（用件で分岐）───
+      CMR_用件後段(ContextMatchRouter, reference_module=OpenAI_用件確認)
+        ├─ 予約変更 → 変更_予約日(TTS)
+        ├─ 予約キャンセル → キャンセル_予約日(TTS)
+        ├─ 予約確認 → 氏名聴取(subflow)
+        └─ other → 変更_予約日(TTS, フォールバック)
+
+      ─── 予約変更ルート ───
+      変更_予約日(hearing, datetime) → 変更_予約希望日(hearing, datetime)
+        → 変更_変更詳細(hearing, text) → 変更_変更理由(hearing, text)
+        → 氏名聴取(subflow)
+
+      ─── 予約キャンセルルート ───
+      キャンセル_予約日(hearing, datetime) → キャンセル_理由(hearing, text)
+        → 氏名聴取(subflow)
+
+      ─── 個人情報サブフロー連鎖（共通）───
+      氏名聴取(subflow) → 生年月日聴取(subflow) → 診察券番号聴取(subflow) → 電話番号聴取(subflow)
+        → CMR_終話分岐
+
+      ─── CMR_終話分岐（用件で終話 TTS を分岐）───
+      CMR_終話分岐(ContextMatchRouter, reference_module=OpenAI_用件確認)
+        ├─ 予約変更 → 完了フラグ_予約変更(saveCompletionFlag2db, status=1, smsFlag=1) → END_予約変更_完了(TTS) → 切断
+        ├─ 予約キャンセル → 完了フラグ_予約キャンセル → END_予約キャンセル_完了(TTS, 特殊文言: 翌診療日折り返し+1ヶ月以内変更可) → 切断
+        ├─ 予約確認 → 完了フラグ_予約確認 → END_予約確認_完了(TTS) → 切断
+        └─ other → 完了フラグ_予約変更 → END_予約変更_完了(TTS, フォールバック) → 切断
+
+      ─── 歯科口腔外科ルート（時間帯判定）───
+      歯科時間判定_8時半(date_of_call_classifier, comparison_time=08:30:00)
+        ├─ 時間外 (8:30 前) → END_歯科_時間前(TTS) → 切断
+        └─ 受付可 (8:30 以降) → 歯科時間判定_12時半
+
+      歯科時間判定_12時半(date_of_call_classifier, comparison_time=12:30:00)
+        ├─ 時間外 (12:30 前) → 歯科_転送ガイダンス(announcement) → 歯科_転送(call_transfer)
+        └─ 受付可 (12:30 以降) → 歯科時間判定_13時半
+
+      歯科時間判定_13時半(date_of_call_classifier, comparison_time=13:30:00)
+        ├─ 時間外 (13:30 前) → END_歯科_昼休み(TTS) → 切断
+        └─ 受付可 (13:30 以降) → 歯科_転送ガイダンス(announcement) → 歯科_転送(call_transfer)
+
+      歯科_転送(call_transfer, transfer_type=Blind Transfer)
+        ├─ 成功 → 完了フラグ_転送成功 (status=3) → END_転送成功 → 切断 (scaffold 自動)
+        └─ 失敗 → 転送失敗_アナウンス → 完了フラグ_転送失敗 (status=9) → END_転送失敗 → 切断 (scaffold 自動)
+
+      ─── 健診センタールート（時間帯判定）───
+      健診時間判定_11時(date_of_call_classifier, comparison_time=11:00:00)
+        ├─ 時間外 (11 時前) → END_健診_時間前(TTS, 代表+健診直通 2 番号案内) → 切断
+        └─ 受付可 (11 時以降) → 健診_転送ガイダンス(announcement) → 健診_転送(call_transfer)
+
+      健診_転送(call_transfer, transfer_type=Blind Transfer)
+        ├─ 成功 → 完了フラグ_転送成功 (status=3) → END_転送成功 → 切断 (scaffold 自動)
+        └─ 失敗 → 転送失敗_アナウンス → 完了フラグ_転送失敗 (status=9) → END_転送失敗 → 切断 (scaffold 自動)
+    notes: |
+      Gen1 commubo 構造を Gen3 9 ブロック型にマッピング。
+      用件確認は Pattern A + echo_back=true（汎用 #data# 復唱）。元 yaml の用件別カスタム復唱文言は汎用化。
+      診療科は Pattern B（後段 CMR_用件後段）で用件×診療科の組み合わせで分岐。
+      個人情報サブフローは Gen1 順序維持: 氏名→生年月日→診察券→電話番号。
+      時間外パスは END_時間外 に統合（夕診日案内ルートは BLOCKER B-1 のため未実装）。
+      予約キャンセルの特殊終話文言（翌診療日折り返し+1ヶ月以内変更可）は END_予約キャンセル_完了 の TTS に組み込み。
+
+  # サブフローのフロー図は静的JSONコピーのため省略（個人情報サブフローは samples/ から完全コピー）
+
+# --- セクション4b: ルーティングマップ（routing_map）— 後方互換用、scenario_flow があるため optional ---
+# scenario_flow が定義されているため routing_map は未使用（scaffold_generator が scenario_flow を優先処理）
+
+# --- セクション4c: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # === 冒頭ブロック（2 ブロック 1 セット必須）===
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 用件確認
+
+  # === 用件確認（4 用件 + 健診 + 予約以外）===
+  - step: 用件確認
+    type: hearing
+    output_format: enum
+    save_to: classification
+    conditions:
+      - match: "予約変更"
+        next: 用件_共通_診療科
+      - match: "予約キャンセル"
+        next: 用件_共通_診療科
+      - match: "予約確認"
+        next: 用件_共通_診療科
+      - match: "歯科口腔外科"
+        next: 歯科時間判定_8時半
+      - match: "健診センター"
+        next: 健診時間判定_11時
+      - match: "予約以外"
+        next: END_予約以外
+      - match: "other"
+        next: END_聴取失敗
+
+  # === 診療科聴取（用件: 予約変更/キャンセル/確認 共通）===
+  - step: 用件_共通_診療科
+    type: hearing
+    output_format: enum
+    save_to: clinicalDepartment
+    no_result_default: "登録なし"
+    conditions:
+      - match: "歯科口腔外科"
+        next: 歯科時間判定_8時半
+      - match: "健診センター"
+        next: 健診時間判定_11時
+      - match: "病児保育診察"
+        next: END_病児保育案内
+      - match: "検査名"
+        next: END_代表案内
+      - match: "わからない"
+        next: CMR_用件後段
+      - match: "other"
+        next: CMR_用件後段
+
+  # === CMR_用件後段（用件で分岐: 変更/キャンセル/確認）===
+  - step: CMR_用件後段
+    type: context_match_router
+    reference_module: "OpenAI_用件確認"
+    conditions:
+      - match: "予約変更"
+        next: 変更_予約日
+      - match: "予約キャンセル"
+        next: キャンセル_予約日
+      - match: "予約確認"
+        next: 氏名聴取
+      - match: "other"
+        next: 変更_予約日
+
+  # === 予約変更ルート ===
+  - step: 変更_予約日
+    type: hearing
+    output_format: datetime
+    save_to: reservationDate
+    next: 変更_予約希望日
+
+  - step: 変更_予約希望日
+    type: hearing
+    output_format: datetime
+    save_to: desiredReservationDate
+    next: 変更_変更詳細
+
+  - step: 変更_変更詳細
+    type: hearing
+    output_format: text
+    save_to: details
+    next: 変更_変更理由
+
+  - step: 変更_変更理由
+    type: hearing
+    output_format: text
+    save_to: reason
+    next: 氏名聴取
+
+  # === 予約キャンセルルート ===
+  - step: キャンセル_予約日
+    type: hearing
+    output_format: datetime
+    save_to: reservationDate
+    next: キャンセル_理由
+
+  - step: キャンセル_理由
+    type: hearing
+    output_format: text
+    save_to: reason
+    next: 氏名聴取
+
+  # === 個人情報サブフロー連鎖 ===
+  - step: 氏名聴取
+    type: subflow
+    flowname: "八尾徳洲会総合病院$氏名聴取"
+    next: 生年月日聴取
+
+  - step: 生年月日聴取
+    type: subflow
+    flowname: "八尾徳洲会総合病院$生年月日聴取"
+    next: 診察券番号聴取
+
+  - step: 診察券番号聴取
+    type: subflow
+    flowname: "八尾徳洲会総合病院$診察券番号聴取"
+    next: 電話番号聴取
+
+  - step: 電話番号聴取
+    type: subflow
+    flowname: "八尾徳洲会総合病院$電話番号聴取"
+    next: CMR_終話分岐
+
+  # === CMR_終話分岐（用件で終話 TTS を分岐）===
+  - step: CMR_終話分岐
+    type: context_match_router
+    reference_module: "OpenAI_用件確認"
+    conditions:
+      - match: "予約変更"
+        next: END_予約変更_完了
+      - match: "予約キャンセル"
+        next: END_予約キャンセル_完了
+      - match: "予約確認"
+        next: END_予約確認_完了
+      - match: "other"
+        next: END_予約変更_完了
+
+  # === 歯科口腔外科 時間帯判定（3 段ネスト）===
+  - step: 歯科時間判定_8時半
+    type: date_of_call_classifier
+    conditions:
+      - match: "時間外"
+        next: END_歯科_時間前
+      - match: "受付可"
+        next: 歯科時間判定_12時半
+      - match: "other"
+        next: END_歯科_時間前
+
+  - step: 歯科時間判定_12時半
+    type: date_of_call_classifier
+    conditions:
+      - match: "時間外"
+        next: 歯科_転送ガイダンス
+      - match: "受付可"
+        next: 歯科時間判定_13時半
+      - match: "other"
+        next: 歯科_転送ガイダンス
+
+  - step: 歯科時間判定_13時半
+    type: date_of_call_classifier
+    conditions:
+      - match: "時間外"
+        next: END_歯科_昼休み
+      - match: "受付可"
+        next: 歯科_転送ガイダンス
+      - match: "other"
+        next: 歯科_転送ガイダンス
+
+  - step: 歯科_転送ガイダンス
+    type: announcement
+    next: 歯科_転送
+
+  - step: 歯科_転送
+    type: call_transfer
+    transfer_type: "Blind Transfer"
+    on_failure_announcement: "大変申し訳ございませんが、ただいまお電話が混み合っております。しばらくたってからおかけ直しください。"
+
+  # === 健診センター 時間帯判定（1 段）===
+  - step: 健診時間判定_11時
+    type: date_of_call_classifier
+    conditions:
+      - match: "時間外"
+        next: END_健診_時間前
+      - match: "受付可"
+        next: 健診_転送ガイダンス
+      - match: "other"
+        next: 健診_転送ガイダンス
+
+  - step: 健診_転送ガイダンス
+    type: announcement
+    next: 健診_転送
+
+  - step: 健診_転送
+    type: call_transfer
+    transfer_type: "Blind Transfer"
+    on_failure_announcement: "大変申し訳ございませんが、ただいまお電話が混み合っております。しばらくたってからおかけ直しください。"
+
+  # === 終話ブロック群 ===
+  - step: END_予約変更_完了
+    type: termination
+    termination_ref: "END_予約変更_完了"
+
+  - step: END_予約キャンセル_完了
+    type: termination
+    termination_ref: "END_予約キャンセル_完了"
+
+  - step: END_予約確認_完了
+    type: termination
+    termination_ref: "END_予約確認_完了"
+
+  - step: END_代表案内
+    type: termination
+    termination_ref: "END_代表案内"
+
+  - step: END_病児保育案内
+    type: termination
+    termination_ref: "END_病児保育案内"
+
+  - step: END_予約以外
+    type: termination
+    termination_ref: "END_予約以外"
+
+  - step: END_歯科_時間前
+    type: termination
+    termination_ref: "END_歯科_時間前"
+
+  - step: END_歯科_昼休み
+    type: termination
+    termination_ref: "END_歯科_昼休み"
+
+  - step: END_健診_時間前
+    type: termination
+    termination_ref: "END_健診_時間前"
+
+  - step: END_聴取失敗
+    type: termination
+    termination_ref: "END_聴取失敗"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "予約変更"
+      - id: "2"
+        order: "2"
+        value: "予約キャンセル"
+      - id: "3"
+        order: "3"
+        value: "予約確認"
+      - id: "4"
+        order: "4"
+        value: "歯科口腔外科"
+      - id: "5"
+        order: "5"
+        value: "健診センター"
+      - id: "6"
+        order: "6"
+        value: "予約以外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件区分。DTMF 1=予約変更, 2=予約キャンセル, 3=予約確認, 4=歯科口腔外科。健診センター・予約以外は OpenAI 類義語判定で正規化"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "患者氏名（カタカナ変換済み）。サブフローで聴取。Gen1 仕様: 復唱なし"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "8桁以内の数字。「分からない」の場合は空。サブフローで聴取"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "和暦/西暦自動変換。サブフローで聴取。DOB Re-confirmation あり"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "分岐なし診療科 60+ 件 + 検査名 30+ 件 + 歯科口腔外科 + 健診センター + 病児保育診察 + 登録なし。entity_classification.md / entity_stt_patch.json から scaffold/properties が自動展開"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "聴取する連絡先電話番号。サブフローで聴取。入電番号取得済みなら着信番号を自動採用"
+
+  - context_name: "reservationDate"
+    context_name_jp: "予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "予約変更/キャンセルルートのみ聴取。現在の予約日。YYYY-MM-DD 形式。過去日なら +1 年で確定（OpenAI プロンプトで対応）"
+
+  - context_name: "desiredReservationDate"
+    context_name_jp: "予約希望日"
+    display_type: "DATE"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "予約変更ルートのみ聴取。明日以降の希望予約日。当日は受付不可（OpenAI プロンプトで対応）"
+
+  - context_name: "details"
+    context_name_jp: "変更詳細"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "予約変更ルートのみ。「他に予約を変更したい内容があれば」のフリーテキスト"
+
+  - context_name: "reason"
+    context_name_jp: "変更/キャンセル理由"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "予約変更ルート (変更理由) / 予約キャンセルルート (キャンセル理由) で聴取。フリーテキスト"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "転送成功"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+      - id: "9"
+        order: "9"
+        value: "転送失敗"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=受付完了 2=代表案内/予約以外/病児保育/聴取失敗 3=転送成功 6=時間外/非通知 9=転送失敗"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "入電日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値。displayType/itemDefault/deletable は変更不可"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "用件確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: true
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "予約変更"
+      - "予約キャンセル"
+      - "予約確認"
+      - "歯科口腔外科"
+      - "健診センター"
+      - "予約以外"
+    notes: "DTMF 1=予約変更, 2=予約キャンセル, 3=予約確認, 4=歯科口腔外科。健診センター・予約以外は OpenAI 類義語判定。「もしもし」「もう一度」フォールバックは OpenAI プロンプトの類義語例で対応 (prompter SKILL_A)。echo_back: 汎用 #data# 復唱"
+
+  - order: 2
+    name: "用件_共通_診療科"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "歯科口腔外科"
+      - "健診センター"
+      - "病児保育診察"
+      - "検査名"
+      - "わからない"
+    notes: "予約変更/キャンセル/確認 共通の診療科聴取。歯科/健診/病児/検査は専用ルートへ、わからない/分岐なし診療科は AI 受付ルートへ。no_result_default=登録なし。entity_classification.md (R1=940 / R2=51 / R3=78) から scaffold が profile_words 自動展開"
+
+  - order: 3
+    name: "変更_予約日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "convert"
+    output_format: "datetime"
+    output_labels: []
+    notes: "予約変更ルートのみ。現在の予約日聴取。YYYY-MM-DD 形式。過去日なら +1 年で確定 (OpenAI プロンプトで対応)。元 yaml は DTMF 4 桁数字 (シャープ/アスタ + 月日) もサポート、Gen3 では音声優先"
+
+  - order: 4
+    name: "変更_予約希望日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "desiredReservationDate"
+    openai_processing: "convert"
+    output_format: "datetime"
+    output_labels: []
+    notes: "予約変更ルートのみ。希望予約日聴取。明日以降のみ受付（当日は不可、OpenAI プロンプトで対応）"
+
+  - order: 5
+    name: "変更_変更詳細"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "details"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: "予約変更ルートのみ。「他に予約を変更したい内容があればお話ください」のフリーテキスト"
+
+  - order: 6
+    name: "変更_変更理由"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: "予約変更ルートのみ。「変更理由をお話ください」のフリーテキスト"
+
+  - order: 7
+    name: "キャンセル_予約日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "convert"
+    output_format: "datetime"
+    output_labels: []
+    notes: "予約キャンセルルートのみ。現在の予約日聴取。過去日なら +1 年で確定"
+
+  - order: 8
+    name: "キャンセル_理由"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: "予約キャンセルルートのみ。「キャンセル理由をお話ください」のフリーテキスト"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "冒頭_アナウンス"
+    tts_announcement: "{tts_g:お電話ありがとうございます。八尾徳洲会総合病院の、予約専用、AI電話です。}"
+    input_method: "voice_only"
+    next_step: "用件確認"
+    retry_failure: "skip"
+
+  - step_name: "用件確認"
+    tts_announcement: "{tts_g:ご用件を、次の4つのうちの、いずれかでお話いただくか、番号を押してください。「1.予約を変更する」「2.予約をキャンセルする」「3.予約を確認する」「4.歯科・口腔外科へのお電話」、それでは、お話ください。}"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "予約変更"
+        - "予約キャンセル"
+        - "予約確認"
+        - "歯科口腔外科"
+        - "健診センター"
+        - "予約以外"
+      mapping:
+        - input: "DTMF 1 または「変更」「延期」「日程」「日付」「時間」「別の」"
+          output: "予約変更"
+        - input: "DTMF 2 または「キャンセル」「やめる」「取り消し」「取消」"
+          output: "予約キャンセル"
+        - input: "DTMF 3 または「確認」「教えて」「調べて」「分からない」「予約票」"
+          output: "予約確認"
+        - input: "DTMF 4 または「歯科」「口腔外科」「歯医者」"
+          output: "歯科口腔外科"
+        - input: "「健診」「人間ドック」「健康診断」「特定健診」"
+          output: "健診センター"
+        - input: "「お見舞い」「アクセス」「くすり」「処方箋」「書類」「症状」「診断書」「質問」「聞きたい」「会計」"
+          output: "予約以外"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "classification"
+    next_step: "(分岐: conditions 参照)"
+    retry_failure: "end_failure"
+
+  - step_name: "用件_共通_診療科"
+    tts_announcement: "{tts_g:それでは順番にお伺いしますのでひとつずつお答えください。わからない場合はわからないとお話ください。予約票に記載されている診療科もしくは検査名を、「診療科は内科です」もしくは「検査名はエコーです」のようにお話ください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "歯科口腔外科"
+        - "健診センター"
+        - "病児保育診察"
+        - "検査名"
+        - "わからない"
+      mapping:
+        - input: "歯科 / 口腔外科 / 歯医者 / 滋賀（=歯科 STT 誤認識） 等"
+          output: "歯科口腔外科"
+        - input: "健診 / 人間ドック / 健康診断 / 特定健診 等"
+          output: "健診センター"
+        - input: "病児保育 / 保育"
+          output: "病児保育診察"
+        - input: "CT / MRI / 大腸ファイバー / エコー / マンモ 等 30+ 検査名"
+          output: "検査名"
+        - input: "わからない / 知らない / 忘れた / 覚えていない 等"
+          output: "わからない"
+        - input: "内科 / 外科 / 整形外科 / 産婦人科 / 眼科 / 脳神経外科 / 循環器 / 消化器 / 耳鼻咽喉科 等 60+ 分岐なし診療科 → no_result_default で「登録なし」を保存"
+          output: "（NO_RESULT → no_result_default=登録なし → other 分岐 → CMR_用件後段）"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "clinicalDepartment"
+    next_step: "(分岐: conditions 参照)"
+    retry_failure: "end_failure"
+
+  - step_name: "変更_予約日"
+    tts_announcement: "{tts_g:現在の予約日を、「4月1日」のように日付でお話ください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "<YYYY-MM-DD>"
+      mapping:
+        - input: "「4月1日」「来週の火曜日」等の日付発話"
+          output: "YYYY-MM-DD（過去日なら +1 年で確定）"
+      no_result_condition: "日付として認識できない"
+    save_to: "reservationDate"
+    next_step: "変更_予約希望日"
+    retry_failure: "skip"
+
+  - step_name: "変更_予約希望日"
+    tts_announcement: "{tts_g:ご希望の予約日を、明日以降の日付で「4月1日」のようにお話ください。希望日がない場合には、「ありません」とお答えください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "<YYYY-MM-DD>"
+        - "ありません"
+      mapping:
+        - input: "明日以降の日付発話"
+          output: "YYYY-MM-DD"
+        - input: "「ありません」「いつでも」「結構です」「特に」"
+          output: "ありません"
+      no_result_condition: "当日の日付発話 / 認識不能"
+    save_to: "desiredReservationDate"
+    next_step: "変更_変更詳細"
+    retry_failure: "skip"
+
+  - step_name: "変更_変更詳細"
+    tts_announcement: "{tts_g:他に予約を変更したい診療科や検査のご予約がございましたら、内容をお話ください。ない場合は「ありません」とお答えください。}"
+    input_method: "voice_only"
+    save_to: "details"
+    next_step: "変更_変更理由"
+    retry_failure: "skip"
+
+  - step_name: "変更_変更理由"
+    tts_announcement: "{tts_g:それでは、予約変更の理由をお話ください。}"
+    input_method: "voice_only"
+    save_to: "reason"
+    next_step: "氏名聴取"
+    retry_failure: "skip"
+
+  - step_name: "キャンセル_予約日"
+    tts_announcement: "{tts_g:現在の予約日を、「4月1日」のように日付でお話ください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "<YYYY-MM-DD>"
+      mapping:
+        - input: "「4月1日」「来週の火曜日」等の日付発話"
+          output: "YYYY-MM-DD（過去日なら +1 年で確定）"
+      no_result_condition: "日付として認識できない"
+    save_to: "reservationDate"
+    next_step: "キャンセル_理由"
+    retry_failure: "skip"
+
+  - step_name: "キャンセル_理由"
+    tts_announcement: "{tts_g:それでは、キャンセルの理由をお話ください。}"
+    input_method: "voice_only"
+    save_to: "reason"
+    next_step: "氏名聴取"
+    retry_failure: "skip"
+
+  - step_name: "歯科_転送ガイダンス"
+    tts_announcement: "{tts_g:それでは、担当部署へ転送いたします。しばらくお待ちください。}"
+    input_method: "voice_only"
+    next_step: "歯科_転送"
+    retry_failure: "skip"
+
+  - step_name: "健診_転送ガイダンス"
+    tts_announcement: "{tts_g:それでは、担当部署へ転送いたします。しばらくお待ちください。}"
+    input_method: "voice_only"
+    next_step: "健診_転送"
+    retry_failure: "skip"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # === 異常系（デフォルト必須）===
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "{tts_g:恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。}"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外（年末年始 12/31〜1/4 含む）"
+    tts_announcement: "{tts_g:申し訳ございませんが、ただいまの時間は受付時間外となっております。受付時間は、日曜祝日を除く、月曜日から金曜日の8時から16時、土曜日は8時から11時となっております。本日のご予約の方は、代表電話072-993-8501へおかけください。なお、12月31日から1月4日までは年末年始のため休止しております。年始は1月5日より開始いたしますので、5日の8時以降におかけくださいますようお願いいたします。お電話ありがとうございました。}"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "{tts_g:大変申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。}"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # === 正常系（用件別）===
+  - name: "END_予約変更_完了"
+    condition: "予約変更ルート 全聴取完了"
+    tts_announcement: "{tts_g:ご予約の変更を承りました。後ほど担当者よりご連絡いたします。お電話ありがとうございました。それでは失礼いたします。}"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約変更"
+
+  - name: "END_予約キャンセル_完了"
+    condition: "予約キャンセルルート 全聴取完了"
+    tts_announcement: "{tts_g:ご予約のキャンセルを承りました。必要に応じて、翌診療日までに職員より折り返しご連絡をさせていただく場合がございますのでご了承ください。また、1か月以内にご連絡いただけましたら予約変更が可能です。お電話ありがとうございました。それでは失礼いたします。}"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約キャンセル"
+
+  - name: "END_予約確認_完了"
+    condition: "予約確認ルート 全聴取完了"
+    tts_announcement: "{tts_g:ご予約の確認を承りました。後ほど担当者よりご連絡いたします。お電話ありがとうございました。それでは失礼いたします。}"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約確認"
+
+  # === 案内系（代表電話・専用案内）===
+  - name: "END_予約以外"
+    condition: "用件: 予約以外（お見舞い・くすり・処方箋・書類・症状・診断書 等）"
+    tts_announcement: "{tts_g:申し訳ございません。こちらは予約専用ダイヤルとなっております。ご予約以外のお問い合わせにつきましては、代表電話へおかけなおしください。電話番号は、072-993-8501です。お電話ありがとうございました。}"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_予約以外"
+
+  - name: "END_代表案内"
+    condition: "診療科: 検査名 / 分岐なし診療科のうち代表案内対象（実装上は検査名のみ）"
+    tts_announcement: "{tts_g:電話番号は、072-993-8501です。繰り返します。電話番号は、072-993-8501です。繰り返します。電話番号は、072-993-8501です。繰り返します。電話番号は、072-993-8501です。繰り返します。電話番号は、072-993-8501です。お電話ありがとうございました。}"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_代表案内"
+
+  - name: "END_病児保育案内"
+    condition: "診療科: 病児保育診察"
+    tts_announcement: "{tts_g:大変申し訳ございませんが、病児保育診察は、代表電話へおかけなおしください。電話番号は、072-993-8501です。繰り返します。電話番号は、072-993-8501です。お電話ありがとうございました。}"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_病児保育案内"
+
+  - name: "END_歯科_時間前"
+    condition: "歯科口腔外科 8:30 前"
+    tts_announcement: "{tts_g:恐れ入りますが、ただ今の時間は歯科・口腔外科の予約変更・キャンセルはお受けしておりません。8時30分以降におかけ直しください。お電話ありがとうございました。}"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_歯科_時間前"
+
+  - name: "END_歯科_昼休み"
+    condition: "歯科口腔外科 12:30〜13:30 (昼休み)"
+    tts_announcement: "{tts_g:恐れ入りますが、ただ今の時間は歯科・口腔外科の予約変更・キャンセルはお受けしておりません。13時30分以降におかけ直しください。お電話ありがとうございました。}"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_歯科_昼休み"
+
+  - name: "END_健診_時間前"
+    condition: "健診センター 11 時前"
+    tts_announcement: "{tts_g:健診センターへのご用件は、本日ご予約の方は、代表番号072-993-8501へ、本日のご予約以外の方は、平日11時から16時までに健診センター直通072-993-6505までおかけ直しください。お電話ありがとうございました。}"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_健診_時間前"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: true
+  routing_keys:
+    - classification
+  patterns:
+    - condition: "classification = 予約変更/予約キャンセル/予約確認 (AI受付完了)"
+      sms_flag: "1"
+      notes: "予約系3用件は SMS 送信で詳細通知"
+    - condition: "classification = 歯科口腔外科/健診センター (転送)"
+      sms_flag: "-1"
+      notes: "転送ルートは SMS 送信なし（status=3 転送成功で完了）"
+    - condition: "classification = 予約以外 / その他案内"
+      sms_flag: "-1"
+      notes: "案内系は SMS 送信なし"
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "施設名 + 予約専用 AI 電話案内"
+    announcement: "{tts_g:お電話ありがとうございます。八尾徳洲会総合病院の、予約専用、AI電話です。}"
+
+  - module_name: "用件確認"
+    purpose: "4 用件 + DTMF 案内"
+    announcement: "{tts_g:ご用件を、次の4つのうちの、いずれかでお話いただくか、番号を押してください。「1.予約を変更する」「2.予約をキャンセルする」「3.予約を確認する」「4.歯科・口腔外科へのお電話」、それでは、お話ください。}"
+
+  - module_name: "用件_共通_診療科"
+    purpose: "診療科聴取案内（タイトル + 聴取）"
+    announcement: "{tts_g:それでは順番にお伺いしますのでひとつずつお答えください。わからない場合はわからないとお話ください。予約票に記載されている診療科もしくは検査名を、「診療科は内科です」もしくは「検査名はエコーです」のようにお話ください。}"
+
+  - module_name: "変更_予約日"
+    purpose: "予約変更ルート 現在の予約日聴取"
+    announcement: "{tts_g:現在の予約日を、「4月1日」のように日付でお話ください。}"
+
+  - module_name: "変更_予約希望日"
+    purpose: "予約変更ルート 希望予約日聴取"
+    announcement: "{tts_g:ご希望の予約日を、明日以降の日付で「4月1日」のようにお話ください。希望日がない場合には、「ありません」とお答えください。}"
+
+  - module_name: "変更_変更詳細"
+    purpose: "予約変更ルート 他の変更内容聴取"
+    announcement: "{tts_g:他に予約を変更したい診療科や検査のご予約がございましたら、内容をお話ください。ない場合は「ありません」とお答えください。}"
+
+  - module_name: "変更_変更理由"
+    purpose: "予約変更ルート 変更理由聴取"
+    announcement: "{tts_g:それでは、予約変更の理由をお話ください。}"
+
+  - module_name: "キャンセル_予約日"
+    purpose: "予約キャンセルルート 現在の予約日聴取"
+    announcement: "{tts_g:現在の予約日を、「4月1日」のように日付でお話ください。}"
+
+  - module_name: "キャンセル_理由"
+    purpose: "予約キャンセルルート キャンセル理由聴取"
+    announcement: "{tts_g:それでは、キャンセルの理由をお話ください。}"
+
+  - module_name: "歯科_転送ガイダンス"
+    purpose: "歯科口腔外科 転送案内"
+    announcement: "{tts_g:それでは、担当部署へ転送いたします。しばらくお待ちください。}"
+
+  - module_name: "健診_転送ガイダンス"
+    purpose: "健診センター 転送案内"
+    announcement: "{tts_g:それでは、担当部署へ転送いたします。しばらくお待ちください。}"
+
+  # 終話 TTS
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知終話 TTS（END_非通知 termination の TTS モジュール名）"
+    announcement: "{tts_g:恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。}"
+
+  - module_name: "END_非通知"
+    purpose: "非通知終話 (termination_patterns 同期用エイリアス)"
+    announcement: "{tts_g:恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。}"
+
+  - module_name: "END_時間外"
+    purpose: "時間外終話（年末年始含む）"
+    announcement: "{tts_g:申し訳ございませんが、ただいまの時間は受付時間外となっております。受付時間は、日曜祝日を除く、月曜日から金曜日の8時から16時、土曜日は8時から11時となっております。本日のご予約の方は、代表電話072-993-8501へおかけください。なお、12月31日から1月4日までは年末年始のため休止しております。年始は1月5日より開始いたしますので、5日の8時以降におかけくださいますようお願いいたします。お電話ありがとうございました。}"
+
+  - module_name: "END_聴取失敗"
+    purpose: "聴取失敗終話"
+    announcement: "{tts_g:大変申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。}"
+
+  - module_name: "END_予約変更_完了"
+    purpose: "予約変更完了"
+    announcement: "{tts_g:ご予約の変更を承りました。後ほど担当者よりご連絡いたします。お電話ありがとうございました。それでは失礼いたします。}"
+
+  - module_name: "END_予約キャンセル_完了"
+    purpose: "予約キャンセル完了（特殊文言: 翌診療日折り返し + 1ヶ月以内変更可）"
+    announcement: "{tts_g:ご予約のキャンセルを承りました。必要に応じて、翌診療日までに職員より折り返しご連絡をさせていただく場合がございますのでご了承ください。また、1か月以内にご連絡いただけましたら予約変更が可能です。お電話ありがとうございました。それでは失礼いたします。}"
+
+  - module_name: "END_予約確認_完了"
+    purpose: "予約確認完了"
+    announcement: "{tts_g:ご予約の確認を承りました。後ほど担当者よりご連絡いたします。お電話ありがとうございました。それでは失礼いたします。}"
+
+  - module_name: "END_予約以外"
+    purpose: "予約以外用件案内"
+    announcement: "{tts_g:申し訳ございません。こちらは予約専用ダイヤルとなっております。ご予約以外のお問い合わせにつきましては、代表電話へおかけなおしください。電話番号は、072-993-8501です。お電話ありがとうございました。}"
+
+  - module_name: "END_代表案内"
+    purpose: "代表電話 5 回繰り返し案内（検査名等）"
+    announcement: "{tts_g:電話番号は、072-993-8501です。繰り返します。電話番号は、072-993-8501です。繰り返します。電話番号は、072-993-8501です。繰り返します。電話番号は、072-993-8501です。繰り返します。電話番号は、072-993-8501です。お電話ありがとうございました。}"
+
+  - module_name: "END_病児保育案内"
+    purpose: "病児保育診察 → 代表電話案内"
+    announcement: "{tts_g:大変申し訳ございませんが、病児保育診察は、代表電話へおかけなおしください。電話番号は、072-993-8501です。繰り返します。電話番号は、072-993-8501です。お電話ありがとうございました。}"
+
+  - module_name: "END_歯科_時間前"
+    purpose: "歯科 8:30 前案内"
+    announcement: "{tts_g:恐れ入りますが、ただ今の時間は歯科・口腔外科の予約変更・キャンセルはお受けしておりません。8時30分以降におかけ直しください。お電話ありがとうございました。}"
+
+  - module_name: "END_歯科_昼休み"
+    purpose: "歯科 12:30〜13:30 昼休み案内"
+    announcement: "{tts_g:恐れ入りますが、ただ今の時間は歯科・口腔外科の予約変更・キャンセルはお受けしておりません。13時30分以降におかけ直しください。お電話ありがとうございました。}"
+
+  - module_name: "END_健診_時間前"
+    purpose: "健診センター 11 時前案内（代表 + 健診直通 2 番号案内）"
+    announcement: "{tts_g:健診センターへのご用件は、本日ご予約の方は、代表番号072-993-8501へ、本日のご予約以外の方は、平日11時から16時までに健診センター直通072-993-6505までおかけ直しください。お電話ありがとうございました。}"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+# entity_classification.md / entity_stt_patch.json から scaffold/properties が自動展開するため
+# director は代表的なサンプルのみ記載。詳細は scaffold が自動取り込み。
+amivoice_dictionary:
+  - step_name: "用件確認"
+    words: |
+      予約 ヨヤク
+      変更 ヘンコウ
+      キャンセル キャンセル
+      確認 カクニン
+      歯科 シカ
+      口腔外科 コウクウゲカ
+      健診 ケンシン
+      人間ドック ニンゲンドック
+
+  - step_name: "用件_共通_診療科"
+    words: |
+      内科 ナイカ
+      外科 ゲカ
+      整形外科 セイケイゲカ
+      眼科 ガンカ
+      産婦人科 サンフジンカ
+      脳神経外科 ノウシンケイゲカ
+      耳鼻咽喉科 ジビインコウカ
+      皮膚科 ヒフカ
+      泌尿器科 ヒニョウキカ
+      消化器内科 ショウカキナイカ
+      循環器科 ジュンカンキカ
+      呼吸器内科 コキュウキナイカ
+      乳腺外科 ニュウセンゲカ
+      麻酔科 マスイカ
+      リハビリテーション科 リハビリテーションカ
+      歯科口腔外科 シカコウクウゲカ
+      健診センター ケンシンセンター
+      病児保育 ビョウジホイク
+      CT シーティー
+      MRI エムアールアイ
+      エコー エコー
+      大腸ファイバー ダイチョウファイバー
+      胃カメラ イカメラ
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "Gen1 commubo (第 1 世代) からの移管。新規予約は受け付けない（予約変更 / 予約キャンセル / 予約確認 / 歯科口腔外科 の 4 用件 + 健診センター + 予約以外）"
+  - "用件確認は echo_back: true で汎用 #data# 復唱に統一。元 yaml の用件別カスタム復唱文言（「ご予約の変更でよろしいですか?」「歯科・口腔外科でよろしいですか?...」等）は汎用化"
+  - "診療科は Pattern B（後段 ContextMatchRouter）で用件×診療科で終話分岐。分岐なし診療科 60+ 件 / 検査名 30+ 件は entity_classification.md から scaffold/properties が自動取り込み"
+  - "歯科口腔外科ルートは date_of_call_classifier 3 段ネスト（8:30 / 12:30 / 13:30 境界）で時間帯ルーティング"
+  - "健診センタールートは date_of_call_classifier 1 段（11:00 境界）で時間帯ルーティング"
+  - "個人情報サブフローは Gen1 順序維持: 氏名 → 生年月日 → 診察券 → 電話番号"
+  - "電話番号サブフロー内で incoming-classifier ベースで入電番号取得済み判定（元 yaml の「終話電話番号確認.yaml」の入電番号取得確認ロジックは電話番号聴取サブフロー内に集約）"
+  - "予約キャンセル特殊終話文言（翌診療日折り返し + 1ヶ月以内変更可）は END_予約キャンセル_完了 の TTS に組み込み"
+  - "時間外パスは END_時間外 に統合。年末年始 (12/31〜1/4) も同 TTS に含める"
+  - "BLOCKER B-1: 歯科夕診日チェック（隔週火木交互）の判定ロジック仕様不明 → 設計書では未実装。時間外時に歯科 17-19 時の代表電話案内ルートが必要な場合は仕様確認後に再実装"
+  - "「もしもし」「もう一度」フォールバックは prompter SKILL_A の類義語例で OpenAI プロンプトに統合"
+  - "予約日・予約希望日は AmiVoice STT 優先。元 yaml の DTMF 4 桁数字入力（シャープ/アスタ + 月日）は Gen3 では二次的サポート"
+  - "予約変更時の「当日への予約変更不可」ルート（元 yaml `当日は不可` + `Y/N`）は OpenAI プロンプトで「明日以降のみ受付」を強制する形で吸収"
+
+# --- セクション12: 要確認事項 ---
+confirmation_items:
+  - item: "[BLOCKER] 歯科夕診日チェック（隔週火木交互）の判定ロジック仕様"
+    resolved: false
+    notes: "確認レポート B-1 参照。設計書では未実装。時間外時に歯科 17-19 時の代表電話案内ルートが必要な場合は仕様確認後に再実装"
+
+  - item: "歯科口腔外科 転送先電話番号"
+    resolved: false
+    notes: "確認レポート N-1 参照。IVR プロパティで設定"
+
+  - item: "健診センター 転送先電話番号"
+    resolved: false
+    notes: "確認レポート N-2 参照。IVR プロパティで設定（072-993-6505 か別の内線か要確認）"
+
+  - item: "歯科時間帯ルーティング (8:30/12:30/13:30) の date_of_call_classifier 3 段ネスト動作確認"
+    resolved: false
+    notes: "確認レポート N-3 参照。配線できない場合は IVR UI で人間が後付け"
+
+  - item: "健診時間帯ルーティング (11:00) の date_of_call_classifier 動作確認"
+    resolved: false
+    notes: "確認レポート N-4 参照"
+
+  - item: "office_id"
+    resolved: false
+    notes: "Dr.JOY 管理画面で確認"
+
+  - item: "営業時間スケジュール (Brekeke acceptance_times 設定値)"
+    resolved: false
+    notes: "Dr.JOY 管理画面で設定。月〜金 8:00-16:00 / 土 8:00-11:00 / 日祝休 / 12/31-1/4 休止"
+
+  - item: "SMS送信文面"
+    resolved: false
+    notes: "Dr.JOY 管理画面で設定（予約変更/キャンセル/確認 各文言）"
+
+  - item: "認証設定（生年月日・診察券番号・電話番号の優先順位）"
+    resolved: false
+    notes: "Dr.JOY 管理画面で設定"
+
+  - item: "画面表示設定"
+    resolved: false
+    notes: "Dr.JOY 管理画面で設定"
+
+  - item: "12/30 当日の半日稼働扱い"
+    resolved: false
+    notes: "Dr.JOY 営業日設定で 12/30 を半日稼働日として登録"
+
+  - item: "smsFlag の終話別割当"
+    resolved: false
+    notes: "予約変更/キャンセル/確認すべて smsFlag=1。用件によって変えたい場合は要確認"

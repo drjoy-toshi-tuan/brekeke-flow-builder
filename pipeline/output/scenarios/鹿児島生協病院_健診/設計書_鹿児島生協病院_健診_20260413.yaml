@@ -1,0 +1,1119 @@
+# 設計書 -- 鹿児島生協病院 健診
+# 生成元: @director エージェント
+# 生成日: 2026/04/13
+# 確認レポート: docs/designs/確認レポート_鹿児島生協病院_健診_20260413.md
+# ベーステンプレート: docs/specs/golden_templates/健診受付型.yaml
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "鹿児島生協病院"
+  group_name: "鹿児島生協病院"
+  flow_name: "鹿児島生協病院$健診_20260413"
+  target_facility: "鹿児島生協病院（本院のみ）"
+  office_id: "TODO_要確認"
+  phone_number: "099-267-1455"
+  business_hours: "TODO_要確認（Gen2プロンプトに具体的な曜日・時間の記載なし。Dr.JOY側で設定）"
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "demo"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "鹿児島生協病院$健診_20260413"
+      role: "main"
+      description: "冒頭チェーン → 人数確認 → (複数名: 代表者氏名・職場名) → 用件確認(4択) → 用件別ルート → 共通ルート(希望時期→氏名→生年月日→RAG) → 電話番号サブフロー(self_contained)"
+  subflows:
+    - name: "鹿児島生協病院$氏名聴取_20260413"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9準拠。氏名聴取サブフローをリファレンスから完全コピー。複数名ルートではContextMatchRouterでスキップ"
+    - name: "鹿児島生協病院$生年月日聴取_20260413"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9準拠。生年月日聴取_復唱ありをリファレンスから完全コピー"
+    - name: "鹿児島生協病院$電話番号聴取_20260413"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "self_contained"
+      notes: "CLAUDE.md Rule 9/10準拠。電話番号聴取_復唱ありをリファレンスから完全コピー。終話チェーン（smsFlag分岐: classification依存）を含む。termination=self_containedのためサブフロー内で通話終了"
+    - name: "鹿児島生協病院$RAG検索_20260413"
+      target: "RAG検索"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 16準拠。RAG検索.jsonをリファレンスから完全コピー。パターン3: 問い合わせルート内 + 全終話前"
+
+# --- セクション3: フローの目的 ---
+purpose: "鹿児島生協病院の健診専用AI電話。個人/複数名の人数確認後、用件を4択（健診の予約/予約の変更/予約のキャンセル/その他問合せ）で聴取し、用件別に必要な情報（健診内容・予約日・胃カメラ有無・問い合わせ内容等）を収集する。共通ステップとして希望時期・受診者氏名・生年月日・連絡先電話番号を聴取し、折り返し受付を自動化する。採用時健診の所定用紙保持者は谷山生協クリニック（099-210-2211）へ案内。当日の予約は代表電話（099-267-1455）へ案内。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "鹿児島生協病院$健診_20260413"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → 非通知_アナウンス(TTS) → 完了フラグ_非通知(status=2) → 切断
+            └─ 通常 → acceptance_times
+                        ├─ 時間外 → 時間外_アナウンス(TTS) → 完了フラグ_時間外(status=6) → 切断
+                        └─ 受付可 → 冒頭_アナウンス(TTS)
+                                      → 人数確認(TTS) → 入力_人数確認(DTMF) → OpenAI_人数確認
+                                          ├─ 複数名 → 代表者氏名(TTS) → 入力_代表者氏名(STT) → OpenAI_代表者氏名
+                                          │            → 職場名(TTS) → 入力_職場名(STT) → OpenAI_職場名 → [用件確認に合流]
+                                          ├─ 個人 → [用件確認に合流]
+                                          └─ NO_RESULT → リトライ_人数確認(Retry → 人数確認 / No more → 用件確認)
+
+      --- 用件確認 ---
+      用件確認(TTS) → 入力_用件確認(DTMF) → OpenAI_用件確認
+          ├─ 健診の予約 → [予約ルート]
+          ├─ 予約の変更 → [変更ルート]
+          ├─ 予約のキャンセル → [キャンセルルート]
+          ├─ その他問合せ → [問い合わせルート]
+          └─ NO_RESULT → リトライ_用件確認(Retry → 用件確認 / No more → 問い合わせルートへフォールバック)
+
+      --- 予約ルート ---
+      予約_健診内容(TTS) → 入力_予約_健診内容(DTMF) → OpenAI_予約_健診内容
+          ├─ 採用定期 → 予約_所定用紙(TTS) → 入力_予約_所定用紙(DTMF) → OpenAI_予約_所定用紙
+          │              ├─ 肯定(持っている) → END_クリニック案内(TTS) → 完了フラグ_クリニック案内(status=3) → 切断
+          │              ├─ 否定(持っていない) → 予約_病院指定(TTS) → 入力_予約_病院指定(DTMF) → OpenAI_予約_病院指定
+          │              │                        ├─ 肯定(指示あり) → [共通ルート: 希望時期]
+          │              │                        ├─ 否定(指示なし) → END_クリニック案内(TTS) → 完了フラグ_クリニック案内(status=3) → 切断
+          │              │                        └─ NO_RESULT → リトライ_予約_病院指定
+          │              └─ NO_RESULT → リトライ_予約_所定用紙
+          ├─ 協会けんぽ → [共通ルート: 希望時期]
+          ├─ その他健診 → [共通ルート: 希望時期]
+          ├─ わからない → [共通ルート: 希望時期]
+          └─ NO_RESULT → リトライ_予約_健診内容
+
+      --- 変更ルート ---
+      変更_予約日(TTS) → 入力_変更_予約日(STT) → OpenAI_変更_予約日
+          ├─ 当日 → END_当日予約不可(TTS) → 完了フラグ_当日予約不可(status=2) → 切断
+          ├─ 有効日付/わからない → 変更_胃カメラ有無(TTS) → 入力_変更_胃カメラ有無(DTMF) → OpenAI_変更_胃カメラ有無
+          │                        → [共通ルート: 希望時期]
+          └─ NO_RESULT → リトライ_変更_予約日
+
+      --- キャンセルルート ---
+      キャンセル_予約日(TTS) → 入力_キャンセル_予約日(STT) → OpenAI_キャンセル_予約日
+          ├─ 当日 → END_当日予約不可(TTS) → 完了フラグ_当日予約不可(status=2) → 切断
+          ├─ 有効日付/わからない → [共通ルート: 氏名聴取（希望時期スキップ）]
+          └─ NO_RESULT → リトライ_キャンセル_予約日
+
+      --- 問い合わせルート ---
+      問い合わせ_内容確認(TTS) → 入力_問い合わせ_内容確認(STT) → OpenAI_問い合わせ_内容確認
+          → 問い合わせ_その他問合せ(TTS) → 入力_問い合わせ_その他問合せ(STT) → OpenAI_問い合わせ_その他問合せ
+          → [共通ルート: 氏名聴取（希望時期スキップ）]
+
+      --- 共通ルート ---
+      [予約/変更ルートから] → 共通_希望時期(TTS) → 入力_共通_希望時期(STT) → OpenAI_共通_希望時期
+          ├─ 当日 → END_当日予約不可(TTS) → 完了フラグ_当日予約不可(status=2) → 切断
+          ├─ 有効 → 人数判定_ContextMatchRouter(OpenAI_人数確認の結果を参照)
+          └─ NO_RESULT → リトライ_共通_希望時期
+
+      [キャンセル/問い合わせルートから] → 人数判定_ContextMatchRouter
+
+      人数判定_ContextMatchRouter:
+          ├─ 複数名 → ジャンプ_生年月日聴取(氏名スキップ: 代表者氏名で設定済み)
+          └─ .*(個人/デフォルト) → ジャンプ_氏名聴取
+
+      ジャンプ_氏名聴取(Custom Jump to Flow) → [氏名サブフロー返却] → ジャンプ_生年月日聴取
+      ジャンプ_生年月日聴取(Custom Jump to Flow) → [生年月日サブフロー返却]
+          → ジャンプ_RAG検索(Custom Jump to Flow) → [RAGサブフロー返却]
+          → ジャンプ_電話番号聴取(Custom Jump to Flow) → [電話番号サブフロー内で終話]
+
+      --- メインフロー内終話パターン ---
+      END_クリニック案内(status=3) → 切断
+      END_当日予約不可(status=2) → 切断
+      END_聴取失敗(status=2) → 切断
+      END_時間外(status=6) → 切断
+      END_非通知(status=2) → 切断
+    notes: |
+      冒頭チェーン順序: wait → saveContextModel2DB → incoming-classifier → acceptance_times
+      用件確認リトライNo more → 問い合わせルートへフォールバック（Gen2動作を再現）
+      予約ルートの採用定期のみ所定用紙→病院指定の2段階分岐あり
+      キャンセル/問い合わせルートは希望時期をスキップして直接氏名聴取（または複数名なら生年月日）へ
+      複数名ルートではContextMatchRouterで氏名サブフローをスキップ
+
+  - flow_name: "鹿児島生協病院$氏名聴取_20260413"
+    diagram: |
+      *** 完全コピー対象（CLAUDE.md Rule 9） ***
+      docs/reference/bivr/samples/json/氏名聴取.json を完全コピーする。
+      フロー名プレフィックスのみ「鹿児島生協病院$」に置換。構造・接続・スクリプトは一切変更不可。
+
+      構成: TTS → AmiVoice STT → OpenAI正規化 → Retry → script_結果返却_氏名
+      リトライ上限到達時は氏名未取得のままスキップ。
+    notes: "CLAUDE.md Rule 9/11準拠。フロー名プレフィックスのみ置換。"
+
+  - flow_name: "鹿児島生協病院$生年月日聴取_20260413"
+    diagram: |
+      *** 完全コピー対象（CLAUDE.md Rule 9） ***
+      docs/reference/bivr/samples/json/生年月日聴取_復唱あり.json を完全コピーする。
+      フロー名プレフィックスのみ「鹿児島生協病院$」に置換。構造・接続・スクリプトは一切変更不可。
+
+      構成: TTS → DTMF AmiVoice STT → OpenAI変換 → DOB Re-confirmation → Retry → script_結果返却_生年月日
+      2桁入力時は元号確認ステップへ分岐。
+    notes: "CLAUDE.md Rule 9/11準拠。復唱あり版を使用。"
+
+  - flow_name: "鹿児島生協病院$電話番号聴取_20260413"
+    diagram: |
+      *** 完全コピー対象（CLAUDE.md Rule 9/10） ***
+      docs/reference/bivr/samples/json/電話番号聴取_復唱あり.json を完全コピーする。
+      フロー名プレフィックスのみ「鹿児島生協病院$」に置換。構造・接続・スクリプトは一切変更不可。
+
+      構成: incoming-classifier → 携帯/固定分岐 → Phone Normalization → Re-confirmation → script_結果返却
+
+      *** 以下の終話チェーンのみ施設固有のカスタマイズが必要 ***
+      電話番号聴取完了後の終話チェーンで、smsFlag分岐を施設固有に設定する:
+
+      [終話チェーン（施設固有部分）]
+        → smsFlag分岐(ContextMatchRouter: classification値を参照)
+            ├─ 予約のキャンセル → 完了フラグ(status=1, smsFlag=-1) → END_受付完了_キャンセル(TTS) → 切断
+            └─ .*(予約/変更/問い合わせ) → 完了フラグ(status=1, smsFlag=1) → END_受付完了(TTS) → 切断
+    notes: |
+      CLAUDE.md Rule 9/10準拠。電話番号聴取部分はリファレンスから完全コピー。
+      終話チェーン（smsFlag分岐）のみ施設固有にカスタマイズ。
+      smsFlag分岐: classification値をContextMatchRouterで参照し、キャンセルのみsmsFlag=-1。
+
+  - flow_name: "鹿児島生協病院$RAG検索_20260413"
+    diagram: |
+      *** 完全コピー対象（CLAUDE.md Rule 16） ***
+      docs/reference/bivr/samples/json/RAG検索.json を完全コピーする。
+      フロー名プレフィックスのみ「鹿児島生協病院$」に置換。
+    notes: "パターン3のうちパターン2部分（全終話前RAG）。TTS文言はプロパティで制御。"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB用）---
+context_fields:
+  # --- 標準フィールド（itemDefault: true）---
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - order: "1"
+        value: "健診の予約"
+      - order: "2"
+        value: "予約の変更"
+      - order: "3"
+        value: "予約のキャンセル"
+      - order: "4"
+        value: "その他問合せ"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "用件区分。Gen2のenum値をそのまま使用"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "受診者氏名（フルネーム）。複数名ルートでは代表者氏名がセットされる"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "受診者生年月日"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: true
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "聴取する連絡先電話番号"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "クリニック案内"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "1=未処理（正常完了） 2=代表案内（当日予約不可・聴取失敗・非通知） 3=クリニック案内 6=時間外"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "受電日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: true
+    notes: "通話ID自動格納"
+
+  # --- 施設固有フィールド（itemDefault: false）---
+  - context_name: "number_of_people"
+    context_name_jp: "申込人数"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "個人/複数名。OpenAI_人数確認の出力値"
+
+  - context_name: "workplace_name"
+    context_name_jp: "職場名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "複数名ルートのみ。職場名をフリーテキストで保存"
+
+  - context_name: "checkup_type"
+    context_name_jp: "健診内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "採用定期/協会けんぽ/その他健診/わからない。予約ルートのみ"
+
+  - context_name: "reservationDate"
+    context_name_jp: "現在の予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "変更/キャンセルルートのみ。日付形式で保存"
+
+  - context_name: "DesiredreservationDate"
+    context_name_jp: "希望時期"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約/変更の共通ルート。フリーテキストで保存（日付形式ではない）"
+
+  - context_name: "gastrocamera"
+    context_name_jp: "胃カメラ有無"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "有/無。変更ルートのみ"
+
+  - context_name: "question"
+    context_name_jp: "内容確認"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "問い合わせルートのみ。フリーテキスト"
+
+  - context_name: "other_inquiries"
+    context_name_jp: "その他問合せ"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "問い合わせルートのその他問合せ + RAGサブフローで捕捉した追加質問"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  # --- メインフロー聴取項目 ---
+  - order: 1
+    name: "人数確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "number_of_people"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "個人"
+      - "複数名"
+    notes: "DTMF 1=個人, 2=複数名。リトライNo more→用件確認へスキップ（個人扱い）"
+
+  - order: 2
+    name: "代表者氏名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientName"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "複数名ルートのみ。カタカナでフルネーム正規化。リトライNo more→スキップ（氏名空のまま次へ）"
+
+  - order: 3
+    name: "職場名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "workplace_name"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "複数名ルートのみ。フリーテキスト。リトライNo more→スキップ"
+
+  - order: 4
+    name: "用件確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "健診の予約"
+      - "予約の変更"
+      - "予約のキャンセル"
+      - "その他問合せ"
+    notes: "DTMF 1=健診の予約, 2=予約の変更, 3=予約のキャンセル, 4=その他問合せ。リトライNo more→問い合わせルートへフォールバック"
+
+  - order: 5
+    name: "予約_健診内容"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "checkup_type"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "採用定期"
+      - "協会けんぽ"
+      - "その他健診"
+      - "わからない"
+    notes: "DTMF 1=採用定期, 2=協会けんぽ, 3=その他健診。「わからない」は音声のみ。予約ルートのみ実行"
+
+  - order: 6
+    name: "予約_所定用紙"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: null
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "肯定"
+      - "否定"
+    notes: "DTMF 1=はい(持っている), 2=いいえ(持っていない)。予約-採用定期ルートのみ。context保存不要（ルーティングのみ）"
+
+  - order: 7
+    name: "予約_病院指定"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: null
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "肯定"
+      - "否定"
+    notes: "DTMF 1=はい(指示あり), 2=いいえ(指示なし)。予約-採用定期-所定用紙なしルートのみ。context保存不要（ルーティングのみ）"
+
+  - order: 8
+    name: "変更_予約日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels:
+      - "日付テキスト"
+      - "当日"
+    notes: "変更ルートのみ。日付テキストまたは「わからない」。OpenAIで「当日」検出時はnext分岐でEND_当日予約不可へ"
+
+  - order: 9
+    name: "変更_胃カメラ有無"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "gastrocamera"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "有"
+      - "無"
+    notes: "DTMF 1=有, 2=無。変更ルートのみ"
+
+  - order: 10
+    name: "キャンセル_予約日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels:
+      - "日付テキスト"
+      - "当日"
+    notes: "キャンセルルートのみ。日付テキストまたは「わからない」。OpenAIで「当日」検出時はnext分岐でEND_当日予約不可へ"
+
+  - order: 11
+    name: "問い合わせ_内容確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "question"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "問い合わせルートのみ。フリーテキスト保存。リトライNo more→スキップ"
+
+  - order: 12
+    name: "問い合わせ_その他問合せ"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "other_inquiries"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "問い合わせルートのみ。フリーテキスト保存。リトライNo more→スキップ"
+
+  - order: 13
+    name: "共通_希望時期"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "DesiredreservationDate"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels:
+      - "希望時期テキスト"
+      - "当日"
+    notes: "予約/変更の共通ルートのみ。フリーテキスト保存。OpenAIで「当日」検出時はnext分岐でEND_当日予約不可へ。リトライNo more→スキップ"
+
+  # --- サブフロー聴取項目（参考情報 -- 静的JSONコピーのためgeneratorは変更不可）---
+  - order: 14
+    name: "氏名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientName"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "氏名聴取サブフロー内。profile_words: 氏名辞書。CLAUDE.md Rule 9"
+
+  - order: 15
+    name: "生年月日"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 8
+    retry_count: 2
+    echo_back: true
+    save_to: "patientDateOfBirth"
+    openai_processing: "convert"
+    output_format: "date_text"
+    output_labels:
+      - "valid"
+      - "不正値"
+      - "2桁_0007"
+      - "2桁_0831"
+      - "2桁_3263"
+    notes: "生年月日聴取サブフロー内。DOB Re-confirmationあり。CLAUDE.md Rule 9。DTMF 8桁=YYYYMMDD形式で生年月日を入力"
+
+  - order: 16
+    name: "電話番号"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 11
+    retry_count: 2
+    echo_back: true
+    save_to: "additionalPhoneNumber"
+    openai_processing: "normalize"
+    output_format: "number"
+    output_labels: []
+    notes: "電話番号聴取サブフロー内。Phone Normalization + Re-confirmation。CLAUDE.md Rule 9/10。DTMF 最大11桁=電話番号をダイヤル入力"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "人数確認"
+    tts_announcement: "お電話ありがとうございます。鹿児島生協病院の、健診専用、AI電話です。今回のお申込みは、お一人分ですか、複数名でしょうか。お一人の場合は1を、複数名の場合は2を押してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "個人"
+        - "複数名"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「一人」「個人」「一名」「自分だけ」を含む"
+          output: "個人"
+        - input: "DTMF 2 または「複数」「二人」「三人」「グループ」「団体」「会社」を含む"
+          output: "複数名"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "number_of_people"
+    next_step: "個人→用件確認 / 複数名→代表者氏名"
+    retry_failure: "skip"
+
+  - step_name: "代表者氏名"
+    tts_announcement: "それでは、代表者様のお名前をフルネームでお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "氏名テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "カタカナ正規化した氏名（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "patientName"
+    next_step: "職場名"
+    retry_failure: "skip"
+
+  - step_name: "職場名"
+    tts_announcement: "職場名をお答えください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "職場名テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "workplace_name"
+    next_step: "用件確認"
+    retry_failure: "skip"
+
+  - step_name: "用件確認"
+    tts_announcement: "ご用件を次の4つのうちのいずれかでお話ください。健診の予約は1番、予約の変更は2番、予約のキャンセルは3番、その他お問い合わせは4番。それではお話ください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "健診の予約"
+        - "予約の変更"
+        - "予約のキャンセル"
+        - "その他問合せ"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「予約」「新規」「申し込み」を含む（「変更」「キャンセル」を含まない）"
+          output: "健診の予約"
+        - input: "DTMF 2 または「変更」「日程変更」を含む"
+          output: "予約の変更"
+        - input: "DTMF 3 または「キャンセル」「取り消し」「取消」を含む"
+          output: "予約のキャンセル"
+        - input: "DTMF 4 または「問い合わせ」「質問」「確認」「聞きたい」を含む"
+          output: "その他問合せ"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "classification"
+    next_step: "健診の予約→予約_健診内容 / 予約の変更→変更_予約日 / 予約のキャンセル→キャンセル_予約日 / その他問合せ→問い合わせ_内容確認"
+    retry_failure: "skip"
+
+  - step_name: "予約_健診内容"
+    tts_announcement: "健診の種類についてお伺いします。これよりご案内する番号を、ダイヤルプッシュ、または番号でお答えください。検査結果を会社へ提出する採用時健診、定期健診は1番。協会けんぽの生活習慣病予防健診は2番。人間ドック等、それ以外の健診は3番。わからない場合は、わからないとお答えください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "採用定期"
+        - "協会けんぽ"
+        - "その他健診"
+        - "わからない"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「採用」「定期」を含む"
+          output: "採用定期"
+        - input: "DTMF 2 または「協会」「けんぽ」「生活習慣」を含む"
+          output: "協会けんぽ"
+        - input: "DTMF 3 または「人間ドック」「ドック」「それ以外」を含む"
+          output: "その他健診"
+        - input: "「わからない」「不明」を含む"
+          output: "わからない"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "checkup_type"
+    next_step: "採用定期→予約_所定用紙 / 協会けんぽ・その他健診・わからない→共通_希望時期"
+    retry_failure: "skip"
+
+  - step_name: "予約_所定用紙"
+    tts_announcement: "結果を記載する所定の用紙はお持ちですか。お持ちの場合は1を、お持ちでない場合は2を押してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "肯定"
+        - "否定"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「はい」「持っている」「ある」を含む"
+          output: "肯定"
+        - input: "DTMF 2 または「いいえ」「持っていない」「ない」を含む"
+          output: "否定"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: null
+    next_step: "肯定→END_クリニック案内 / 否定→予約_病院指定"
+    retry_failure: "skip"
+
+  - step_name: "予約_病院指定"
+    tts_announcement: "職場の担当者から鹿児島生協病院で受診するよう指示はありましたか。はいの場合は1を、いいえの場合は2を押してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "肯定"
+        - "否定"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「はい」「そうです」「ある」を含む"
+          output: "肯定"
+        - input: "DTMF 2 または「いいえ」「ない」「わからない」を含む"
+          output: "否定"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: null
+    next_step: "肯定→共通_希望時期 / 否定→END_クリニック案内"
+    retry_failure: "skip"
+
+  - step_name: "変更_予約日"
+    tts_announcement: "現在の予約日を教えてください。わからない場合には、わからない、とお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "日付テキスト"
+        - "当日"
+        - "NO_RESULT"
+      mapping:
+        - input: "具体的な日付が含まれる（YYYY-MM-DD形式に変換可能）"
+          output: "日付テキスト（そのまま保存）"
+        - input: "「今日」「本日」「きょう」を含む"
+          output: "当日"
+        - input: "「わからない」「不明」を含む"
+          output: "日付テキスト（「わからない」をそのまま保存）"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "reservationDate"
+    next_step: "当日→END_当日予約不可 / その他→変更_胃カメラ有無"
+    retry_failure: "skip"
+
+  - step_name: "変更_胃カメラ有無"
+    tts_announcement: "続いて、ご予約のコースの中に胃カメラの検査はございますか。ございましたら1を、なければ2を押してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "有"
+        - "無"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「はい」「ある」「ございます」を含む"
+          output: "有"
+        - input: "DTMF 2 または「いいえ」「ない」「ございません」を含む"
+          output: "無"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "gastrocamera"
+    next_step: "共通_希望時期"
+    retry_failure: "skip"
+
+  - step_name: "キャンセル_予約日"
+    tts_announcement: "現在の予約日を教えてください。わからない場合には、わからない、とお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "日付テキスト"
+        - "当日"
+        - "NO_RESULT"
+      mapping:
+        - input: "具体的な日付が含まれる"
+          output: "日付テキスト（そのまま保存）"
+        - input: "「今日」「本日」「きょう」を含む"
+          output: "当日"
+        - input: "「わからない」「不明」を含む"
+          output: "日付テキスト（「わからない」をそのまま保存）"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "reservationDate"
+    next_step: "当日→END_当日予約不可 / その他→人数判定_ContextMatchRouter（希望時期スキップ）"
+    retry_failure: "skip"
+
+  - step_name: "問い合わせ_内容確認"
+    tts_announcement: "それでは、ご用件をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "question"
+    next_step: "問い合わせ_その他問合せ"
+    retry_failure: "skip"
+
+  - step_name: "問い合わせ_その他問合せ"
+    tts_announcement: "その他、健診の内容で追加のご連絡事項はございますか。ございましたら、このままお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "other_inquiries"
+    next_step: "人数判定_ContextMatchRouter（希望時期スキップ）"
+    retry_failure: "skip"
+
+  - step_name: "共通_希望時期"
+    tts_announcement: "受診を希望される時期をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "希望時期テキスト"
+        - "当日"
+        - "NO_RESULT"
+      mapping:
+        - input: "具体的な時期・日付が含まれる"
+          output: "希望時期テキスト（そのまま保存）"
+        - input: "「今日」「本日」「きょう」を含む"
+          output: "当日"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "DesiredreservationDate"
+    next_step: "当日→END_当日予約不可 / その他→人数判定_ContextMatchRouter"
+    retry_failure: "skip"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須 -- 削除禁止）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達（クリティカルステップ）"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 施設固有終話（メインフロー内）---
+  - name: "END_クリニック案内"
+    condition: "予約-採用定期ルートで所定用紙あり、または病院指定なし"
+    tts_announcement: "大変恐れ入りますが、今回のご予約は谷山生協クリニックにて承ります。電話番号を申しあげますのでそちらへおかけなおしください。番号は099-210-2211、繰り返します、番号は099-210-2211、繰り返します、番号は099-210-2211。お電話ありがとうございました。それでは失礼いたします。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_クリニック案内"
+
+  - name: "END_当日予約不可"
+    condition: "予約日・希望時期が当日"
+    tts_announcement: "当日の予約についてはAI電話ではご対応できませんので、代表電話の099-267-1455におかけ直しください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_当日予約不可"
+
+  # --- 正常終話（電話番号サブフロー内 -- self_contained）---
+  - name: "END_受付完了"
+    condition: "全聴取完了 かつ classification in {健診の予約, 予約の変更, その他問合せ}"
+    tts_announcement: "お申し込みを承りました。3診療日以内に担当者から折り返し電話、もしくはSMSにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了"
+
+  - name: "END_受付完了_キャンセル"
+    condition: "全聴取完了 かつ classification = 予約のキャンセル"
+    tts_announcement: "予約のキャンセルを承りました。3診療日以内に担当者から折り返しご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_受付完了_キャンセル"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: true
+  routing_keys:
+    - "classification"
+  patterns:
+    - condition: "classification=予約のキャンセル"
+      sms_flag: "-1"
+      notes: "キャンセルはSMS送信なし"
+    - condition: "classification=健診の予約 | 予約の変更 | その他問合せ"
+      sms_flag: "1"
+      notes: "予約・変更・問い合わせはSMS送信あり"
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "3"
+  inquiry_insertion_point: "問い合わせ_その他問合せの後（問い合わせルートのみ）"
+  pre_termination: true
+  # パターン3（Gen2→Gen3移管デフォルト）:
+  #   パターン1: 問い合わせルート内で内容確認後にRAGサブフロー
+  #   パターン2: 全終話前（生年月日サブフロー返却後、電話番号サブフロー前）にRAGサブフロー
+  # RAGサブフローはdocs/reference/bivr/samples/json/RAG検索.jsonを完全コピー。
+  # TTS文言はプロパティで制御:
+  #   パターン2初回: "何かご質問はございますか？"
+  #   ループ時: "その他に何かご質問はございますか？ない場合は「ありません」のようにお話しください。"
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  # --- メインフロー: 冒頭チェーン ---
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。鹿児島生協病院の、健診専用、AI電話です。"
+
+  - module_name: "時間外_アナウンス"
+    purpose: "時間外案内"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知案内"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  # --- メインフロー: 聴取ステップ ---
+  - module_name: "人数確認"
+    purpose: "人数確認案内"
+    announcement: "今回のお申込みは、お一人分ですか、複数名でしょうか。お一人の場合は1を、複数名の場合は2を押してください。"
+
+  - module_name: "代表者氏名"
+    purpose: "代表者氏名聴取案内（複数名ルート）"
+    announcement: "それでは、代表者様のお名前をフルネームでお話ください。"
+
+  - module_name: "職場名"
+    purpose: "職場名聴取案内（複数名ルート）"
+    announcement: "職場名をお答えください。"
+
+  - module_name: "用件確認"
+    purpose: "用件選択案内（4択）"
+    announcement: "ご用件を次の4つのうちのいずれかでお話ください。健診の予約は1番、予約の変更は2番、予約のキャンセルは3番、その他お問い合わせは4番。それではお話ください。"
+
+  - module_name: "予約_健診内容"
+    purpose: "健診内容選択案内（予約ルート）"
+    announcement: "健診の種類についてお伺いします。これよりご案内する番号を、ダイヤルプッシュ、または番号でお答えください。検査結果を会社へ提出する採用時健診、定期健診は1番。協会けんぽの生活習慣病予防健診は2番。人間ドック等、それ以外の健診は3番。わからない場合は、わからないとお答えください。"
+
+  - module_name: "予約_所定用紙"
+    purpose: "所定用紙確認案内（予約-採用定期ルート）"
+    announcement: "結果を記載する所定の用紙はお持ちですか。お持ちの場合は1を、お持ちでない場合は2を押してください。"
+
+  - module_name: "予約_病院指定"
+    purpose: "病院指定確認案内（予約-採用定期ルート）"
+    announcement: "職場の担当者から鹿児島生協病院で受診するよう指示はありましたか。はいの場合は1を、いいえの場合は2を押してください。"
+
+  - module_name: "変更_予約日"
+    purpose: "現在の予約日聴取案内（変更ルート）"
+    announcement: "現在の予約日を教えてください。わからない場合には、わからない、とお話ください。"
+
+  - module_name: "変更_胃カメラ有無"
+    purpose: "胃カメラ有無確認案内（変更ルート）"
+    announcement: "続いて、ご予約のコースの中に胃カメラの検査はございますか。ございましたら1を、なければ2を押してください。"
+
+  - module_name: "キャンセル_予約日"
+    purpose: "現在の予約日聴取案内（キャンセルルート）"
+    announcement: "現在の予約日を教えてください。わからない場合には、わからない、とお話ください。"
+
+  - module_name: "問い合わせ_内容確認"
+    purpose: "内容確認聴取案内（問い合わせルート）"
+    announcement: "それでは、ご用件をお話ください。"
+
+  - module_name: "問い合わせ_その他問合せ"
+    purpose: "その他問合せ聴取案内（問い合わせルート）"
+    announcement: "その他、健診の内容で追加のご連絡事項はございますか。ございましたら、このままお話ください。"
+
+  - module_name: "共通_希望時期"
+    purpose: "希望時期聴取案内（予約/変更共通）"
+    announcement: "受診を希望される時期をお話ください。"
+
+  # --- メインフロー: 終話TTS ---
+  - module_name: "END_クリニック案内"
+    purpose: "谷山生協クリニック案内終話"
+    announcement: "大変恐れ入りますが、今回のご予約は谷山生協クリニックにて承ります。電話番号を申しあげますのでそちらへおかけなおしください。番号は099-210-2211、繰り返します、番号は099-210-2211、繰り返します、番号は099-210-2211。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_当日予約不可"
+    purpose: "当日予約不可案内終話"
+    announcement: "当日の予約についてはAI電話ではご対応できませんので、代表電話の099-267-1455におかけ直しください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ上限終話"
+    announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+
+  # --- 電話番号サブフロー内: 終話TTS ---
+  - module_name: "END_受付完了"
+    purpose: "受付完了終話（SMS有り）"
+    announcement: "お申し込みを承りました。3診療日以内に担当者から折り返し電話、もしくはSMSにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_受付完了_キャンセル"
+    purpose: "キャンセル受付完了終話（SMS無し）"
+    announcement: "予約のキャンセルを承りました。3診療日以内に担当者から折り返しご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "人数確認"
+    words: |
+      個人 こじん
+      一人 ひとり
+      一名 いちめい
+      複数名 ふくすうめい
+      複数 ふくすう
+      二人 ふたり
+      三人 さんにん
+
+  - step_name: "代表者氏名"
+    words: |
+      （氏名辞書を設定）
+
+  - step_name: "職場名"
+    words: |
+      （フリーテキスト -- profile_words空）
+
+  - step_name: "用件確認"
+    words: |
+      予約 よやく
+      健診 けんしん
+      検診 けんしん
+      変更 へんこう
+      キャンセル きゃんせる
+      取り消し とりけし
+      問い合わせ といあわせ
+      確認 かくにん
+
+  - step_name: "予約_健診内容"
+    words: |
+      採用 さいよう
+      定期 ていき
+      協会 きょうかい
+      けんぽ けんぽ
+      生活習慣 せいかつしゅうかん
+      人間ドック にんげんどっく
+      ドック どっく
+      わからない わからない
+
+  - step_name: "予約_所定用紙"
+    words: |
+      はい はい
+      いいえ いいえ
+      持っている もっている
+      持っていない もっていない
+
+  - step_name: "予約_病院指定"
+    words: |
+      はい はい
+      いいえ いいえ
+
+  - step_name: "変更_予約日"
+    words: |
+      （和暦辞書 + month辞書 + day辞書を設定）
+      わからない わからない
+
+  - step_name: "変更_胃カメラ有無"
+    words: |
+      はい はい
+      いいえ いいえ
+      胃カメラ いかめら
+      ございます ございます
+      ございません ございません
+
+  - step_name: "キャンセル_予約日"
+    words: |
+      （和暦辞書 + month辞書 + day辞書を設定）
+      わからない わからない
+
+  - step_name: "問い合わせ_内容確認"
+    words: |
+      （フリーテキスト -- profile_words空）
+
+  - step_name: "問い合わせ_その他問合せ"
+    words: |
+      （フリーテキスト -- profile_words空）
+
+  - step_name: "共通_希望時期"
+    words: |
+      （和暦辞書 + month辞書 + day辞書を設定）
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "Gen2→Gen3移管案件。Gen2プロンプト（本番/デモ重複あり）とYAML対話フロー定義から変換"
+  - "人数確認（個人/複数名）が冒頭にある特殊構成。複数名ルートは代表者氏名・職場名を先に聴取"
+  - "複数名ルートではContextMatchRouterで氏名サブフローをスキップ（代表者氏名がpatientNameに設定済み）"
+  - "用件確認は4択（健診の予約/予約の変更/予約のキャンセル/その他問合せ）"
+  - "予約ルート内に採用定期専用の2段階分岐（所定用紙→病院指定）あり。所定用紙ありまたは病院指定なしの場合は谷山生協クリニック（099-210-2211）へ案内"
+  - "当日予約はAI電話で受付不可。代表電話（099-267-1455）へ案内"
+  - "smsFlag分岐はclassification依存: 予約/変更/問い合わせ=1, キャンセル=-1"
+  - "キャンセルと問い合わせルートは希望時期をスキップして直接個人情報聴取へ"
+  - "Gen2では大半のリトライ超過時にスキップ/フォールバック動作。Gen3でも同様にskip動作を採用"
+  - "Gen2プロンプトの口調指示: 「お話ください」に統一（「おっしゃってください」は使わない）、「ありがとうございます」は使わない"
+  - "生年月日・診察券番号の聴取あり（標準サブフロー使用）。Gen2プロンプトにも生年月日聴取ステップが存在"
+  - "clinicalDepartment/clinicalDepartment2/medicalCardNumber はGen2 function定義にあるがフローで未使用のため除外"
+  - "RAGサブフローはパターン3（Gen2→Gen3デフォルト）。不要であれば設計書のrag_subflow.patternをnoneに変更"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+# 詳細は確認レポート（docs/designs/確認レポート_鹿児島生協病院_健診_20260413.md）を参照。
+confirmation_items:
+  - item: "office_id"
+    resolved: false
+  - item: "営業時間（曜日・時間帯）の最終確認"
+    resolved: false
+  - item: "キャンセルのsmsFlag=-1で正しいか（Gen2定義に基づく仮設定）"
+    resolved: false
+  - item: "RAGサブフロー配置パターン3の要否"
+    resolved: false
+  - item: "環境指定（デモで仮設定済み）"
+    resolved: false
+  - item: "clinicalDepartment/clinicalDepartment2/medicalCardNumber を除外して問題ないか"
+    resolved: false

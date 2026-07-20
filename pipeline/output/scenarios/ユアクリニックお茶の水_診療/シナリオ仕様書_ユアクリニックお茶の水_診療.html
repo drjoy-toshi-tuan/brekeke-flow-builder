@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>シナリオ仕様書 — ユアCLお茶水</title>
+<style>
+  :root {
+    --primary: #2563eb; --primary-light: #eff6ff;
+    --success: #16a34a; --success-light: #f0fdf4;
+    --warning: #d97706; --warning-light: #fffbeb;
+    --danger: #dc2626; --danger-light: #fef2f2;
+    --gray-50: #f9fafb; --gray-100: #f3f4f6; --gray-200: #e5e7eb;
+    --gray-300: #d1d5db; --gray-500: #6b7280; --gray-700: #374151; --gray-900: #111827;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI','Hiragino Sans','Yu Gothic UI',sans-serif; background: var(--gray-50); color: var(--gray-900); line-height: 1.7; }
+  .header { background: linear-gradient(135deg, #1e40af, #3b82f6); color: white; padding: 2.5rem 2rem; text-align: center; }
+  .header h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 0.5rem; }
+  .header .meta { opacity: 0.85; font-size: 0.9rem; }
+  .container { max-width: 900px; margin: 0 auto; padding: 1.5rem; }
+  .overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+  .overview-card { background: white; border-radius: 12px; padding: 1.2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); text-align: center; }
+  .overview-card .num { font-size: 2rem; font-weight: 700; color: var(--primary); }
+  .overview-card .label { font-size: 0.85rem; color: var(--gray-500); margin-top: 0.2rem; }
+  .flow-overview { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin: 1.5rem 0; }
+  .flow-chain { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.3rem; padding: 1rem 0; }
+  .flow-node { background: var(--primary-light); border: 2px solid var(--primary); border-radius: 8px; padding: 0.5rem 1rem; font-size: 0.85rem; font-weight: 600; color: var(--primary); white-space: nowrap; }
+  .flow-node.start { background: var(--success-light); border-color: var(--success); color: var(--success); }
+  .flow-node.end { background: var(--danger-light); border-color: var(--danger); color: var(--danger); }
+  .flow-node.branch { background: var(--warning-light); border-color: var(--warning); color: var(--warning); }
+  .flow-arrow { font-size: 1.2rem; color: var(--gray-300); }
+  .section { margin: 1.5rem 0; }
+  .section-title { font-size: 1.3rem; font-weight: 700; color: var(--gray-900); padding-bottom: 0.5rem; border-bottom: 2px solid var(--primary); margin-bottom: 1rem; }
+  .block { background: white; border-radius: 12px; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); overflow: hidden; }
+  .block-header { background: var(--gray-100); padding: 0.8rem 1.2rem; cursor: pointer; display: flex; align-items: center; gap: 0.8rem; user-select: none; transition: background 0.2s; }
+  .block-header:hover { background: var(--gray-200); }
+  .block-header .icon { font-size: 1.3rem; }
+  .block-header .title { font-weight: 600; flex: 1; }
+  .block-header .badge { font-size: 0.75rem; padding: 0.15rem 0.6rem; border-radius: 999px; font-weight: 600; }
+  .badge-blue { background: var(--primary-light); color: var(--primary); }
+  .badge-green { background: var(--success-light); color: var(--success); }
+  .badge-orange { background: var(--warning-light); color: var(--warning); }
+  .badge-red { background: var(--danger-light); color: var(--danger); }
+  .badge-purple { background: #f3e8ff; color: #7c3aed; }
+  .badge-gray { background: var(--gray-100); color: var(--gray-500); }
+  .ai-detail { font-size: 0.8rem; color: #7c3aed; margin-top: 0.3rem; padding: 0.3rem 0.6rem; background: #f3e8ff; border-radius: 6px; display: inline-block; }
+  .processing-tag { display: inline-flex; align-items: center; gap: 0.4rem; margin-left: 0.5rem; font-size: 0.8rem; }
+  .block-header .chevron { transition: transform 0.3s; font-size: 0.8rem; color: var(--gray-500); }
+  .block.open .block-header .chevron { transform: rotate(90deg); }
+  .block-body { display: none; padding: 1.2rem; }
+  .block.open .block-body { display: block; }
+  .speech { background: var(--primary-light); border-left: 4px solid var(--primary); border-radius: 0 8px 8px 0; padding: 0.8rem 1rem; margin: 0.5rem 0 0.5rem 2rem; font-size: 0.9rem; position: relative; }
+  .speech::before { content: '\1F50A'; position: absolute; left: -2rem; top: 0.7rem; font-size: 1rem; }
+  .speech .label { font-size: 0.75rem; color: var(--gray-500); font-weight: 600; margin-bottom: 0.3rem; }
+  .branch-table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; font-size: 0.9rem; }
+  .branch-table th { background: var(--gray-100); padding: 0.5rem 0.8rem; text-align: left; font-weight: 600; font-size: 0.8rem; color: var(--gray-500); }
+  .branch-table td { padding: 0.5rem 0.8rem; border-bottom: 1px solid var(--gray-200); }
+  .steps { list-style: none; padding: 0; }
+  .steps li { padding: 0.6rem 0 0.6rem 2.5rem; position: relative; border-left: 2px solid var(--gray-200); margin-left: 0.8rem; }
+  .steps li::before { content: attr(data-num); position: absolute; left: -0.85rem; top: 0.5rem; width: 1.5rem; height: 1.5rem; border-radius: 50%; background: var(--primary); color: white; font-size: 0.75rem; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+  .steps li:last-child { border-left-color: transparent; }
+  .step-title { font-weight: 600; }
+  .step-desc { font-size: 0.85rem; color: var(--gray-500); margin-top: 0.2rem; }
+  .info-box { background: var(--warning-light); border-left: 4px solid var(--warning); padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-size: 0.85rem; }
+  .error-box { background: var(--danger-light); border-left: 4px solid var(--danger); padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-size: 0.85rem; }
+  .collect-table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; }
+  .collect-table th { background: var(--gray-100); padding: 0.6rem 1rem; text-align: left; font-size: 0.85rem; }
+  .collect-table td { padding: 0.6rem 1rem; border-bottom: 1px solid var(--gray-200); font-size: 0.9rem; }
+  .footer { text-align: center; color: var(--gray-500); font-size: 0.8rem; padding: 2rem 0; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>シナリオ仕様書</h1>
+  <div class="meta">ユアCLお茶水 | 作成日: 2026年04月02日 | バージョン: 20260402</div>
+</div>
+<div class="container">
+
+<div class="overview">
+  <div class="overview-card"><div class="num">4</div><div class="label">用件メニュー</div></div>
+  <div class="overview-card"><div class="num">2</div><div class="label">診療科</div></div>
+  <div class="overview-card"><div class="num">4</div><div class="label">聴取項目</div></div>
+  <div class="overview-card"><div class="num">2回</div><div class="label">リトライ上限</div></div>
+</div>
+
+<div class="flow-overview">
+  <h3 style="margin-bottom:0.8rem;color:var(--gray-700);">通話の全体フロー</h3>
+  <div class="flow-chain">
+    <span class="flow-node start">着信</span><span class="flow-arrow">&rarr;</span>
+    <span class="flow-node">冒頭案内</span><span class="flow-arrow">&rarr;</span>
+    <span class="flow-node branch">用件選択</span><span class="flow-arrow">&rarr;</span>
+    <span class="flow-node">各フロー</span><span class="flow-arrow">&rarr;</span>
+    <span class="flow-node">個人情報聴取</span><span class="flow-arrow">&rarr;</span>
+    <span class="flow-node end">終話</span>
+  </div>
+  <div style="text-align:center;font-size:0.8rem;color:var(--gray-500);margin-top:0.3rem;">
+    ※ 非通知の場合は発信者番号通知を案内して終了 | 初診の場合はLINE当日順番予約を案内して終了
+  </div>
+</div>
+
+<div style="background:white;border-radius:12px;padding:1rem 1.5rem;box-shadow:0 1px 3px rgba(0,0,0,0.08);margin:1.5rem 0;display:flex;flex-wrap:wrap;gap:1.5rem;align-items:center;">
+  <span style="font-weight:600;color:var(--gray-700);font-size:0.9rem;">処理方式の凡例:</span>
+  <span style="display:flex;align-items:center;gap:0.4rem;"><span class="badge badge-gray">音声認識のみ</span><span style="font-size:0.8rem;color:var(--gray-500);">患者の発話をそのまま記録</span></span>
+  <span style="display:flex;align-items:center;gap:0.4rem;"><span class="badge badge-purple">AI判定</span><span style="font-size:0.8rem;color:var(--gray-500);">AIが発話内容を分類・変換して分岐</span></span>
+</div>
+
+<!-- 1. 着信～用件選択 -->
+<div class="section">
+<div class="section-title">1. 着信～用件選択</div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F4DE;</span><span class="title">冒頭アナウンス</span><span class="badge badge-green">自動</span><span class="chevron">&#9654;</span></div>
+<div class="block-body">
+<div class="speech"><div class="label">AIが話す内容</div>(未設定)</div>
+<div class="info-box">&#9888;&#65039; <strong>非通知の場合</strong>: 発信者番号の通知を案内して終了</div>
+</div></div>
+
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F500;</span><span class="title">用件選択</span><span class="badge badge-orange">分岐</span><span class="badge badge-purple">AI判定</span><span class="chevron">&#9654;</span></div>
+<div class="block-body">
+<div class="speech"><div class="label">AIが話す内容</div>(未設定)</div>
+<table class="branch-table">
+<tr><th>選択</th><th>操作</th><th>遷移先</th></tr>
+<tr><td><strong>1</strong> または「予約」</td><td>プッシュ / 音声</td><td>&rarr; 予約フロー</td></tr>
+<tr><td><strong>2</strong> または「予約変更」</td><td>プッシュ / 音声</td><td>&rarr; 変更フロー</td></tr>
+<tr><td><strong>3</strong> または「キャンセル」</td><td>プッシュ / 音声</td><td>&rarr; 変更フロー（キャンセル扱い）</td></tr>
+<tr><td><strong>4</strong> または「お問い合わせ」</td><td>プッシュ / 音声</td><td>&rarr; お問い合わせフロー</td></tr>
+</table>
+<div class="error-box">&#x1F504; 聞き取れなかった場合: 最大<strong>2回</strong>再質問 &rarr; それでも不明の場合は切断</div>
+</div></div>
+</div>
+
+<!-- 2. 予約フロー -->
+<div class="section">
+<div class="section-title">2. 予約フロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">予約フロー全体の流れ</span><span class="badge badge-blue">5ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body">
+<ol class="steps">
+<li data-num="1"><div class="step-title">受診歴の確認 <span class="processing-tag"></span></div><div class="step-desc">初診 or 再診以降を確認。初診の場合はLINE順番予約を案内して終了。</div></li>
+<li data-num="2"><div class="step-title">診療科の選択 <span class="processing-tag"></span></div><div class="step-desc">一般皮膚科 or 美容皮膚科を選択。一般皮膚科は事前予約不可で当日順番予約を案内。</div></li>
+<li data-num="3"><div class="step-title">手術予約の確認 <span class="processing-tag"></span></div><div class="step-desc">美容皮膚科の場合、できものの手術の予約かどうかを確認。</div></li>
+<li data-num="4"><div class="step-title">希望日時の聴取 <span class="processing-tag"></span></div><div class="step-desc">「4月1日の11時」などの形式で希望日時を聴取。</div></li>
+<li data-num="5"><div class="step-title">個人情報の聴取</div><div class="step-desc">氏名・生年月日・電話番号・診察券番号を順に聴取。（個人情報セクション参照）</div></li>
+</ol>
+</div></div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F50A;</span><span class="title">各ステップの発話テキスト</span><span class="badge badge-blue">詳細</span><span class="chevron">&#9654;</span></div>
+<div class="block-body">
+<div class="speech"><div class="label">受診歴の確認</div>(未設定)</div>
+<div class="speech"><div class="label">診療科の選択</div>(未設定)</div>
+<div class="speech"><div class="label">手術予約の確認</div>(未設定)</div>
+<div class="speech"><div class="label">希望日時の聴取</div>(未設定)</div>
+</div></div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F6AA;</span><span class="title">予約フローの特殊な終了パターン</span><span class="badge badge-red">終了</span><span class="chevron">&#9654;</span></div>
+<div class="block-body">
+<div class="speech"><div class="label">初診の場合（予約不可）</div>(未設定)</div>
+<div class="speech"><div class="label">一般皮膚科の場合（事前予約不可）</div>(未設定)</div>
+<div class="speech"><div class="label">予約完了時</div>(未設定)</div>
+</div></div>
+</div>
+
+<!-- 3. 変更・キャンセルフロー -->
+<div class="section">
+<div class="section-title">3. 変更・キャンセルフロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x270F;&#xFE0F;</span><span class="title">変更フローの流れ</span><span class="badge badge-blue">3ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body">
+<ol class="steps">
+<li data-num="1"><div class="step-title">診療科の選択 <span class="processing-tag"></span></div><div class="step-desc">一般皮膚科 or 美容皮膚科</div></li>
+<li data-num="2"><div class="step-title">現在の予約日を聴取 <span class="processing-tag"></span></div><div class="step-desc">日付で回答。わからない場合は「わからない」。</div></li>
+<li data-num="3"><div class="step-title">予約内容の聴取 <span class="processing-tag"></span></div><div class="step-desc">変更したい内容を自由に発話。その後、個人情報聴取へ。</div></li>
+</ol>
+<div class="speech"><div class="label">診療科の選択</div>(未設定)</div>
+<div class="speech"><div class="label">現在の予約日</div>(未設定)</div>
+<div class="speech"><div class="label">予約内容</div>(未設定)</div>
+<div class="speech"><div class="label">変更完了時</div>(未設定)</div>
+<div class="speech"><div class="label">キャンセル完了時</div>(未設定)</div>
+</div></div>
+</div>
+
+<!-- 4. お問い合わせフロー -->
+<div class="section">
+<div class="section-title">4. お問い合わせフロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x2753;</span><span class="title">お問い合わせの流れ</span><span class="badge badge-blue">FAQ + 自由聴取</span><span class="chevron">&#9654;</span></div>
+<div class="block-body">
+<ol class="steps">
+<li data-num="1"><div class="step-title">問い合わせ内容を聴取 <span class="processing-tag"></span></div><div class="step-desc">患者が質問を自由に発話</div></li>
+<li data-num="2"><div class="step-title">FAQ検索 <span class="processing-tag"><span class="badge badge-purple">AI判定</span></span></div><div class="step-desc">登録済みFAQをAI検索（RAG）。該当する場合は自動回答。該当しない場合は担当者からの折り返しを案内。</div></li>
+<li data-num="3"><div class="step-title">追加の質問があるか確認 <span class="processing-tag"></span></div><div class="step-desc">「他にご用件があれば...」と再質問。「ありません」で終了。</div></li>
+</ol>
+<div class="speech"><div class="label">問い合わせ聴取</div>(未設定)</div>
+<div class="speech"><div class="label">FAQに該当しなかった場合</div>(未設定)</div>
+<div class="speech"><div class="label">お問い合わせ完了時</div>(未設定)</div>
+</div></div>
+</div>
+
+<!-- 5. 個人情報聴取 -->
+<div class="section">
+<div class="section-title">5. 個人情報聴取（共通サブフロー）</div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F464;</span><span class="title">聴取する項目</span><span class="badge badge-blue">4項目</span><span class="chevron">&#9654;</span></div>
+<div class="block-body">
+<table class="collect-table">
+<tr><th>順序</th><th>項目</th><th>発話テキスト</th><th>入力方法</th><th>処理方式</th></tr>
+<tr><td>1</td><td><strong>氏名</strong></td><td>(未設定)</td><td>音声のみ</td><td><span class="badge badge-gray">音声認識のみ</span></td></tr>
+<tr><td>2</td><td><strong>生年月日</strong></td><td>生年月日を西暦、または和暦からお話しください。</td><td>音声 / プッシュ（8桁）</td><td><span class="badge badge-purple">AI判定</span><br><span style="font-size:0.75rem;color:#7c3aed">日付の正規化</span></td></tr>
+<tr><td>3</td><td><strong>連絡先電話番号</strong></td><td>(未設定)</td><td>音声 / プッシュ（10～11桁）</td><td><span class="badge badge-gray">音声認識のみ</span><br><span style="font-size:0.75rem;color:var(--gray-500)">+スクリプト検証</span></td></tr>
+<tr><td>4</td><td><strong>診察券番号</strong></td><td>(未設定)</td><td>音声 / プッシュ（5桁以内）</td><td><span class="badge badge-purple">AI判定</span><br><span style="font-size:0.75rem;color:#7c3aed">番号の正規化</span></td></tr>
+</table>
+<div class="info-box">&#x1F4F1; <strong>携帯電話からの着信の場合</strong>: 電話番号は着信番号を復唱確認。「はい」で確定、「いいえ」の場合は番号を聴取。</div>
+<div class="error-box">&#x1F504; 各項目とも聞き取れなかった場合は最大<strong>2回</strong>再質問。それでも不明の場合は切断。</div>
+</div></div>
+</div>
+
+<!-- 6. エラー時の挙動 -->
+<div class="section">
+<div class="section-title">6. エラー・例外時の挙動</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x26A0;&#xFE0F;</span><span class="title">エラー時の対応一覧</span><span class="badge badge-red">重要</span><span class="chevron">&#9654;</span></div>
+<div class="block-body">
+<table class="collect-table">
+<tr><th>状況</th><th>対応</th></tr>
+<tr><td>非通知着信</td><td>発信者番号の通知を案内して終了</td></tr>
+<tr><td>音声が聞き取れない（各ステップ共通）</td><td>最大2回再質問 &rarr; 切断アナウンスで終了</td></tr>
+<tr><td>初診で予約</td><td>LINE当日順番予約を案内して終了（SMSでリンク送信）</td></tr>
+<tr><td>一般皮膚科で予約</td><td>事前予約不可を案内して終了</td></tr>
+<tr><td>FAQに該当しない質問</td><td>担当者から折り返し連絡する旨を案内</td></tr>
+</table>
+<div class="speech"><div class="label">聞き取り失敗時の切断アナウンス</div>(未設定)</div>
+</div></div>
+</div>
+
+<!-- 7. 発話テキスト全文 -->
+<div class="section">
+<div class="section-title">7. 発話テキスト全文一覧</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F4DD;</span><span class="title">全発話テキスト（クリックで展開）</span><span class="badge badge-blue">0件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body">
+<table class="collect-table">
+<tr><th style="width:30%">ステップ名</th><th>発話テキスト</th></tr>
+
+</table>
+</div></div>
+</div>
+
+</div>
+<div class="footer">自動生成: VoiceBot Flow Builder | ユアCLお茶水 | 2026年04月02日</div>
+<script>
+document.querySelectorAll('.block-header').forEach(function(h){
+  h.addEventListener('click', function(){});
+});
+</script>
+</body>
+</html>

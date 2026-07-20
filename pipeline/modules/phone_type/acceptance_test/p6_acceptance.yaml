@@ -1,0 +1,99 @@
+# Pattern 6 (テストフロー) — phone_type 電話種別分類 単体受入テスト（spec: 050=その他 / 060携帯対応版）
+#
+# 検証対象: modules/phone_type/script.js（デプロイ正本・engine v1 / spec 050=その他）。
+#   spec_hash は 2026-06-29 の 060 携帯追加で 1c4db441→f433b2a6 に更新（engine_hash a274c654 不変）。
+#   旧プリビルド PhoneTypeAcceptanceTest.bivr(06-22) は 060 ケース非カバー＝stale。本 yaml が現行 SSoT。
+#   ケースの正本 = acceptance_test/cases.tsv（oracle 24/24 PASS・P021-024 が 060 対応）。
+#
+# 実機判定: 通話後 Brekeke ログを grep "[TEST FAIL]" で 0 件なら全 PASS。末尾 "[TEST DONE]" で全 24 完走。
+# 実行回数 ≈ 3 + 24×4 + 2 ≈ 101（<900 安全）。
+#
+# 生成: python3 tools/build_part_acceptance_bivr.py phone_type \
+#         --spec modules/phone_type/acceptance_test/p6_acceptance.yaml \
+#         --out  output/acceptance/phone_type/phone_type_p6_acceptance.bivr
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$電話種別判定"
+  flow_name: "テスト$電話種別判定"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$電話種別判定"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] phone_type 電話種別分類 単体受入 (spec 050=その他 / 060携帯対応, 24 ケース)");
+      $runner.getLogger().info("対象: modules/phone_type/script.js / オラクル 24/24 PASS 済");
+      $runner.getLogger().info("grep [TEST FAIL] = 0 なら実機も全 PASS");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: matrix
+
+  - step: matrix
+    type: script_test_matrix
+    script_file: "../script.js"
+    input_placeholder: "__SOURCE_MODULE__"
+    final_next: ログ_終了
+    cases:
+      # --- 携帯（070/080/090・11桁）---
+      - {id: P001, input: "09012345678", expected: "携帯"}
+      - {id: P002, input: "08012345678", expected: "携帯"}
+      - {id: P003, input: "07012345678", expected: "携帯"}
+      - {id: P004, input: "090-1234-5678", expected: "携帯"}
+      - {id: P005, input: "090 1234 5678", expected: "携帯"}
+      # --- 固定（^0[1-9]・10桁）---
+      - {id: P006, input: "0312345678", expected: "固定"}
+      - {id: P007, input: "0612345678", expected: "固定"}
+      - {id: P008, input: "06-1234-5678", expected: "固定"}
+      - {id: P009, input: "0112345678", expected: "固定"}
+      # --- その他（050 IP・桁不一致・国際・数字なし）---
+      - {id: P010, input: "05012345678", expected: "その他"}
+      - {id: P011, input: "050-1234-5678", expected: "その他"}
+      - {id: P012, input: "0120123456", expected: "固定"}
+      - {id: P013, input: "+819012345678", expected: "その他"}
+      - {id: P014, input: "819012345678", expected: "その他"}
+      - {id: P015, input: "0901234567", expected: "固定"}
+      - {id: P016, input: "090123456789", expected: "その他"}
+      - {id: P017, input: "", expected: "その他"}
+      - {id: P018, input: "わかりません", expected: "その他"}
+      - {id: P019, input: "03-1234-567", expected: "その他"}
+      - {id: P020, input: "00012345678", expected: "その他"}
+      # --- 060 携帯対応（spec_hash 更新の要ケース・2026-06-29）---
+      - {id: P021, input: "06012345678", expected: "携帯"}
+      - {id: P022, input: "060-1234-5678", expected: "携帯"}
+      - {id: P023, input: "0601234567", expected: "固定"}
+      - {id: P024, input: "0612345678", expected: "固定"}
+
+  - step: ログ_終了
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST DONE] phone_type 単体受入 全 24 ケース完走");
+      $runner.setResult("done");
+    next: 終了
+
+  - step: 終了
+    type: termination
+    termination_ref: "END_テスト終了"
+
+termination_patterns:
+  - name: "END_テスト終了"
+    condition: "テスト完走"
+    tts_announcement: "テストを終了します。"
+    status: "1"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_テスト終了"

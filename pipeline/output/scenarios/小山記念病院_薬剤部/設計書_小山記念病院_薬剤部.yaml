@@ -1,0 +1,1118 @@
+# 設計書 — 小山記念病院 薬剤部
+# 生成元: @director エージェント
+# 生成日: 2026-04-17
+# 入力資料: docs/migration/gen2_小山記念病院_薬剤部.md
+# 元資料:   docs/reference/customer_docs/小山記念病院_薬剤部.md
+# 作業種別: Gen2→Gen3 移管
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "小山記念病院"
+  group_name: "小山記念病院"
+  flow_name: "小山記念病院$薬剤部"
+  target_facility: "小山記念病院 薬剤部"
+  office_id: "TODO_要確認"
+  phone_number: "0299-85-1111"
+  business_hours: "TODO_要確認（Dr.JOY側で設定）"
+  flow_type: "1flow"
+  work_type: "gen2_migration"
+  environment: "demo"
+
+# --- セクション2: フロー構成 ---
+# このフローは薬局→病院薬剤部間の問合せ受付であり、患者ではなく薬局側が発信者。
+# 氏名/生年月日/電話番号/診察券番号の標準4点セット聴取は行わないため、
+# 個人情報サブフロー（氏名聴取等）を使わない 1flow 型構成を採用する。
+flow_structure:
+  type: "1flow"
+  flows:
+    - name: "小山記念病院$薬剤部"
+      role: "main"
+      description: "薬局からの疑義照会・報告・その他問合せの一次受付"
+  subflows: []
+
+# --- セクション3: フローの目的 ---
+purpose: >
+  小山記念病院 薬剤部に薬局から入電した際、薬局名・用件（疑義照会／報告／その他問合せ）・
+  担当者名・患者ID・患者名・診療科・内容を自動聴取し、Dr.JOYへ登録する。
+  ボットでは対応完了とし、病院から折り返すための情報を蓄積することを目的とする。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "小山記念病院$薬剤部"
+    diagram: |
+      冒頭(wait 2000ms)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → 非通知_アナウンス(TTS) → 完了フラグ_非通知(status=2) → 切断
+            └─ 通常/携帯/固定 → 営業時間チェック(acceptance_times)
+                ├─ 時間外 → 時間外_アナウンス(TTS) → 完了フラグ_時間外(status=6) → 切断
+                └─ 受付可 → 冒頭_アナウンス(TTS)「小山記念病院、薬剤部です。」
+                    → 薬局名聴取(E1)
+                      → 用件確認(C, enum: 疑義照会/報告/その他問合せ)
+                        → 担当者名(T1)
+                          → 患者ID(T2)
+                            → 患者名(T3)
+                              → 用件分岐(ContextMatchRouter on classification)
+                                  ├─ 疑義照会 → 診療科(Dept, enum 22科, no_result_default=登録なし)
+                                  │                → 詳細分岐(ContextMatchRouter on classification)
+                                  │                      ├─ 疑義照会 → 疑義内容(H1) → END_Z1
+                                  │                      └─ 報告     → 報告内容(H2) → 折返有無(I2)
+                                  │                                                      ├─ 必要   → END_Z1
+                                  │                                                      └─ 不要   → END_Z3
+                                  ├─ 報告 → 診療科 → 詳細分岐 → 報告内容 → 折返有無 → (同上)
+                                  └─ その他 → 問合せ内容(H3) → END_Z1
+    notes: |
+      Gen2 からの変更点:
+      1. 非通知コールは冒頭で切断（Gen2 は非通知でも続行して Fend で連絡先聴取 → Z2 終話）
+      2. 着信番号と薬局リスト（NDJSON 全77件）の全桁完全一致で clinicalDepartment2 を自動格納する
+         Gen2 §4 の機能は Gen3 では再現しない。常時 E1（薬局名聴取）を実施
+      3. Gen2 の「用件_C再ヒアリング」専用ボックスは Gen3 の Retry 機構で代替（retry_count=2）
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭 ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  # --- 冒頭アナウンス ---
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 薬局名聴取
+
+  # --- E1: 薬局名 ---
+  - step: 薬局名聴取
+    type: hearing
+    output_format: text
+    retry_failure: end_failure
+    next: 用件確認
+
+  # --- C: 用件 (enum) ---
+  - step: 用件確認
+    type: hearing
+    output_format: enum
+    retry_failure: skip
+    conditions:
+      - match: "default"
+        next: 担当者名
+
+  # --- T1: 担当者名 ---
+  - step: 担当者名
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 患者ID
+
+  # --- T2: 患者ID ---
+  - step: 患者ID
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 患者名
+
+  # --- T3: 患者名 ---
+  - step: 患者名
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 用件分岐
+
+  # --- 用件分岐 (classification で後続ルート決定) ---
+  - step: 用件分岐
+    type: context_match_router
+    reference_module: "classification"
+    conditions:
+      - match: "疑義照会"
+        next: 診療科
+      - match: "報告"
+        next: 診療科
+      - match: "default"
+        next: 問合せ内容
+
+  # --- Dept: 診療科 (enum 22科) ---
+  - step: 診療科
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    retry_failure: skip
+    conditions:
+      - match: "default"
+        next: 詳細分岐
+
+  # --- 詳細分岐 (classification で 疑義/報告 分岐) ---
+  - step: 詳細分岐
+    type: context_match_router
+    reference_module: "classification"
+    conditions:
+      - match: "疑義照会"
+        next: 疑義内容
+      - match: "報告"
+        next: 報告内容
+      - match: "default"
+        next: 報告内容
+
+  # --- H1: 疑義内容 ---
+  - step: 疑義内容
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: END_Z1
+
+  # --- H2: 報告内容 ---
+  - step: 報告内容
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 折返有無
+
+  # --- H3: 問合せ内容 ---
+  - step: 問合せ内容
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: END_Z1
+
+  # --- I2: 折返有無 (enum: 必要/不要) ---
+  - step: 折返有無
+    type: hearing
+    output_format: enum
+    retry_failure: skip
+    conditions:
+      - match: "必要"
+        next: END_Z1
+      - match: "不要"
+        next: END_Z3
+      - match: "default"
+        next: END_Z3
+
+  # --- 終話: Z1 (通常終話) ---
+  - step: END_Z1
+    type: termination
+    termination_ref: "END_Z1"
+
+  # --- 終話: Z3 (報告・折り返し不要) ---
+  - step: END_Z3
+    type: termination
+    termination_ref: "END_Z3"
+
+# --- セクション5: コンテキストフィールド一覧 ---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "疑義照会"
+      - id: "2"
+        order: "2"
+        value: "報告"
+      - id: "3"
+        order: "3"
+        value: "その他問合せ"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "用件区分（Gen2 function classification enum）"
+
+  - context_name: "patientName"
+    context_name_jp: "患者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "フルネーム（末尾敬称除去）"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "患者ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "英数（-/_ 許容可）。無効値は空扱い"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "内科"
+      - id: "2"
+        order: "2"
+        value: "消化器科"
+      - id: "3"
+        order: "3"
+        value: "消化器内科"
+      - id: "4"
+        order: "4"
+        value: "循環器科"
+      - id: "5"
+        order: "5"
+        value: "腎臓内科"
+      - id: "6"
+        order: "6"
+        value: "呼吸器内科"
+      - id: "7"
+        order: "7"
+        value: "産婦人科"
+      - id: "8"
+        order: "8"
+        value: "眼科"
+      - id: "9"
+        order: "9"
+        value: "泌尿器科"
+      - id: "10"
+        order: "10"
+        value: "外科"
+      - id: "11"
+        order: "11"
+        value: "乳腺外科"
+      - id: "12"
+        order: "12"
+        value: "整形外科"
+      - id: "13"
+        order: "13"
+        value: "脳神経外科"
+      - id: "14"
+        order: "14"
+        value: "神経内科"
+      - id: "15"
+        order: "15"
+        value: "形成外科"
+      - id: "16"
+        order: "16"
+        value: "口腔外科"
+      - id: "17"
+        order: "17"
+        value: "救急科"
+      - id: "18"
+        order: "18"
+        value: "甲状腺科"
+      - id: "19"
+        order: "19"
+        value: "心臓血管外科"
+      - id: "20"
+        order: "20"
+        value: "糖尿病内科"
+      - id: "21"
+        order: "21"
+        value: "緩和ケア科"
+      - id: "22"
+        order: "22"
+        value: "透析センター"
+      - id: "23"
+        order: "23"
+        value: "登録なし"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "Gen2 §3.2 診療科正規化辞書 22科 + 登録なし（no_result 用）"
+
+  - context_name: "clinicalDepartment2"
+    context_name_jp: "薬局名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "発信元薬局名。E1 聴取値を格納"
+
+  - context_name: "Desiredreservation"
+    context_name_jp: "担当者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "薬局担当者名（T1）"
+
+  - context_name: "reason"
+    context_name_jp: "問合せ内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "疑義内容／報告内容／問合せ内容のいずれかを格納"
+
+  - context_name: "details"
+    context_name_jp: "折返し有無"
+    display_type: "TEXT"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "必要"
+      - id: "2"
+        order: "2"
+        value: "不要"
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "報告ルート時のみ格納（I2）。他区分は空"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "着信番号自動格納（incoming_phone_number 相当）"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "Gen2 では非通知時に Fend で聴取していたが、Gen3 では非通知切断のため原則未使用。テンプレートデフォルトとして残置"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "転送"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "Gen2 status=0（途中切断）→ Gen3 status=2 に置換"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+# --- セクション6: 聴取項目一覧 ---
+# Gen2 §1.1「復唱・聞き返し禁止」に従い、全項目 echo_back=false。
+# Gen2 のフローには <dtmf/> タグが Fend のみに付与されている（他項目は音声のみ）。
+# Gen3 でも Fend 廃止に伴い DTMF 入力は使用しない → 全項目 AmiVoice_STT。
+hearing_items:
+  - order: 1
+    name: "薬局名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment2"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "E1。Gen2 §4 の着信番号自動特定は Gen3 未対応のため常時聴取"
+
+  - order: 2
+    name: "用件確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "疑義照会"
+      - "報告"
+      - "その他問合せ"
+    notes: |
+      C。Gen2 §7 の近似語を含め、「疑義照会／報告／その他問合せ」の3択に正規化。
+      Retry 失敗時は skip でフロー続行（classification 空 → 後段の用件分岐 default で「その他」扱い）。
+
+  - order: 3
+    name: "担当者名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "Desiredreservation"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "T1"
+
+  - order: 4
+    name: "患者ID"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "medicalCardNumber"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "T2。Gen2 では <dtmf/> タグ無し（音声のみ）。数値認識が不安定な場合は DTMF 化を検討"
+
+  - order: 5
+    name: "患者名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientName"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "T3。Gen2 §1.15 末尾敬称除去は TEXT 単純保存では省略"
+
+  - order: 6
+    name: "診療科"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "内科"
+      - "消化器科"
+      - "消化器内科"
+      - "循環器科"
+      - "腎臓内科"
+      - "呼吸器内科"
+      - "産婦人科"
+      - "眼科"
+      - "泌尿器科"
+      - "外科"
+      - "乳腺外科"
+      - "整形外科"
+      - "脳神経外科"
+      - "神経内科"
+      - "形成外科"
+      - "口腔外科"
+      - "救急科"
+      - "甲状腺科"
+      - "心臓血管外科"
+      - "糖尿病内科"
+      - "緩和ケア科"
+      - "透析センター"
+    notes: "Dept。疑義照会・報告ルートのみ聴取。no_result 時は「登録なし」を格納"
+
+  - order: 7
+    name: "疑義内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "H1。疑義照会ルートのみ"
+
+  - order: 8
+    name: "報告内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "H2。報告ルートのみ"
+
+  - order: 9
+    name: "問合せ内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "H3。その他問合せルートのみ"
+
+  - order: 10
+    name: "折返有無"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "details"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "必要"
+      - "不要"
+    notes: |
+      I2。報告ルートのみ。Gen2 §7 の不明瞭→不要ルールに合わせ default→END_Z3。
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "冒頭_アナウンス"
+    tts_announcement: "小山記念病院、薬剤部です。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: ""
+    next_step: "薬局名聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "薬局名聴取"
+    tts_announcement: "薬局名をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "clinicalDepartment2"
+    next_step: "用件確認"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "用件確認"
+    tts_announcement: "ご用件を「疑義照会」「報告」「その他問合せ」、いずれかでお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "疑義照会"
+        - "報告"
+        - "その他問合せ"
+      mapping:
+        - input: "疑義照会／理事紹介／議事紹介／疑義紹介／疑義です／ギギショウカイ／右総会／理事長会／意義紹介／ショウカイ／ソウカイ／トウカイ"
+          output: "疑義照会"
+        - input: "報告／ほうこくです／レポート"
+          output: "報告"
+        - input: "問合せ／問い合わせ／質問／相談／その他"
+          output: "その他問合せ"
+      no_result_condition: "上記いずれにも該当しない、または無音"
+    save_to: "classification"
+    next_step: "担当者名"
+    retry_failure: "skip"
+    retry_failure_announcement: "申し訳ありません。うまく聞き取ることができませんでした。もう一度ご用件をお話ください。"
+
+  - step_name: "担当者名"
+    tts_announcement: "担当者名をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "Desiredreservation"
+    next_step: "患者ID"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "患者ID"
+    tts_announcement: "患者さんのIDをお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "medicalCardNumber"
+    next_step: "患者名"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "患者名"
+    tts_announcement: "患者名をフルネームでお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "patientName"
+    next_step: "用件分岐"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "診療科"
+    tts_announcement: "診療科をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "内科"
+        - "消化器科"
+        - "消化器内科"
+        - "循環器科"
+        - "腎臓内科"
+        - "呼吸器内科"
+        - "産婦人科"
+        - "眼科"
+        - "泌尿器科"
+        - "外科"
+        - "乳腺外科"
+        - "整形外科"
+        - "脳神経外科"
+        - "神経内科"
+        - "形成外科"
+        - "口腔外科"
+        - "救急科"
+        - "甲状腺科"
+        - "心臓血管外科"
+        - "糖尿病内科"
+        - "緩和ケア科"
+        - "透析センター"
+      mapping:
+        - input: "内科"
+          output: "内科"
+        - input: "消化器科／消化器外科／イトオカキカ／ショオカキカ"
+          output: "消化器科"
+        - input: "消化器内科"
+          output: "消化器内科"
+        - input: "循環器科／循環器内科／循環器／ジュンタ／ヌキカ"
+          output: "循環器科"
+        - input: "腎臓内科／腎臓／腎内／心臓内科／咽頭内科／ジンゾウ／ジンナイ／シンゾウナイカ／イントウナイカ"
+          output: "腎臓内科"
+        - input: "呼吸器内科／オキユキナイカ／ゴキユキナイカ"
+          output: "呼吸器内科"
+        - input: "産婦人科／産科／婦人科／サンカ／フジンカ"
+          output: "産婦人科"
+        - input: "眼科"
+          output: "眼科"
+        - input: "泌尿器科／泌尿器／ウロ／ウロ科／ヒノキか／昨日来た"
+          output: "泌尿器科"
+        - input: "外科"
+          output: "外科"
+        - input: "乳腺外科／乳腺科／乳腺／ユウセイ／ニュウセンカ"
+          output: "乳腺外科"
+        - input: "整形外科／整形"
+          output: "整形外科"
+        - input: "脳神経外科／頭痛外来／脳外／脳神経"
+          output: "脳神経外科"
+        - input: "神経内科"
+          output: "神経内科"
+        - input: "形成外科／形成皮膚科／皮膚科／形成／皮膚"
+          output: "形成外科"
+        - input: "口腔外科／歯科／口腔科"
+          output: "口腔外科"
+        - input: "救急科／救急"
+          output: "救急科"
+        - input: "甲状腺科／甲状腺／コウジョウセンカ／オージョウセンカ"
+          output: "甲状腺科"
+        - input: "心臓血管外科／心外／心臓／心臓血管／血管"
+          output: "心臓血管外科"
+        - input: "糖尿病内科／糖尿／糖尿内科／糖尿病"
+          output: "糖尿病内科"
+        - input: "緩和ケア科／緩和／緩和ケア／カンワケヤキ／エアカ"
+          output: "緩和ケア科"
+        - input: "透析センター／コウウフセキセンタ"
+          output: "透析センター"
+      no_result_condition: "上記22科のいずれにも該当しない、または無音"
+    save_to: "clinicalDepartment"
+    next_step: "詳細分岐"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "疑義内容"
+    tts_announcement: "疑義の内容をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "reason"
+    next_step: "END_Z1"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "報告内容"
+    tts_announcement: "報告の内容をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "reason"
+    next_step: "折返有無"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "問合せ内容"
+    tts_announcement: "問合せ内容をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "reason"
+    next_step: "END_Z1"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "折返有無"
+    tts_announcement: "当院から折り返しは必要ですか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "必要"
+        - "不要"
+      mapping:
+        - input: "はい／必要／お願いします／折返し希望／折り返し希望"
+          output: "必要"
+        - input: "いいえ／不要／いりません／結構です／大丈夫です／不明瞭"
+          output: "不要"
+      no_result_condition: "無音または上記いずれにも該当しない（§7 ルール：不要扱い）"
+    save_to: "details"
+    next_step: "END_Z1 (必要) / END_Z3 (不要)"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須） ---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達（薬局名聴取）"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+  # --- 正常系 ---
+  - name: "END_Z1"
+    condition: "通話完了（疑義照会／その他問合せ／報告で折返し必要）"
+    tts_announcement: "かしこまりました。お掛けいただいた番号に折り返しいたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_Z1"
+  - name: "END_Z3"
+    condition: "通話完了（報告で折返し不要）"
+    tts_announcement: "かしこまりました。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_Z3"
+
+# smsFlag 分岐設計
+# Gen2 §9 「smsFlag: 常に '0'」準拠。Gen3 では SMS 送信なし = -1 で統一。
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ 検索サブフロー ---
+# このフローは薬局→病院間の定型受付であり、FAQ検索は不要。
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "小山記念病院、薬剤部です。"
+  - module_name: "薬局名聴取"
+    purpose: "薬局名（E1）聴取"
+    announcement: "薬局名をお話ください。"
+  - module_name: "用件確認"
+    purpose: "用件（C）聴取"
+    announcement: "ご用件を「疑義照会」「報告」「その他問合せ」、いずれかでお話ください。"
+  - module_name: "リトライ_用件確認"
+    purpose: "用件 再ヒアリング"
+    announcement: "申し訳ありません。うまく聞き取ることができませんでした。もう一度ご用件をお話ください。"
+  - module_name: "担当者名"
+    purpose: "担当者名（T1）聴取"
+    announcement: "担当者名をお話ください。"
+  - module_name: "患者ID"
+    purpose: "患者ID（T2）聴取"
+    announcement: "患者さんのIDをお話ください。"
+  - module_name: "患者名"
+    purpose: "患者名（T3）聴取"
+    announcement: "患者名をフルネームでお話ください。"
+  - module_name: "診療科"
+    purpose: "診療科（Dept）聴取"
+    announcement: "診療科をお話ください。"
+  - module_name: "疑義内容"
+    purpose: "疑義内容（H1）聴取"
+    announcement: "疑義の内容をお話ください。"
+  - module_name: "報告内容"
+    purpose: "報告内容（H2）聴取"
+    announcement: "報告の内容をお話ください。"
+  - module_name: "問合せ内容"
+    purpose: "問合せ内容（H3）聴取"
+    announcement: "問合せ内容をお話ください。"
+  - module_name: "折返有無"
+    purpose: "折り返し有無（I2）聴取"
+    announcement: "当院から折り返しは必要ですか？"
+  - module_name: "END_Z1"
+    purpose: "通常終話（折返しあり）"
+    announcement: "かしこまりました。お掛けいただいた番号に折り返しいたします。お電話ありがとうございました。"
+  - module_name: "END_Z3"
+    purpose: "報告・折り返し不要終話"
+    announcement: "かしこまりました。お電話ありがとうございました。"
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知切断"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+  - module_name: "時間外_アナウンス"
+    purpose: "時間外切断"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+  - module_name: "聴取失敗_アナウンス"
+    purpose: "リトライ上限切断"
+    announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+# Gen2 §3.1 の NDJSON 薬局リスト（全77件）と §3.2 の診療科エイリアス、
+# §7 の用件近似語を AmiVoice 辞書に反映する。
+amivoice_dictionary:
+  - step_name: "薬局名聴取"
+    words: |
+      ヤックスドラッグ鉾田薬局 やっくすどらっぐほこたやっきょく
+      ウエルシア薬局つくばみどりの店 うえるしあやっきょくつくばみどりのてん
+      アイン薬局潮来店 あいんやっきょくいたこてん
+      松崎薬局潮来店 まつざきやっきょくいたこてん
+      ヤックスドラッグ潮来薬局 やっくすどらっぐいたこやっきょく
+      ウエルシア薬局潮来新宮南店 うえるしあやっきょくいたこしんぐうみなみてん
+      さくら薬局行方麻生店 さくらやっきょくなめがたあそうてん
+      南山堂薬局知手店 なんざんどうやっきょくしっててん
+      さつき薬局本店 さつきやっきょくほんてん
+      ヤマグチ薬局チェリオ店 やまぐちやっきょくちぇりおてん
+      あやめ薬局神栖店 あやめやっきょくかみすてん
+      へいわどう薬局かみす店 へいわどうやっきょくかみすてん
+      ライフ薬局神栖店 らいふやっきょくかみすてん
+      クオール薬局牛堀店 くおーるやっきょくうしぼりてん
+      ウエルシア薬局行方麻生店 うえるしあやっきょくなめがたあそうてん
+      タグチ薬局 たぐちやっきょく
+      みやわき健康薬局 みやわきけんこうやっきょく
+      こころ調剤薬局宮中店 こころちょうざいやっきょくきゅうちゅうてん
+      ユニスマイル薬局鹿嶋東山店 ゆにすまいるやっきょくかしまひがしやまてん
+      大船津薬局 おおふなつやっきょく
+      クオール薬局鹿嶋店 くおーるやっきょくかしまてん
+      ユニスマイル薬局鹿嶋平井店 ゆにすまいるやっきょくかしまひらいてん
+      薬局与市鹿嶋宮中店 やっきょくよいちかしまきゅうちゅうてん
+      さつき薬局2号店 さつきやっきょくにごうてん
+      めだか薬局 めだかやっきょく
+      ウエルシア薬局鹿嶋緑ヶ丘店 うえるしあやっきょくかしまみどりがおかてん
+      カワチ薬局鹿嶋店 かわちやっきょくかしまてん
+      みほの薬局 みほのやっきょく
+      小山記念病院薬剤部 こやまきねんびょういんやくざいぶ
+      ヤックスドラッグ鹿嶋薬局 やっくすどらっぐかしまやっきょく
+      ウエルシア薬局鹿嶋平井店 うえるしあやっきょくかしまひらいてん
+      パルム薬局宮中店 ぱるむやっきょくきゅうちゅうてん
+      ウエルシア薬局神栖平泉店 うえるしあやっきょくかみすひらいずみてん
+      ウエルシア薬局神栖掘割店 うえるしあやっきょくかみすほりわりてん
+      田辺薬局鹿島神栖店 たなべやっきょくかしまかみすてん
+      マツモトキヨシ神栖店 まつもときよしかみすてん
+      カムラ薬局 かむらやっきょく
+      はまなす薬局大野店 はまなすやっきょくおおのてん
+      中央薬局知手店 ちゅうおうやっきょくしっててん
+      アイン薬局神栖店 あいんやっきょくかみすてん
+      ウエルシア薬局鹿嶋宮津台店 うえるしあやっきょくかしまみやつだいてん
+      ウエルシア薬局鹿嶋プラザ店 うえるしあやっきょくかしまぷらざてん
+      鹿島まちの薬局 かしままちのやっきょく
+      ウエルシア薬局鹿嶋大野店 うえるしあやっきょくかしまおおのてん
+      あい薬局 あいやっきょく
+      クオール薬局神栖店 くおーるやっきょくかみすてん
+      ウエルシア薬局神栖中央店 うえるしあやっきょくかみすちゅうおうてん
+      スガワ薬局 すがわやっきょく
+      そうごう薬局神栖店 そうごうやっきょくかみすてん
+      とちの木薬局潮来店 とちのきやっきょくいたこてん
+      さつき薬局神栖店 さつきやっきょくかみすてん
+      ひかり薬局神栖店 ひかりやっきょくかみすてん
+      ゆたか薬局 ゆたかやっきょく
+      神栖みらい薬局 かみすみらいやっきょく
+      ウエルシア薬局神栖知手中央店 うえるしあやっきょくかみすしってちゅうおうてん
+      カワチ薬局神栖店 かわちやっきょくかみすてん
+      田辺薬局かみす賀店 たなべやっきょくかみすがてん
+      ウエルシア薬局神栖大野原店 うえるしあやっきょくかみすおおのはらてん
+      あやめ薬局鹿嶋店 あやめやっきょくかしまてん
+      松崎薬局知手店 まつざきやっきょくしっててん
+      みつわ薬局神栖土合店 みつわやっきょくかみすどあいてん
+      田辺薬局知手中央店 たなべやっきょくしってちゅうおうてん
+      ウエルシア薬局神栖若松店 うえるしあやっきょくかみすわかまつてん
+      南山堂薬局波崎店 なんざんどうやっきょくはさきてん
+      ウエルシア薬局神栖矢田部店 うえるしあやっきょくかみすやたべてん
+      ウエルシア薬局神栖波崎店 うえるしあやっきょくかみすはさきてん
+      Y・A薬局 わいえーやっきょく
+      ウエルシア薬局神栖土合本町店 うえるしあやっきょくかみすどあいほんちょうてん
+      毎日薬局旭店 まいにちやっきょくあさひてん
+
+  - step_name: "用件確認"
+    words: |
+      疑義照会 ぎぎしょうかい
+      疑義 ぎぎ
+      照会 しょうかい
+      理事紹介 りじしょうかい
+      議事紹介 ぎじしょうかい
+      疑義紹介 ぎぎしょうかい
+      意義紹介 いぎしょうかい
+      報告 ほうこく
+      その他問合せ そのたといあわせ
+      問合せ といあわせ
+      問い合わせ といあわせ
+      相談 そうだん
+      質問 しつもん
+
+  - step_name: "診療科"
+    words: |
+      内科 ないか
+      消化器科 しょうかきか
+      消化器外科 しょうかきげか
+      イトオカキカ いとおかきか
+      ショオカキカ しょおかきか
+      消化器内科 しょうかきないか
+      循環器科 じゅんかんきか
+      循環器内科 じゅんかんきないか
+      循環器 じゅんかんき
+      ジュンタ じゅんた
+      ヌキカ ぬきか
+      腎臓内科 じんぞうないか
+      腎臓 じんぞう
+      腎内 じんない
+      心臓内科 しんぞうないか
+      咽頭内科 いんとうないか
+      ジンゾウ じんぞう
+      ジンナイ じんない
+      シンゾウナイカ しんぞうないか
+      イントウナイカ いんとうないか
+      呼吸器内科 こきゅうきないか
+      オキユキナイカ おきゆきないか
+      ゴキユキナイカ ごきゆきないか
+      産婦人科 さんふじんか
+      産科 さんか
+      婦人科 ふじんか
+      サンカ さんか
+      フジンカ ふじんか
+      眼科 がんか
+      泌尿器科 ひにょうきか
+      泌尿器 ひにょうき
+      ウロ うろ
+      ウロ科 うろか
+      ヒノキか ひのきか
+      昨日来た きのうきた
+      外科 げか
+      乳腺外科 にゅうせんげか
+      乳腺科 にゅうせんか
+      乳腺 にゅうせん
+      ユウセイ ゆうせい
+      ニュウセンカ にゅうせんか
+      整形外科 せいけいげか
+      整形 せいけい
+      脳神経外科 のうしんけいげか
+      頭痛外来 ずつうがいらい
+      脳外 のうげ
+      脳神経 のうしんけい
+      神経内科 しんけいないか
+      形成外科 けいせいげか
+      形成皮膚科 けいせいひふか
+      皮膚科 ひふか
+      形成 けいせい
+      皮膚 ひふ
+      口腔外科 こうくうげか
+      歯科 しか
+      口腔科 こうくうか
+      救急科 きゅうきゅうか
+      救急 きゅうきゅう
+      甲状腺科 こうじょうせんか
+      甲状腺 こうじょうせん
+      コウジョウセンカ こうじょうせんか
+      オージョウセンカ おうじょうせんか
+      心臓血管外科 しんぞうけっかんげか
+      心外 しんがい
+      心臓 しんぞう
+      心臓血管 しんぞうけっかん
+      血管 けっかん
+      糖尿病内科 とうにょうびょうないか
+      糖尿 とうにょう
+      糖尿内科 とうにょうないか
+      糖尿病 とうにょうびょう
+      緩和ケア科 かんわけあか
+      緩和 かんわ
+      緩和ケア かんわけあ
+      カンワケヤキ かんわけやき
+      エアカ えあか
+      透析センター とうせきせんたー
+      コウウフセキセンタ こううふせきせんた
+
+  - step_name: "折返有無"
+    words: |
+      必要 ひつよう
+      不要 ふよう
+      お願いします おねがいします
+      折返し おりかえし
+      折り返し おりかえし
+      希望 きぼう
+      いりません いりません
+      結構です けっこうです
+      大丈夫です だいじょうぶです
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "Gen2 §1.1「復唱・聞き返し禁止」に厳格準拠し、全 hearing で echo_back=false、復唱モジュール非配置"
+  - "Gen2 §4 の着信電話番号と薬局リスト（NDJSON 全77件）の全桁完全一致自動特定機能は Gen3 標準モジュールで再現不可のため、機能を廃止し常時 E1（薬局名聴取）を実施する（UX は一段階劣化）"
+  - "Gen2 では非通知着信でも継続し Fend（連絡先電話番号聴取）→ Z2 終話を行っていたが、Gen3 標準の非通知切断に変更。Z2 終話パターンは廃止"
+  - "Gen2 §9 の Z1/Z2/Z3 発話中切断の特例（status=1 維持）は Gen3 では saveCompletionFlag2db の単純な status 設定で代替"
+  - "Gen2 status=0（途中切断）は Gen3 status=2（代表案内）に置換。Gen2 status=1（通話完了）は Gen3 status=1（未処理）にマッピング"
+  - "Gen2 smsFlag『常に 0』→ Gen3 では SMS 送信なし = sms_flag='-1' で統一"
+  - "Gen2 §1.15 の patientName 末尾敬称除去は、OpenAI を経由しない text 単純保存では実装されない。敬称付きで保存される前提で Dr.JOY 側が吸収する想定"
+  - "Gen2 の『用件_C再ヒアリング』専用ボックス（AI補完トリガ）は Gen3 の Retry モジュール（retry_count=2）で代替。リトライ失敗時は skip し、後段の ContextMatchRouter default で「その他問合せ」ルートへ合流"
+  - "Gen2 §7 の I2 不明瞭→不要ルールは、折返有無 enum hearing の conditions に default: END_Z3 を追加して再現"
+  - "Gen2 §1.8 details は報告ルートの I2 聴取時のみ格納。その他区分では空のままで OK（Dr.JOY 側で空文字表示）"
+  - "Gen2 §1.16 および §4 全桁完全一致ルールは Gen3 では廃止のため、§11 Mermaid 付録図の『冒頭_一致』分岐（{yomi}さんですね。）も非実装"
+  - "患者ID（T2）は Gen2 も音声のみ（<dtmf/> タグ無し）。英数ID を音声で読み上げてもらう UX。認識精度が課題の場合は後日 DTMF_AmiVoice 化を検討"
+
+# --- セクション12: 要確認事項 ---
+confirmation_items:
+  # ===== BLOCKER 相当（設計判断・顧客承認が必要） =====
+  - item: "【BLOCKER-1】非通知コールの扱いを Gen3 標準の冒頭切断に変更する点の顧客承認。Gen2 では非通知でも継続し Fend で連絡先を聴取して Z2 終話していたが、Gen3 では再現しない"
+    resolved: false
+  - item: "【BLOCKER-2】着信番号と薬局リスト（NDJSON 全77件）の全桁完全一致による clinicalDepartment2 自動特定機能（Gen2 §4）の廃止について顧客承認。Gen3 では常時 E1（薬局名聴取）を実施する"
+    resolved: false
+  - item: "【BLOCKER-3】Gen2 status=0（途中切断）→ Gen3 status=2（代表案内）への置換について顧客承認。Dr.JOY 画面での見え方が変わる可能性"
+    resolved: false
+
+  # ===== NON-BLOCKER（仮値で設定済み、顧客確認で差し替え推奨） =====
+  - item: "【NON-BLOCKER-1】営業時間（曜日・時間帯）— use_acceptance_times=true で時間外終話経路を配置済み。具体的なスケジュールは Dr.JOY 側で設定"
+    resolved: false
+  - item: "【NON-BLOCKER-2】時間外アナウンス文言 — テンプレートデフォルト「お電話ありがとうございます。ただいまの時間は受付時間外です。…」で仮設定"
+    resolved: false
+  - item: "【NON-BLOCKER-3】非通知アナウンス文言 — テンプレートデフォルト「恐れ入りますが、電話番号を通知しておかけ直しください。…」で仮設定"
+    resolved: false
+  - item: "【NON-BLOCKER-4】聴取失敗アナウンス文言 — テンプレートデフォルトで仮設定"
+    resolved: false
+  - item: "【NON-BLOCKER-5】office_id — Dr.JOY 管理画面で確認（フロー JSON には不要）"
+    resolved: false
+  - item: "【NON-BLOCKER-6】IVR 着信電話番号（ARS 番号） — Brekeke 設定時に人間が設定（設計書には含めない）。代表 0299-85-1111 を basic_info.phone_number に記載"
+    resolved: false
+  - item: "【NON-BLOCKER-7】sms_flag=-1（SMS 送信なし）で全ルート統一。Gen2 §9『smsFlag: 常に 0』準拠"
+    resolved: false
+  - item: "【NON-BLOCKER-8】診療科リスト（22科 + 登録なし）の最新性確認。Gen2 §3.2 からそのまま転記"
+    resolved: false
+  - item: "【NON-BLOCKER-9】薬局名辞書（profile_words 全77件）の最新性確認。Gen2 §3.1 NDJSON からそのまま転記"
+    resolved: false
+  - item: "【NON-BLOCKER-10】患者ID（T2）を DTMF 入力対応にするかどうかの UX 判断。Gen2 は音声のみ"
+    resolved: false

@@ -1,0 +1,1153 @@
+# 設計書 — 北里大学病院 トータルサポートセンター 訪問看護
+# 生成元: @director エージェント
+# 生成日: 2026/04/01
+# 確認レポート: docs/designs/確認レポート_北里大学病院_訪問看護_20260401.md
+#
+# ⚠️ BLOCKER あり: 本設計書には未確定の情報（TODO_要確認）が含まれています。
+# 確認レポートのBLOCKER項目を解消してから @generator に実行を指示してください。
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "北里大学病院 トータルサポートセンター"
+  group_name: "北里大学病院TSC"
+  flow_name: "北里大学病院TSC$訪問看護"
+  target_facility: "北里大学病院 トータルサポートセンター"
+  office_id: "TODO_要確認"
+  phone_number: "050-5865-8003"
+  business_hours: "祝日除く月〜金 8:30〜17:00"
+  flow_type: "subflow"
+  work_type: "new"
+  environment: "demo"
+
+# --- セクション2: フロー構成 ---
+# 個人情報聴取サブフロー: 患者氏名・患者生年月日・連絡先電話番号の3項目
+# CLAUDE.md Rule 9 準拠。個人情報サブフロー.bivr から必要なサブフローのみ接続。
+# 診察券番号は聴取対象外のため接続しない。
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "北里大学病院TSC$訪問看護"
+      role: "main"
+      description: "冒頭チェーン → 確認(はい/いいえ) → 事業所名 → 担当者名 → 連絡先電話番号 → 指示書種別 → 診療科 → 主治医名 → サブフロー遷移(個人情報聴取) → 診療期間 → 指示期間開始日 → 訪問看護リハビリ内容 → 終話"
+    - name: "北里大学病院TSC$個人情報聴取"
+      role: "sub"
+      description: "患者氏名 → 患者生年月日 → 連絡先電話番号 → メインフローに返却"
+  subflows:
+    - name: "北里大学病院TSC$個人情報聴取"
+      target: "個人情報聴取（患者氏名・患者生年月日・連絡先電話番号）"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。個人情報サブフロー.bivr の氏名・生年月日・電話番号サブフローを完全コピー。診察券番号サブフローは接続しない。フロー名プレフィックスのみ「北里大学病院TSC$」に置換"
+
+# --- セクション3: フローの目的 ---
+purpose: "訪問看護ステーション等からの電話を受け、訪問看護指示書（または訪問リハビリテーション指示書）の作成依頼に必要な情報（事業所名・担当者名・連絡先電話番号・指示書種別・診療科・主治医名・患者氏名・患者生年月日・診療期間・指示期間開始日・訪問看護/リハビリ内容）を聴取し、受付を自動化する。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "北里大学病院TSC$訪問看護"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → 非通知_アナウンス(TTS) → 完了フラグ_非通知 → END_非通知 → 切断
+            └─ 通常 → acceptance_times
+                        ├─ 時間外 → 時間外_アナウンス(TTS) → 完了フラグ_時間外 → END_時間外 → 切断
+                        └─ 受付可 → 冒頭_アナウンス(TTS)
+                                      → 確認(TTS)
+                                      → 入力_確認(DTMF AmiVoice STT, max_dtmf_length=1)
+                                      → OpenAI_確認(generate_by_OpenAI)
+                                          ├─ はい → saveContext_確認
+                                          │         → 事業所名(TTS)
+                                          │         → 入力_事業所名(AmiVoice STT)
+                                          │         → OpenAI_事業所名(generate_by_OpenAI)
+                                          │             ├─ success → saveContext_事業所名
+                                          │             │             → 担当者名(TTS)
+                                          │             │             → 入力_担当者名(AmiVoice STT)
+                                          │             │             → OpenAI_担当者名(generate_by_OpenAI)
+                                          │             │                 ├─ success → saveContext_担当者名
+                                          │             │                 │             → 連絡先電話番号(TTS)
+                                          │             │                 │             → 入力_連絡先電話番号(DTMF AmiVoice STT, max_dtmf_length=11)
+                                          │             │                 │             → OpenAI_連絡先電話番号(generate_by_OpenAI)
+                                          │             │                 │                 ├─ success → saveContext_連絡先電話番号
+                                          │             │                 │                 │             → 指示書種別(TTS)
+                                          │             │                 │                 │             → 入力_指示書種別(DTMF AmiVoice STT, max_dtmf_length=1)
+                                          │             │                 │                 │             → OpenAI_指示書種別(generate_by_OpenAI)
+                                          │             │                 │                 │                 ├─ 訪問看護 → saveContext_指示書種別
+                                          │             │                 │                 │                 ├─ 訪問リハビリ → saveContext_指示書種別
+                                          │             │                 │                 │                 └─ NO_RESULT → リトライ_指示書種別
+                                          │             │                 │                 │
+                                          │             │                 │                 └─ NO_RESULT → リトライ_連絡先電話番号
+                                          │             │                 └─ NO_RESULT → リトライ_担当者名
+                                          │             └─ NO_RESULT → リトライ_事業所名
+                                          │
+                                          ├─ いいえ → 終話_受付不可(TTS) → 完了フラグ_受付不要 → 切断
+                                          └─ NO_RESULT → リトライ_確認
+                                                           ├─ Retry → 確認(TTS)
+                                                           └─ No more → END_上限エラー → 切断
+
+                                      ─── saveContext_指示書種別 以降 ───
+                                      → 診療科(TTS)
+                                      → 入力_診療科(DTMF AmiVoice STT, max_dtmf_length=1)
+                                      → OpenAI_診療科(generate_by_OpenAI)
+                                          ├─ success → saveContext_診療科
+                                          │             → 主治医名(TTS)
+                                          │             → 入力_主治医名(AmiVoice STT)
+                                          │             → OpenAI_主治医名(generate_by_OpenAI)
+                                          │                 ├─ success → saveContext_主治医名
+                                          │                 │             → サブフロー遷移_個人情報聴取
+                                          │                 │               └─ (返却) → 診療期間(TTS)
+                                          │                 │                             → 入力_診療期間(AmiVoice STT)
+                                          │                 │                             → OpenAI_診療期間(generate_by_OpenAI)
+                                          │                 │                                 ├─ success → saveContext_診療期間
+                                          │                 │                                 │             → 指示期間開始日(TTS)
+                                          │                 │                                 │             → 入力_指示期間開始日(AmiVoice STT)
+                                          │                 │                                 │             → OpenAI_指示期間開始日(generate_by_OpenAI)
+                                          │                 │                                 │                 ├─ success → saveContext_指示期間開始日
+                                          │                 │                                 │                 │             → 訪問看護リハビリ内容(TTS)
+                                          │                 │                                 │                 │             → 入力_訪問看護リハビリ内容(AmiVoice STT)
+                                          │                 │                                 │                 │             → OpenAI_訪問看護リハビリ内容(generate_by_OpenAI)
+                                          │                 │                                 │                 │                 ├─ success → saveContext_訪問看護リハビリ内容
+                                          │                 │                                 │                 │                 │             → END_受付完了(TTS) → 完了フラグ_受付完了 → 切断
+                                          │                 │                                 │                 │                 └─ NO_RESULT → リトライ_訪問看護リハビリ内容
+                                          │                 │                                 │                 └─ NO_RESULT → リトライ_指示期間開始日
+                                          │                 │                                 └─ NO_RESULT → リトライ_診療期間
+                                          │                 └─ NO_RESULT → リトライ_主治医名
+                                          └─ NO_RESULT → リトライ_診療科
+
+      ─── メインフロー内終話パターン ───
+      END_時間外 → 切断
+      END_非通知 → 切断
+      END_上限エラー → 切断
+      END_受付不可 → 切断
+      END_受付完了 → 切断（SMS送信あり）
+    notes: "incoming-classifier → acceptance_times → 冒頭アナウンス の標準冒頭チェーン。個人情報聴取（患者氏名・生年月日・電話番号）はサブフロー遷移。メインフロー内で終話チェーンを完結。"
+
+  - flow_name: "北里大学病院TSC$個人情報聴取"
+    diagram: |
+      ★★★ 完全コピー対象（CLAUDE.md Rule 9） ★★★
+      docs/reference/bivr/samples/個人情報サブフロー.bivr の以下のサブフローを完全コピーする:
+        1. 氏名（AmiVoice STT — 音声のみ）
+        2. 生年月日（DTMF AmiVoice STT, max_dtmf_length=8 + DOB Re-confirmation）
+        3. 電話番号（incoming-classifier → 携帯/固定分岐 → Phone Normalization → Re-confirmation）
+
+      診察券番号サブフローは接続しない（聴取対象外）。
+      フロー名プレフィックスのみ「北里大学病院TSC$」に置換。構造・接続・スクリプトは一切変更不可。
+
+      電話番号聴取後、結果返却スクリプトでメインフローに返却する。
+    notes: |
+      CLAUDE.md Rule 9/10/11 準拠。
+      個人情報サブフロー.bivr を完全コピー。独自のモジュール追加・削除・接続変更は禁止。
+      フロー名プレフィックスのみ施設名に置換すること。
+      termination: return（メインフローに返却。終話チェーンはメインフロー側に配置）
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "受付"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件区分。本フローでは「受付」のみ"
+
+  - context_name: "officeName"
+    context_name_jp: "事業所名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "訪問看護ステーション等の事業所名"
+
+  - context_name: "staffName"
+    context_name_jp: "担当者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "事業所の担当者名"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "事業所の連絡先電話番号"
+
+  - context_name: "documentType"
+    context_name_jp: "指示書種別"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "訪問看護指示書"
+      - id: "2"
+        order: "2"
+        value: "訪問リハビリテーション指示書"
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "訪問看護指示書 / 訪問リハビリテーション指示書"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "循環器内科"
+      - id: "2"
+        order: "2"
+        value: "消化器内科"
+      - id: "3"
+        order: "3"
+        value: "腎臓内科"
+      - id: "4"
+        order: "4"
+        value: "呼吸器内科"
+      - id: "5"
+        order: "5"
+        value: "血液内科"
+      - id: "6"
+        order: "6"
+        value: "整形外科"
+      - id: "7"
+        order: "7"
+        value: "脳神経外科"
+      - id: "8"
+        order: "8"
+        value: "消化器外科"
+      - id: "9"
+        order: "9"
+        value: "リウマチ膠原病・感染内科"
+      - id: "10"
+        order: "10"
+        value: "リハビリテーション科"
+      - id: "11"
+        order: "11"
+        value: "一般・消化器外科"
+      - id: "12"
+        order: "12"
+        value: "小児科"
+      - id: "13"
+        order: "13"
+        value: "産科"
+      - id: "14"
+        order: "14"
+        value: "耳鼻"
+      - id: "15"
+        order: "15"
+        value: "歯科"
+      - id: "16"
+        order: "16"
+        value: "糖尿・内分泌内科"
+      - id: "17"
+        order: "17"
+        value: "腎臓内科"
+      - id: "18"
+        order: "18"
+        value: "膠原病感染内科"
+      - id: "19"
+        order: "19"
+        value: "泌尿器科"
+      - id: "20"
+        order: "20"
+        value: "脳神経内科"
+      - id: "21"
+        order: "21"
+        value: "形成外科"
+      - id: "22"
+        order: "22"
+        value: "皮膚科・形成外科"
+      - id: "23"
+        order: "23"
+        value: "乳腺甲状腺外科"
+      - id: "24"
+        order: "24"
+        value: "心臓血管外科"
+      - id: "25"
+        order: "25"
+        value: "小児外科"
+      - id: "26"
+        order: "26"
+        value: "総合診療部"
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "診療科。Page 8-9の全科"
+
+  - context_name: "doctorName"
+    context_name_jp: "主治医名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "主治医名"
+
+  - context_name: "patientName"
+    context_name_jp: "患者氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "患者氏名（フルネーム）。個人情報サブフローで聴取"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "患者生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "患者生年月日。個人情報サブフローで聴取"
+
+  - context_name: "treatmentPeriod"
+    context_name_jp: "診療期間"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "診療期間（自由テキスト）"
+
+  - context_name: "instructionStartDate"
+    context_name_jp: "指示期間の開始日"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "指示期間の開始日（自由テキスト）"
+
+  - context_name: "visitingNursingContent"
+    context_name_jp: "訪問看護リハビリテーション内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "訪問看護・リハビリテーションの内容（自由テキスト）"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "0"
+        order: "0"
+        value: "途中切断"
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "転送"
+      - id: "5"
+        order: "5"
+        value: "処理済み"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "0=途中切断 1=未処理 2=代表案内 3=転送 5=処理済み 6=時間外"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "受電日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: true
+    notes: "通話ID自動格納"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "DTMF 1=はい, 2=いいえ。はい→受付続行、いいえ→終話(受付不要)"
+
+  - order: 2
+    name: "事業所名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "officeName"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "音声のみ。訪問看護ステーション等の名称を自由発話で聴取"
+
+  - order: 3
+    name: "担当者名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "staffName"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "音声のみ。事業所側の担当者名を自由発話で聴取"
+
+  - order: 4
+    name: "連絡先電話番号"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 11
+    retry_count: 2
+    echo_back: true
+    save_to: "additionalPhoneNumber"
+    openai_processing: "normalize"
+    output_format: "number"
+    output_labels: []
+    notes: "DTMF+音声。事業所の連絡先電話番号。復唱確認あり。プッシュボタンでも入力可"
+
+  - order: 5
+    name: "指示書種別"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "documentType"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "訪問看護"
+      - "訪問リハビリ"
+    notes: "DTMF 1=訪問看護指示書, 2=訪問リハビリテーション指示書。「わからない場合は『わからない』とおっしゃってください」対応あり"
+
+  - order: 6
+    name: "診療科"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "循環器内科"
+      - "消化器内科"
+      - "腎臓内科"
+      - "呼吸器内科"
+      - "血液内科"
+      - "整形外科"
+      - "脳神経外科"
+      - "消化器外科"
+      - "リウマチ膠原病・感染内科"
+      - "リハビリテーション科"
+      - "一般・消化器外科"
+      - "小児科"
+      - "産科"
+      - "耳鼻"
+      - "歯科"
+      - "糖尿・内分泌内科"
+      - "膠原病感染内科"
+      - "泌尿器科"
+      - "脳神経内科"
+      - "形成外科"
+      - "皮膚科・形成外科"
+      - "乳腺甲状腺外科"
+      - "心臓血管外科"
+      - "小児外科"
+      - "総合診療部"
+    notes: "音声で診療科名を発話。類義語対応あり。「診療科は12番科ですか？」のような確認はしない。わからない場合は「わからない」"
+
+  - order: 7
+    name: "主治医名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "doctorName"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "音声のみ。主治医名を自由発話で聴取"
+
+  - order: 8
+    name: "患者氏名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientName"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "サブフロー内。個人情報サブフロー.bivrの氏名聴取を完全コピー"
+
+  - order: 9
+    name: "患者生年月日"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 8
+    retry_count: 2
+    echo_back: true
+    save_to: "patientDateOfBirth"
+    openai_processing: "convert"
+    output_format: "date_text"
+    output_labels:
+      - "valid"
+      - "不正値"
+      - "2桁_0007"
+      - "2桁_0831"
+      - "2桁_3263"
+    notes: "サブフロー内。DOB Re-confirmation あり。2桁入力時は元号確認ステップへ分岐"
+
+  - order: 10
+    name: "電話番号"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 11
+    retry_count: 2
+    echo_back: true
+    save_to: "additionalPhoneNumber"
+    openai_processing: "normalize"
+    output_format: "number"
+    output_labels: []
+    notes: "サブフロー内。Phone Normalization + Re-confirmation。incoming-classifierで携帯/その他分岐"
+
+  - order: 11
+    name: "診療期間"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "treatmentPeriod"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "音声のみ。「7月の診療期間をお話しください」の文言から自由発話で聴取"
+
+  - order: 12
+    name: "指示期間開始日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "instructionStartDate"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "音声のみ。何月何日からかを自由発話で聴取"
+
+  - order: 13
+    name: "訪問看護リハビリ内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "visitingNursingContent"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "音声のみ。訪問看護/リハビリテーションの内容を自由発話で聴取。要約して保存"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "冒頭_アナウンス"
+    tts_announcement: "こちらは、北里大学病院、訪問看護指示書作成等の専用AI電話受付です。ただいま担当者が不在のため、AI電話がお受けいたします。ショートメールでメッセージ等をお送りする場合がございます。お待たせいたしましてありがとうございました。お電話ありがとうございます。"
+    input_method: null
+    openai_rules: null
+    save_to: null
+    next_step: "確認"
+    retry_failure: null
+
+  - step_name: "確認"
+    tts_announcement: "お伝えいただく内容ですが、外来主治医の訪問看護に関する記載の依頼でお間違えないでしょうか。はいの場合は1を、それ以外の場合は2をお話しください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「はい」「そうです」を含む"
+          output: "はい"
+        - input: "DTMF 2 または「いいえ」「違います」を含む"
+          output: "いいえ"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "classification"
+    next_step: "はい→事業所名 / いいえ→終話_受付不要"
+    retry_failure: "end_failure"
+
+  - step_name: "事業所名"
+    tts_announcement: "お伝えする内容がいくつかございます。外来主治医の訪問看護指示書の記載の依頼でお間違えないでしょうか。おたくの方がお聞きしますので回答をお願いいたします。事業所名をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "事業所名テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "事業所名テキスト（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "officeName"
+    next_step: "担当者名"
+    retry_failure: "end_failure"
+
+  - step_name: "担当者名"
+    tts_announcement: "担当者名をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "担当者名テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "担当者名テキスト（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "staffName"
+    next_step: "連絡先電話番号"
+    retry_failure: "skip"
+
+  - step_name: "連絡先電話番号"
+    tts_announcement: "ご連絡先の電話番号をお話しください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "正規化済み電話番号"
+      mapping:
+        - input: "10〜11桁の数値（先頭0）"
+          output: "正規化済み電話番号"
+      no_result_condition: "電話番号として不正な形式"
+    save_to: "additionalPhoneNumber"
+    next_step: "指示書種別"
+    retry_failure: "end_failure"
+
+  - step_name: "指示書種別"
+    tts_announcement: "ご依頼いただく指示書の種類をお話しください。1、訪問看護指示書。2、訪問リハビリテーション指示書。わからない場合は「わからない」とおっしゃってください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "訪問看護"
+        - "訪問リハビリ"
+        - "わからない"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「訪問看護」「看護」を含む"
+          output: "訪問看護"
+        - input: "DTMF 2 または「訪問リハビリ」「リハビリ」を含む"
+          output: "訪問リハビリ"
+        - input: "「わからない」を含む"
+          output: "わからない"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "documentType"
+    next_step: "診療科"
+    retry_failure: "end_failure"
+
+  - step_name: "診療科"
+    tts_announcement: "診療科をお話しください。「診療科は12番科ですか？」のようにおっしゃってください。わからない場合は「わからない」とおっしゃってください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "循環器内科"
+        - "消化器内科"
+        - "腎臓内科"
+        - "呼吸器内科"
+        - "血液内科"
+        - "整形外科"
+        - "脳神経外科"
+        - "消化器外科"
+        - "リウマチ膠原病・感染内科"
+        - "リハビリテーション科"
+        - "一般・消化器外科"
+        - "小児科"
+        - "産科"
+        - "耳鼻"
+        - "歯科"
+        - "糖尿・内分泌内科"
+        - "膠原病感染内科"
+        - "泌尿器科"
+        - "脳神経内科"
+        - "形成外科"
+        - "皮膚科・形成外科"
+        - "乳腺甲状腺外科"
+        - "心臓血管外科"
+        - "小児外科"
+        - "総合診療部"
+        - "わからない"
+        - "NO_RESULT"
+      mapping:
+        - input: "「循環器内科」「じゅんかんき」を含む"
+          output: "循環器内科"
+        - input: "「消化器内科」「しょうかきないか」を含む"
+          output: "消化器内科"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "clinicalDepartment"
+    next_step: "主治医名"
+    retry_failure: "end_failure"
+
+  - step_name: "主治医名"
+    tts_announcement: "主治医名をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "主治医名テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "主治医名テキスト（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "doctorName"
+    next_step: "サブフロー遷移_個人情報聴取"
+    retry_failure: "skip"
+
+  - step_name: "患者氏名"
+    tts_announcement: "患者さんのお名前をフルネームでお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "氏名テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "氏名テキスト（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "patientName"
+    next_step: "患者生年月日"
+    retry_failure: "skip"
+
+  - step_name: "患者生年月日"
+    tts_announcement: "患者さんの生年月日をお話しください。ダイヤルプッシュの場合は、8桁で入力してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "valid"
+        - "不正値"
+        - "2桁_0007"
+        - "2桁_0831"
+        - "2桁_3263"
+      mapping:
+        - input: "8桁の有効な日付"
+          output: "valid"
+        - input: "不正な形式・存在しない日付"
+          output: "不正値"
+        - input: "2桁入力かつ00〜07の範囲"
+          output: "2桁_0007"
+        - input: "2桁入力かつ08〜31の範囲"
+          output: "2桁_0831"
+        - input: "2桁入力かつ32〜63の範囲"
+          output: "2桁_3263"
+      no_result_condition: "音声認識結果が空または解析不能"
+    save_to: "patientDateOfBirth"
+    next_step: "電話番号_着信番号判定"
+    retry_failure: "skip"
+
+  - step_name: "電話番号"
+    tts_announcement: "ご連絡先の電話番号をお話しください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "正規化済み電話番号"
+      mapping:
+        - input: "10〜11桁の数値（先頭0）"
+          output: "正規化済み電話番号"
+      no_result_condition: "電話番号として不正な形式"
+    save_to: "additionalPhoneNumber"
+    next_step: "結果返却_メインフロー"
+    retry_failure: "end_failure"
+
+  - step_name: "診療期間"
+    tts_announcement: "7月の診療期間をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "診療期間テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "診療期間テキスト（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "treatmentPeriod"
+    next_step: "指示期間開始日"
+    retry_failure: "skip"
+
+  - step_name: "指示期間開始日"
+    tts_announcement: "何月何日からかお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "開始日テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "開始日テキスト（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "instructionStartDate"
+    next_step: "訪問看護リハビリ内容"
+    retry_failure: "skip"
+
+  - step_name: "訪問看護リハビリ内容"
+    tts_announcement: "訪問看護・リハビリテーションの内容をお話しください。例えば「言語療法士または作業療法士、訪問看護週1回から2回」のように、お話しください。できるだけ具体的にお話しいただけると、AIが内容を正しく記録いたします。所要時間は1分程度GPC、AIが解析後クリック聞き取りをさせていただきますのでしばらくお待ちください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "内容テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "内容テキスト（要約テキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "visitingNursingContent"
+    next_step: "END_受付完了"
+    retry_failure: "skip"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  - name: "END_受付完了"
+    condition: "全聴取完了（正常終話）"
+    tts_announcement: "以上で受付が完了いたしました。内容を確認の上、AIが解析後ショートメールにてご連絡を差し上げます。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了"
+
+  - name: "END_受付不要"
+    condition: "確認ステップで「いいえ」を選択"
+    tts_announcement: "承知いたしました。ご用件の確認ができませんでしたので、恐れ入りますが、代表の番号、042-778-9321にお電話をおかけください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_受付不要"
+
+  - name: "END_時間外"
+    condition: "acceptance_times で時間外と判定"
+    tts_announcement: "お電話ありがとうございます。北里大学病院、訪問看護指示書作成等の専用AI電話受付です。ただいまの時間は受付時間外です。受付時間は月曜日から金曜日の8時30分から17時までとなっております。土日祝日および年末年始は受付時間外です。恐れ入りますが、受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_非通知"
+    condition: "incoming-classifier で非通知と判定"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_上限エラー"
+    condition: "リトライ上限到達"
+    tts_announcement: "恐れ入りますがご回答の確認ができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_上限エラー"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  # メインフロー
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "こちらは、北里大学病院、訪問看護指示書作成等の専用AI電話受付です。ただいま担当者が不在のため、AI電話がお受けいたします。ショートメールでメッセージ等をお送りする場合がございます。お待たせいたしましてありがとうございました。お電話ありがとうございます。"
+
+  - module_name: "確認"
+    purpose: "用件確認（はい/いいえ）"
+    announcement: "お伝えいただく内容ですが、外来主治医の訪問看護に関する記載の依頼でお間違えないでしょうか。はいの場合は1を、それ以外の場合は2をお話しください。"
+
+  - module_name: "事業所名"
+    purpose: "事業所名聴取案内"
+    announcement: "事業所名をお話しください。"
+
+  - module_name: "担当者名"
+    purpose: "担当者名聴取案内"
+    announcement: "担当者名をお話しください。"
+
+  - module_name: "連絡先電話番号"
+    purpose: "連絡先電話番号聴取案内"
+    announcement: "ご連絡先の電話番号をお話しください。プッシュボタンでも入力できます。入力の終わりにはシャープを押してください。"
+
+  - module_name: "指示書種別"
+    purpose: "指示書種別聴取案内"
+    announcement: "ご依頼いただく指示書の種類をお話しください。1、訪問看護指示書。2、訪問リハビリテーション指示書。わからない場合は「わからない」とおっしゃってください。"
+
+  - module_name: "診療科"
+    purpose: "診療科聴取案内"
+    announcement: "診療科をお話しください。「診療科は12番科ですか？」のようにおっしゃってください。わからない場合は「わからない」とおっしゃってください。"
+
+  - module_name: "主治医名"
+    purpose: "主治医名聴取案内"
+    announcement: "主治医名をお話しください。"
+
+  - module_name: "診療期間"
+    purpose: "診療期間聴取案内"
+    announcement: "7月の診療期間をお話しください。"
+
+  - module_name: "指示期間開始日"
+    purpose: "指示期間開始日聴取案内"
+    announcement: "何月何日からかお話しください。"
+
+  - module_name: "訪問看護リハビリ内容"
+    purpose: "訪問看護・リハビリテーション内容聴取案内"
+    announcement: "訪問看護・リハビリテーションの内容をお話しください。例えば「言語療法士または作業療法士、訪問看護週1回から2回」のように、お話しください。できるだけ具体的にお話しいただけると、AIが内容を正しく記録いたします。"
+
+  - module_name: "時間外_アナウンス"
+    purpose: "時間外案内"
+    announcement: "お電話ありがとうございます。北里大学病院、訪問看護指示書作成等の専用AI電話受付です。ただいまの時間は受付時間外です。受付時間は月曜日から金曜日の8時30分から17時までとなっております。土日祝日および年末年始は受付時間外です。恐れ入りますが、受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知案内"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。"
+
+  - module_name: "終話_受付不要"
+    purpose: "受付不要終話（いいえ選択時）"
+    announcement: "承知いたしました。ご用件の確認ができませんでしたので、恐れ入りますが、代表の番号、042-778-9321にお電話をおかけください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_受付完了"
+    purpose: "受付完了終話"
+    announcement: "以上で受付が完了いたしました。内容を確認の上、AIが解析後ショートメールにてご連絡を差し上げます。お電話ありがとうございました。"
+
+  - module_name: "END_上限エラー"
+    purpose: "リトライ上限終話"
+    announcement: "恐れ入りますがご回答の確認ができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "通話切断_ガイダンス"
+    purpose: "通話切断時ガイダンス（リトライ上限）"
+    announcement: "恐れ入りますがご回答の確認ができませんでした。今一度おかけ直しいただけますでしょうか。"
+
+  # サブフロー（個人情報聴取 — リファレンスbivrからコピー）
+  - module_name: "患者_氏名"
+    purpose: "患者氏名聴取案内"
+    announcement: "患者さんのお名前をフルネームでお話しください。"
+
+  - module_name: "患者_生年月日"
+    purpose: "患者生年月日聴取案内"
+    announcement: "患者さんの生年月日をお話しください。ダイヤルプッシュの場合は、8桁で入力してください。"
+
+  - module_name: "患者_生年月日_再聴取"
+    purpose: "患者生年月日再聴取"
+    announcement: "恐れ入りますが再度、患者さんの生年月日をお話しください。ダイヤルプッシュの場合は、8桁で入力してください。"
+
+  - module_name: "患者_生年月日_00_07確認"
+    purpose: "元号確認（00-07）"
+    announcement: "令和ですか？平成ですか？"
+
+  - module_name: "患者_生年月日_08_31確認"
+    purpose: "元号確認（08-31）"
+    announcement: "西暦ですか？または昭和、平成ですか？"
+
+  - module_name: "患者_生年月日_32_63確認"
+    purpose: "元号確認（32-63）"
+    announcement: "西暦ですか？昭和ですか？"
+
+  - module_name: "電話番号_聴取"
+    purpose: "電話番号聴取案内"
+    announcement: "ご連絡先の電話番号をお話しください。"
+
+  - module_name: "携帯_確認"
+    purpose: "携帯番号復唱確認"
+    announcement: "ご連絡先の電話番号は{telephoneNumber}でよろしいでしょうか。1、はい。2、いいえ。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "確認"
+    words: |
+      はい はい
+      いいえ いいえ
+      そうです そうです
+      違います ちがいます
+
+  - step_name: "事業所名"
+    words: |
+      訪問看護ステーション ほうもんかんごすてーしょん
+      訪問看護 ほうもんかんご
+      ステーション すてーしょん
+
+  - step_name: "指示書種別"
+    words: |
+      訪問看護指示書 ほうもんかんごしじしょ
+      訪問看護 ほうもんかんご
+      訪問リハビリテーション指示書 ほうもんりはびりてーしょんしじしょ
+      訪問リハビリ ほうもんりはびり
+      リハビリテーション りはびりてーしょん
+      リハビリ りはびり
+      わからない わからない
+
+  - step_name: "診療科"
+    words: |
+      循環器内科 じゅんかんきないか
+      じゅんかんき じゅんかんき
+      しんぞうないか しんぞうないか
+      しんぞう しんぞう
+      消化器内科 しょうかきないか
+      いちょうか いちょうか
+      しょうかきないか しょうかきないか
+      腎臓内科 じんぞうないか
+      じんぞう じんぞう
+      呼吸器内科 こきゅうきないか
+      はいぞうないか はいぞうないか
+      こきゅうきないか こきゅうきないか
+      血液内科 けつえきないか
+      けつえき けつえき
+      整形外科 せいけいげか
+      かんせつ かんせつ
+      こつ こつ
+      じんたいそんしょう じんたいそんしょう
+      せいけいげか せいけいげか
+      せいけいげかがいらい せいけいげかがいらい
+      脳神経外科 のうしんけいげか
+      のうげか のうげか
+      のうしんけい のうしんけい
+      消化器外科 しょうかきげか
+      しょうかきげか しょうかきげか
+      リウマチ膠原病感染内科 りうまちこうげんびょうかんせんないか
+      こうげんびょう こうげんびょう
+      りうまち りうまち
+      リハビリテーション科 りはびりてーしょんか
+      りはびり りはびり
+      一般消化器外科 いっぱんしょうかきげか
+      しょうかきげか しょうかきげか
+      小児科 しょうにか
+      しょうにか しょうにか
+      こども こども
+      産科 さんか
+      さんか さんか
+      耳鼻 じび
+      じびいんこうか じびいんこうか
+      じび じび
+      歯科 しか
+      しか しか
+      糖尿内分泌内科 とうにょうないぶんぴつないか
+      とうにょう とうにょう
+      とうにょうびょう とうにょうびょう
+      ないぶんぴつ ないぶんぴつ
+      膠原病感染内科 こうげんびょうかんせんないか
+      こうげんびょう こうげんびょう
+      かんせんしょう かんせんしょう
+      泌尿器科 ひにょうきか
+      ひにょうきか ひにょうきか
+      脳神経内科 のうしんけいないか
+      のうないか のうないか
+      しんけいないか しんけいないか
+      形成外科 けいせいげか
+      けいせいげか けいせいげか
+      皮膚科形成外科 ひふかけいせいげか
+      ひふか ひふか
+      乳腺甲状腺外科 にゅうせんこうじょうせんげか
+      にゅうせん にゅうせん
+      こうじょうせん こうじょうせん
+      心臓血管外科 しんぞうけっかんげか
+      しんぞうげか しんぞうげか
+      けっかんげか けっかんげか
+      小児外科 しょうにげか
+      しょうにげか しょうにげか
+      総合診療部 そうごうしんりょうぶ
+      そうごう そうごう
+      そうごうしんりょう そうごうしんりょう
+      そうごうないか そうごうないか
+      わからない わからない
+
+  - step_name: "主治医名"
+    words: |
+      （氏名辞書を設定）
+      先生 せんせい
+
+  - step_name: "患者_氏名"
+    words: |
+      （氏名辞書を設定）
+
+  - step_name: "患者_生年月日"
+    words: |
+      （和暦辞書 + month辞書 + day辞書を設定）
+
+  - step_name: "携帯_確認"
+    words: |
+      はい はい
+      いいえ いいえ
+
+  - step_name: "電話番号_確認"
+    words: |
+      はい はい
+      いいえ いいえ
+
+  - step_name: "訪問看護リハビリ内容"
+    words: |
+      訪問看護 ほうもんかんご
+      訪問リハビリテーション ほうもんりはびりてーしょん
+      リハビリテーション りはびりてーしょん
+      リハビリ りはびり
+      理学療法士 りがくりょうほうし
+      作業療法士 さぎょうりょうほうし
+      言語聴覚士 げんごちょうかくし
+      言語療法士 げんごりょうほうし
+      週1回 しゅういっかい
+      週2回 しゅうにかい
+      週3回 しゅうさんかい
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "訪問看護ステーション等からの電話が対象。患者本人からの電話ではない点に注意"
+  - "聴取項目が12項目と多い。事業所情報→指示書情報→患者情報→診療情報の順に聴取"
+  - "個人情報聴取サブフローはリファレンスbivrを完全コピー（CLAUDE.md Rule 9）。対象: 氏名・生年月日・電話番号の3つ。診察券番号は聴取しない"
+  - "電話番号聴取はincoming-classifierで携帯/その他を分岐（CLAUDE.md Rule 10）"
+  - "サブフローの出口に結果返却スクリプトを必ず配置（CLAUDE.md Rule 11）"
+  - "サブフローのtermination: return（メインフローに返却）。終話チェーンはメインフロー側に配置"
+  - "acceptance_timesを使用。祝日除く月〜金 8:30〜17:00"
+  - "確認ステップで「いいえ」の場合、代表番号（042-778-9321）への案内を行い切断"
+  - "診療科は26科。類義語を含むprofile_wordsの設定が重要"
+  - "指示書種別で「わからない」の場合の処理: そのまま「わからない」として保存しフロー続行"
+  - "SMS送信: 受付完了時のみ（smsFlag=1）。文面はDr.JOY側で設定"
+  - "非通知受入拒否: 設定あり。非通知着信は即アナウンス+切断"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "office_id（施設ID）"
+    resolved: false
+  - item: "営業時間（祝日除く月〜金 8:30〜17:00）の最終確認"
+    resolved: false
+  - item: "時間外アナウンスの文言（Page 4の文言を採用）"
+    resolved: true
+  - item: "非通知アナウンスの文言（デフォルト文言を採用）"
+    resolved: true
+  - item: "smsFlag の割り当て（1=受付完了、-1=それ以外）"
+    resolved: true
+  - item: "連絡先電話番号の聴取位置（メインフロー内の事業所連絡先 + サブフローの患者連絡先）"
+    resolved: true
+  - item: "診療期間・指示期間開始日の入力方式（voice_onlyで仮設定）"
+    resolved: true
+  - item: "訪問看護リハビリ内容の入力方式（voice_onlyで仮設定）"
+    resolved: true
+  - item: "環境（デモ環境で仮設定。本番環境用は050-5865-9006で別途作成）"
+    resolved: true

@@ -1,0 +1,644 @@
+# Pattern 6 (テストフロー) - null-check シート 21 ケース集約
+#
+# 受け入れテストシート (null-check 全 27 ケース) のうち、UI 系 6 ケース (NC-301〜306)
+# を除外した 21 ケース。
+#
+# 構造: 各ケース 4 モジュール
+#   {ケース}_setup (inline_script で setResult, または save_context2db で session)
+#   → nullcheck_{ケース} (null_check モジュール)
+#   → Assert_{ケース}_PASS (期待通り、ログ出力)
+#   → Assert_{ケース}_FAIL (期待外、エラーログ)
+#   → 次ケースへ join
+#
+# null-check 仕様 (実機検証済み NC-105):
+#   - drjoy^Context Logic$null-check, params={"key": "..."}
+#   - jumps ^true$/^false$
+#   - 単独 `<%varName%>` のみ getSystemVariableValue 直読み、それ以外モジュール名扱い
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$null_check"
+  flow_name: "テスト$null_check"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$null_check"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] テスト_null_check (21 ケース)");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: NC101_setup
+
+  # ============================================================
+  # NC-101: モジュール名指定で値あり → false 期待
+  # ============================================================
+  - step: NC101_setup
+    type: inline_script
+    body: |
+      $runner.setResult("予約変更");
+    next: nullcheck_NC101
+
+  - step: nullcheck_NC101
+    type: null_check
+    key: "NC101_setup"
+    true_next: Assert_NC101_FAIL
+    false_next: Assert_NC101_PASS
+
+  - step: Assert_NC101_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-101: モジュール名指定 値あり → false");
+      $runner.setResult("ok");
+    next: NC102_setup
+
+  - step: Assert_NC101_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-101: 値ありなのに true");
+      $runner.setResult("ok");
+    next: NC102_setup
+
+  # ============================================================
+  # NC-102: モジュール名指定で結果が null (未実行/存在しないモジュール)
+  # ============================================================
+  - step: NC102_setup
+    type: inline_script
+    body: |
+      $runner.setResult("noop");
+    next: nullcheck_NC102
+
+  - step: nullcheck_NC102
+    type: null_check
+    key: "存在しないモジュール名_NC102"
+    true_next: Assert_NC102_PASS
+    false_next: Assert_NC102_FAIL
+
+  - step: Assert_NC102_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-102: 未実行モジュール → null → true");
+      $runner.setResult("ok");
+    next: NC103_setup
+
+  - step: Assert_NC102_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-102: null なのに false");
+      $runner.setResult("ok");
+    next: NC103_setup
+
+  # ============================================================
+  # NC-103: モジュール名指定で結果が空文字 → true 期待
+  # ============================================================
+  - step: NC103_setup
+    type: inline_script
+    body: |
+      $runner.setResult("");
+    next: nullcheck_NC103
+
+  - step: nullcheck_NC103
+    type: null_check
+    key: "NC103_setup"
+    true_next: Assert_NC103_PASS
+    false_next: Assert_NC103_FAIL
+
+  - step: Assert_NC103_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-103: 空文字 → true");
+      $runner.setResult("ok");
+    next: NC104_setup
+
+  - step: Assert_NC103_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-103: 空文字なのに false");
+      $runner.setResult("ok");
+    next: NC104_setup
+
+  # ============================================================
+  # NC-104: 空白のみ文字列 (trim 判定) → true 期待
+  # ============================================================
+  - step: NC104_setup
+    type: inline_script
+    body: |
+      $runner.setResult("   ");
+    next: nullcheck_NC104
+
+  - step: nullcheck_NC104
+    type: null_check
+    key: "NC104_setup"
+    true_next: Assert_NC104_PASS
+    false_next: Assert_NC104_FAIL
+
+  - step: Assert_NC104_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-104: 空白のみ '   ' → trim 後空 → true");
+      $runner.setResult("ok");
+    next: NC106_setup
+
+  - step: Assert_NC104_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-104: 空白のみで false (trim 未実装?)");
+      $runner.setResult("ok");
+    next: NC106_setup
+
+  # ============================================================
+  # NC-105 は既に テスト_コンテキスト判定 で実機 PASS 済み (省略)
+  # NC-106: <%varName%> で variable に値あり → false 期待
+  # ============================================================
+  - step: NC106_setup
+    type: save_context2db
+    context_name: "phone_106"
+    context_value: "0312345678"
+    next: nullcheck_NC106
+
+  - step: nullcheck_NC106
+    type: null_check
+    key: "<%phone_106%>"
+    true_next: Assert_NC106_FAIL
+    false_next: Assert_NC106_PASS
+
+  - step: Assert_NC106_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-106: <%phone_106%> 値あり → false");
+      $runner.setResult("ok");
+    next: NC107_setup
+
+  - step: Assert_NC106_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-106: 値ありなのに true");
+      $runner.setResult("ok");
+    next: NC107_setup
+
+  # ============================================================
+  # NC-107: <%varName%> で variable が空文字 → true 期待
+  # ============================================================
+  - step: NC107_setup
+    type: save_context2db
+    context_name: "phone_107"
+    context_value: ""
+    next: nullcheck_NC107
+
+  - step: nullcheck_NC107
+    type: null_check
+    key: "<%phone_107%>"
+    true_next: Assert_NC107_PASS
+    false_next: Assert_NC107_FAIL
+
+  - step: Assert_NC107_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-107: <%phone_107%> 空文字 → true");
+      $runner.setResult("ok");
+    next: NC108_setup
+
+  - step: Assert_NC107_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-107: 空文字なのに false");
+      $runner.setResult("ok");
+    next: NC108_setup
+
+  # ============================================================
+  # NC-108: hyphen 入り変数名
+  # ============================================================
+  - step: NC108_setup
+    type: save_context2db
+    context_name: "recipient-name-108"
+    context_value: "山田太郎"
+    next: nullcheck_NC108
+
+  - step: nullcheck_NC108
+    type: null_check
+    key: "<%recipient-name-108%>"
+    true_next: Assert_NC108_FAIL
+    false_next: Assert_NC108_PASS
+
+  - step: Assert_NC108_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-108: hyphen 入り変数 <%recipient-name-108%> 値あり → false");
+      $runner.setResult("ok");
+    next: NC109_setup
+
+  - step: Assert_NC108_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-108: hyphen 入り変数 解決失敗");
+      $runner.setResult("ok");
+    next: NC109_setup
+
+  # ============================================================
+  # NC-109: true/false 両分岐への到達 (label 確認)
+  #   既に NC-101 (false) / NC-102 (true) で両分岐通過済み = 暗黙的に PASS
+  # ============================================================
+  - step: NC109_setup
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-109: ^true$/^false$ 両分岐到達確認 (NC-101/102 で実施済み)");
+      $runner.setResult("ok");
+    next: NC201_setup
+
+  # ============================================================
+  # NC-201: key 未設定 (params 空) → setResult=false silent fail
+  # ============================================================
+  - step: NC201_setup
+    type: inline_script
+    body: |
+      $runner.setResult("noop");
+    next: nullcheck_NC201
+
+  - step: nullcheck_NC201
+    type: null_check
+    key: ""
+    true_next: Assert_NC201_FAIL
+    false_next: Assert_NC201_PASS
+
+  - step: Assert_NC201_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-201: key 未設定 → silent fail false");
+      $runner.setResult("ok");
+    next: NC202_setup
+
+  - step: Assert_NC201_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-201: key 未設定で true (期待: false silent fail)");
+      $runner.setResult("ok");
+    next: NC202_setup
+
+  # ============================================================
+  # NC-202: 数値 0 → false 期待 (空ではない、$runner.setResult(0) で確認)
+  # ============================================================
+  - step: NC202_setup
+    type: inline_script
+    body: |
+      $runner.setResult(0);
+    next: nullcheck_NC202
+
+  - step: nullcheck_NC202
+    type: null_check
+    key: "NC202_setup"
+    true_next: Assert_NC202_FAIL
+    false_next: Assert_NC202_PASS
+
+  - step: Assert_NC202_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-202: 数値 0 → false (空ではない)");
+      $runner.setResult("ok");
+    next: NC203_setup
+
+  - step: Assert_NC202_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-202: 数値 0 を null 扱い (期待: false)");
+      $runner.setResult("ok");
+    next: NC203_setup
+
+  # ============================================================
+  # NC-203: 文字列 'null' リテラル → false 期待 (非空文字列)
+  # ============================================================
+  - step: NC203_setup
+    type: inline_script
+    body: |
+      $runner.setResult("null");
+    next: nullcheck_NC203
+
+  - step: nullcheck_NC203
+    type: null_check
+    key: "NC203_setup"
+    true_next: Assert_NC203_FAIL
+    false_next: Assert_NC203_PASS
+
+  - step: Assert_NC203_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-203: 文字列 'null' → false (非空文字列)");
+      $runner.setResult("ok");
+    next: NC204_setup
+
+  - step: Assert_NC203_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-203: 'null' を null 扱い");
+      $runner.setResult("ok");
+    next: NC204_setup
+
+  # ============================================================
+  # NC-204: 空配列 [] → true 期待
+  # ============================================================
+  - step: NC204_setup
+    type: inline_script
+    body: |
+      $runner.setResult([]);
+    next: nullcheck_NC204
+
+  - step: nullcheck_NC204
+    type: null_check
+    key: "NC204_setup"
+    true_next: Assert_NC204_PASS
+    false_next: Assert_NC204_FAIL
+
+  - step: Assert_NC204_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-204: 空配列 [] → true");
+      $runner.setResult("ok");
+    next: NC205_setup
+
+  - step: Assert_NC204_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-204: 空配列で false (Array.isArray 分岐未動作?)");
+      $runner.setResult("ok");
+    next: NC205_setup
+
+  # ============================================================
+  # NC-205: 要素ありの配列 [1] → false 期待
+  # ============================================================
+  - step: NC205_setup
+    type: inline_script
+    body: |
+      $runner.setResult([1]);
+    next: nullcheck_NC205
+
+  - step: nullcheck_NC205
+    type: null_check
+    key: "NC205_setup"
+    true_next: Assert_NC205_FAIL
+    false_next: Assert_NC205_PASS
+
+  - step: Assert_NC205_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-205: 配列 [1] → false");
+      $runner.setResult("ok");
+    next: NC206_setup
+
+  - step: Assert_NC205_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-205: 要素ある配列で true");
+      $runner.setResult("ok");
+    next: NC206_setup
+
+  # ============================================================
+  # NC-206: 空オブジェクト {} → true 期待
+  # ============================================================
+  - step: NC206_setup
+    type: inline_script
+    body: |
+      $runner.setResult({});
+    next: nullcheck_NC206
+
+  - step: nullcheck_NC206
+    type: null_check
+    key: "NC206_setup"
+    true_next: Assert_NC206_PASS
+    false_next: Assert_NC206_FAIL
+
+  - step: Assert_NC206_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-206: 空オブジェクト {} → true");
+      $runner.setResult("ok");
+    next: NC207_setup
+
+  - step: Assert_NC206_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-206: 空オブジェクトで false (Object.keys 分岐未動作?)");
+      $runner.setResult("ok");
+    next: NC207_setup
+
+  # ============================================================
+  # NC-207: 要素ありオブジェクト {a:1} → false 期待
+  # ============================================================
+  - step: NC207_setup
+    type: inline_script
+    body: |
+      $runner.setResult({a: 1});
+    next: nullcheck_NC207
+
+  - step: nullcheck_NC207
+    type: null_check
+    key: "NC207_setup"
+    true_next: Assert_NC207_FAIL
+    false_next: Assert_NC207_PASS
+
+  - step: Assert_NC207_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-207: オブジェクト {a:1} → false");
+      $runner.setResult("ok");
+    next: NC208_setup
+
+  - step: Assert_NC207_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-207: 要素あるオブジェクトで true");
+      $runner.setResult("ok");
+    next: NC208_setup
+
+  # ============================================================
+  # NC-208: 真偽値 false → false 期待 (直感と逆、最終 return false に落ちる)
+  # ============================================================
+  - step: NC208_setup
+    type: inline_script
+    body: |
+      $runner.setResult(false);
+    next: nullcheck_NC208
+
+  - step: nullcheck_NC208
+    type: null_check
+    key: "NC208_setup"
+    true_next: Assert_NC208_FAIL
+    false_next: Assert_NC208_PASS
+
+  - step: Assert_NC208_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-208: boolean false → result=false (直感と逆、最終 return false に落ちる)");
+      $runner.setResult("ok");
+    next: NC209_setup
+
+  - step: Assert_NC208_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-208: boolean false で result=true (isNullOrEmpty が boolean を空扱いした?)");
+      $runner.setResult("ok");
+    next: NC209_setup
+
+  # ============================================================
+  # NC-209: 存在しないモジュール名 (key= 文字列、モジュール参照)
+  #   ※ NC-102 と本質同じだが、シート上別ケースなので残す
+  # ============================================================
+  - step: NC209_setup
+    type: inline_script
+    body: |
+      $runner.setResult("noop");
+    next: nullcheck_NC209
+
+  - step: nullcheck_NC209
+    type: null_check
+    key: "全く存在しないモジュール名_NC209_xyz"
+    true_next: Assert_NC209_PASS
+    false_next: Assert_NC209_FAIL
+
+  - step: Assert_NC209_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-209: 存在しないモジュール名 → null → true");
+      $runner.setResult("ok");
+    next: NC210_setup
+
+  - step: Assert_NC209_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-209: 存在しないモジュール名で false");
+      $runner.setResult("ok");
+    next: NC210_setup
+
+  # ============================================================
+  # NC-210: 部分テンプレ含む文字列 (onlyVarMatch 不一致 → モジュール名扱い)
+  # ============================================================
+  - step: NC210_setup
+    type: save_context2db
+    context_name: "phone_210"
+    context_value: "0312345678"
+    next: nullcheck_NC210
+
+  - step: nullcheck_NC210
+    type: null_check
+    key: "prefix_<%phone_210%>_suffix"
+    true_next: Assert_NC210_PASS
+    false_next: Assert_NC210_FAIL
+
+  - step: Assert_NC210_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-210: prefix_<%var%>_suffix はモジュール名扱い → null → true");
+      $runner.setResult("ok");
+    next: NC401_setup
+
+  - step: Assert_NC210_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-210: 部分テンプレが direct resolve された (仕様外)");
+      $runner.setResult("ok");
+    next: NC401_setup
+
+  # ============================================================
+  # NC-401: hearing → null-check → 再聴取ループ (Pattern 6 では hearing 無いので
+  #   save_context2db で空文字 set → null-check true → 再 save → null-check false
+  #   のフロー で代替)
+  # ============================================================
+  - step: NC401_setup
+    type: save_context2db
+    context_name: "phone_401"
+    context_value: ""
+    next: nullcheck_NC401_first
+
+  - step: nullcheck_NC401_first
+    type: null_check
+    key: "<%phone_401%>"
+    true_next: NC401_retry  # 空 → 再聴取側
+    false_next: Assert_NC401_FAIL  # 空なのに false → エラー
+
+  - step: NC401_retry
+    type: save_context2db
+    context_name: "phone_401"
+    context_value: "0987654321"
+    next: nullcheck_NC401_second
+
+  - step: nullcheck_NC401_second
+    type: null_check
+    key: "<%phone_401%>"
+    true_next: Assert_NC401_FAIL  # 値あるのに true → エラー
+    false_next: Assert_NC401_PASS  # 値ある → 先へ
+
+  - step: Assert_NC401_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-401: 空→true (再聴取側)、再 set 後 値あり→false (先へ進む)");
+      $runner.setResult("ok");
+    next: NC402_setup
+
+  - step: Assert_NC401_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-401: 再聴取ループ分岐失敗");
+      $runner.setResult("ok");
+    next: NC402_setup
+
+  # ============================================================
+  # NC-402: echo_back 後の null-check (patient_name)
+  # ============================================================
+  - step: NC402_setup
+    type: save_context2db
+    context_name: "patient_name_402"
+    context_value: "山田太郎"
+    next: nullcheck_NC402
+
+  - step: nullcheck_NC402
+    type: null_check
+    key: "<%patient_name_402%>"
+    true_next: Assert_NC402_FAIL
+    false_next: Assert_NC402_PASS
+
+  - step: Assert_NC402_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] NC-402: <%patient_name_402%> 値あり → false");
+      $runner.setResult("ok");
+    next: 集計
+
+  - step: Assert_NC402_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] NC-402: 患者氏名あるのに true");
+      $runner.setResult("ok");
+    next: 集計
+
+  # ============================================================
+  # 終了
+  # ============================================================
+  - step: 集計
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST REPORT] null-check 21 ケース 全テスト完了");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: TTS_テスト完了
+
+  - step: TTS_テスト完了
+    type: announcement
+    prompt: "{tts_g:テスト完了}"
+    next: 切断_テスト終了
+
+  - step: 切断_テスト終了
+    type: termination

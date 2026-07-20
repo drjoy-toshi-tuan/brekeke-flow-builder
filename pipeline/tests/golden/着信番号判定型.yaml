@@ -1,0 +1,341 @@
+# テストベクター — 着信番号判定型
+# 着信電話番号による携帯/固定分岐、復唱確認、手動聴取、Phone Normalizationをテスト
+# 海老名総合病院の連絡先_着信番号判定(generate_by_OpenAI)→
+# 連絡先電話番号_確認→連絡先電話番号_手動聴取 の一連のフローを対象
+pattern: "着信番号判定型"
+description: >
+  着信電話番号に基づく分岐ロジックをテストする。
+  携帯番号(090/080/070)の場合は着信番号を復唱確認→肯定で使用、
+  固定電話/非通知の場合は手動聴取ルートへ遷移するパターンを網羅。
+  Phone Normalization(桁数・先頭0チェック)のバリデーション、
+  リトライ上限、phonetypeコンテキストの正しさを検証する。
+
+test_vectors:
+  # --- happy_path ---
+
+  - name: "happy_path_携帯_肯定"
+    description: >
+      090番号着信→着信番号判定でtelephoneNumberあり→
+      復唱確認「はい」→着信番号をそのまま使用→最後の問い合わせへ
+    category: "happy_path"
+    preconditions:
+      telephoneNumber: "09012345678"
+      classification: "予約変更"
+      patientId: "1234567"
+      patientName: "山田太郎"
+      patientDateOfBirth: "1980-04-15"
+    inputs:
+      - module: "OpenAI_連絡先_着信番号判定"
+        type: "stt_result"
+        value: ""
+        expected_openai_output: "09012345678"
+      - module: "入力_連絡先電話番号_確認"
+        type: "stt_result"
+        value: "はい"
+        expected_openai_output: "はい"
+      - module: "入力_最後の問い合わせ"
+        type: "stt_result"
+        value: "ありません"
+        expected_openai_output: "なし"
+    expected_path:
+      - "OpenAI_連絡先_着信番号判定"
+      - "連絡先電話番号_確認"
+      - "入力_連絡先電話番号_確認"
+      - "OpenAI_連絡先電話番号_確認"
+      - "最後の問い合わせ"
+      - "入力_最後の問い合わせ"
+      - "OpenAI_最後の問い合わせ"
+      - "完了フラグ_受付完了"
+      - "END_受付完了"
+    expected_terminal: "END_受付完了"
+    expected_context:
+      telephoneNumber: "09012345678"
+    expected_status: "1"
+    expected_sms_flag: "1"
+
+  - name: "happy_path_携帯_否定"
+    description: >
+      090番号着信→着信番号判定でtelephoneNumberあり→
+      復唱確認「いいえ」→手動聴取ルートへ遷移→別番号を入力→END
+    category: "happy_path"
+    preconditions:
+      telephoneNumber: "09012345678"
+      classification: "予約変更"
+      patientId: "1234567"
+      patientName: "山田太郎"
+      patientDateOfBirth: "1980-04-15"
+    inputs:
+      - module: "OpenAI_連絡先_着信番号判定"
+        type: "stt_result"
+        value: ""
+        expected_openai_output: "09012345678"
+      - module: "入力_連絡先電話番号_確認"
+        type: "stt_result"
+        value: "違います"
+        expected_openai_output: "いいえ"
+      - module: "入力_連絡先電話番号_手動聴取"
+        type: "dtmf"
+        value: "08098765432"
+        expected_openai_output: "valid"
+      - module: "入力_最後の問い合わせ"
+        type: "stt_result"
+        value: "ありません"
+        expected_openai_output: "なし"
+    expected_path:
+      - "OpenAI_連絡先_着信番号判定"
+      - "連絡先電話番号_確認"
+      - "入力_連絡先電話番号_確認"
+      - "OpenAI_連絡先電話番号_確認"
+      - "連絡先電話番号_手動聴取"
+      - "入力_連絡先電話番号_手動聴取"
+      - "OpenAI_連絡先電話番号_手動聴取"
+      - "saveContext_additionalPhoneNumber"
+      - "最後の問い合わせ"
+      - "入力_最後の問い合わせ"
+      - "OpenAI_最後の問い合わせ"
+      - "完了フラグ_受付完了"
+      - "END_受付完了"
+    expected_terminal: "END_受付完了"
+    expected_context:
+      telephoneNumber: "09012345678"
+      additionalPhoneNumber: "08098765432"
+    expected_status: "1"
+    expected_sms_flag: "1"
+
+  - name: "happy_path_固定"
+    description: >
+      03番号着信→着信番号判定でtelephoneNumber空(非通知ではなく固定扱い)→
+      手動聴取→Phone Normalization(10-11桁・先頭0)→valid→
+      最後の問い合わせへ→END
+    category: "happy_path"
+    preconditions:
+      telephoneNumber: ""
+      classification: "予約確認"
+      patientId: "7654321"
+      patientName: "佐藤花子"
+      patientDateOfBirth: "1975-01-01"
+    inputs:
+      - module: "OpenAI_連絡先_着信番号判定"
+        type: "stt_result"
+        value: ""
+        expected_openai_output: ""
+      - module: "入力_連絡先電話番号_手動聴取"
+        type: "dtmf"
+        value: "0312345678"
+        expected_openai_output: "valid"
+      - module: "入力_最後の問い合わせ"
+        type: "stt_result"
+        value: "ありません"
+        expected_openai_output: "なし"
+    expected_path:
+      - "OpenAI_連絡先_着信番号判定"
+      - "連絡先電話番号_手動聴取"
+      - "入力_連絡先電話番号_手動聴取"
+      - "OpenAI_連絡先電話番号_手動聴取"
+      - "saveContext_additionalPhoneNumber"
+      - "最後の問い合わせ"
+      - "入力_最後の問い合わせ"
+      - "OpenAI_最後の問い合わせ"
+      - "完了フラグ_受付完了"
+      - "END_受付完了"
+    expected_terminal: "END_受付完了"
+    expected_context:
+      additionalPhoneNumber: "0312345678"
+    expected_status: "1"
+    expected_sms_flag: "1"
+
+  # --- retry ---
+
+  - name: "retry_電話番号_timeout"
+    description: >
+      電話番号手動聴取でTIMEOUT→リトライ→再入力成功→END
+    category: "retry"
+    preconditions:
+      telephoneNumber: ""
+      classification: "予約変更"
+      patientId: "5555555"
+      patientName: "鈴木一郎"
+      patientDateOfBirth: "1990-06-01"
+    inputs:
+      - module: "OpenAI_連絡先_着信番号判定"
+        type: "stt_result"
+        value: ""
+        expected_openai_output: ""
+      - module: "入力_連絡先電話番号_手動聴取"
+        type: "timeout"
+        value: ""
+        expected_openai_output: "TIMEOUT"
+      - module: "入力_連絡先電話番号_手動聴取"
+        type: "dtmf"
+        value: "09055556666"
+        expected_openai_output: "valid"
+      - module: "入力_最後の問い合わせ"
+        type: "stt_result"
+        value: "ありません"
+        expected_openai_output: "なし"
+    expected_path:
+      - "OpenAI_連絡先_着信番号判定"
+      - "連絡先電話番号_手動聴取"
+      - "入力_連絡先電話番号_手動聴取"
+      - "リトライ_連絡先電話番号_手動聴取"
+      - "連絡先電話番号_手動聴取"
+      - "入力_連絡先電話番号_手動聴取"
+      - "OpenAI_連絡先電話番号_手動聴取"
+      - "saveContext_additionalPhoneNumber"
+      - "最後の問い合わせ"
+      - "入力_最後の問い合わせ"
+      - "OpenAI_最後の問い合わせ"
+      - "完了フラグ_受付完了"
+      - "END_受付完了"
+    expected_terminal: "END_受付完了"
+    expected_context:
+      additionalPhoneNumber: "09055556666"
+    expected_status: "1"
+    expected_sms_flag: "1"
+
+  # --- edge_case ---
+
+  - name: "edge_case_電話番号上限"
+    description: >
+      手動聴取で不正値→手動再聴取でも不正値→Retry(retry_count=1)上限→
+      No more→完了フラグ_電話番号聴取失敗→END_電話番号聴取失敗→切断
+    category: "edge_case"
+    preconditions:
+      telephoneNumber: ""
+      classification: "予約変更"
+      patientId: "8888888"
+      patientName: "高橋美咲"
+      patientDateOfBirth: "1985-03-15"
+    inputs:
+      - module: "OpenAI_連絡先_着信番号判定"
+        type: "stt_result"
+        value: ""
+        expected_openai_output: ""
+      - module: "入力_連絡先電話番号_手動聴取"
+        type: "stt_result"
+        value: "123"
+        expected_openai_output: "不正値"
+      - module: "入力_連絡先電話番号_手動再聴取"
+        type: "stt_result"
+        value: "45678"
+        expected_openai_output: "不正値"
+    expected_path:
+      - "OpenAI_連絡先_着信番号判定"
+      - "連絡先電話番号_手動聴取"
+      - "入力_連絡先電話番号_手動聴取"
+      - "OpenAI_連絡先電話番号_手動聴取"
+      - "連絡先電話番号_手動再聴取"
+      - "入力_連絡先電話番号_手動再聴取"
+      - "OpenAI_連絡先電話番号_手動再聴取"
+      - "リトライ_連絡先電話番号_手動再聴取"
+      - "完了フラグ_電話番号聴取失敗"
+      - "END_電話番号聴取失敗"
+    expected_terminal: "END_電話番号聴取失敗"
+    expected_context: {}
+    expected_status: "1"
+    expected_sms_flag: "1"
+    notes: >
+      連絡先電話番号_手動再聴取のretry_countは1(デフォルト2から変更)。
+      不正値→Retry(No more)で即座にEND_電話番号聴取失敗へ遷移。
+
+  - name: "edge_case_Phone_Normalization_失敗"
+    description: >
+      手動聴取で不正な番号(桁数不足/先頭0なし)→不正値→
+      手動再聴取で正しい番号→valid→END
+    category: "edge_case"
+    preconditions:
+      telephoneNumber: ""
+      classification: "予約キャンセル"
+      patientId: "3333333"
+      patientName: "中村三郎"
+      patientDateOfBirth: "2000-01-01"
+    inputs:
+      - module: "OpenAI_連絡先_着信番号判定"
+        type: "stt_result"
+        value: ""
+        expected_openai_output: ""
+      - module: "入力_連絡先電話番号_手動聴取"
+        type: "dtmf"
+        value: "12345"
+        expected_openai_output: "不正値"
+      - module: "入力_連絡先電話番号_手動再聴取"
+        type: "dtmf"
+        value: "09012340000"
+        expected_openai_output: "valid"
+      - module: "入力_最後の問い合わせ"
+        type: "stt_result"
+        value: "ありません"
+        expected_openai_output: "なし"
+    expected_path:
+      - "OpenAI_連絡先_着信番号判定"
+      - "連絡先電話番号_手動聴取"
+      - "入力_連絡先電話番号_手動聴取"
+      - "OpenAI_連絡先電話番号_手動聴取"
+      - "連絡先電話番号_手動再聴取"
+      - "入力_連絡先電話番号_手動再聴取"
+      - "OpenAI_連絡先電話番号_手動再聴取"
+      - "saveContext_additionalPhoneNumber"
+      - "最後の問い合わせ"
+      - "入力_最後の問い合わせ"
+      - "OpenAI_最後の問い合わせ"
+      - "完了フラグ_受付完了"
+      - "END_受付完了"
+    expected_terminal: "END_受付完了"
+    expected_context:
+      additionalPhoneNumber: "09012340000"
+    expected_status: "1"
+    expected_sms_flag: "1"
+    notes: >
+      Phone Normalization条件: 10-11桁かつ先頭0 → valid、それ以外 → 不正値。
+      5桁の「12345」は先頭が1で桁数も不足のため不正値と判定。
+
+  # --- context ---
+
+  - name: "context_phonetype"
+    description: >
+      携帯番号で着信+確認「はい」の場合→phonetypeコンテキストに
+      正しい値が設定されることを検証。
+      着信番号がある場合は telephoneNumber に自動格納済み、
+      手動聴取した場合は additionalPhoneNumber に格納。
+    category: "context"
+    preconditions:
+      telephoneNumber: "07012345678"
+      classification: "予約変更"
+      patientId: "4444444"
+      patientName: "渡辺四郎"
+      patientDateOfBirth: "1965-12-25"
+    inputs:
+      - module: "OpenAI_連絡先_着信番号判定"
+        type: "stt_result"
+        value: ""
+        expected_openai_output: "07012345678"
+      - module: "入力_連絡先電話番号_確認"
+        type: "stt_result"
+        value: "はい"
+        expected_openai_output: "はい"
+      - module: "入力_最後の問い合わせ"
+        type: "stt_result"
+        value: "ありません"
+        expected_openai_output: "なし"
+    expected_path:
+      - "OpenAI_連絡先_着信番号判定"
+      - "連絡先電話番号_確認"
+      - "入力_連絡先電話番号_確認"
+      - "OpenAI_連絡先電話番号_確認"
+      - "最後の問い合わせ"
+      - "入力_最後の問い合わせ"
+      - "OpenAI_最後の問い合わせ"
+      - "完了フラグ_受付完了"
+      - "END_受付完了"
+    expected_terminal: "END_受付完了"
+    expected_context:
+      telephoneNumber: "07012345678"
+    expected_status: "1"
+    expected_sms_flag: "1"
+    notes: >
+      phonetype判定ロジック(script_携帯判別による正規表現判定):
+        090/080/070 プレフィックス → 携帯
+        それ以外(03/045/046等) → その他
+      海老名総合病院のフローでは telephoneNumber は incoming-classifier で
+      自動格納されるため、着信番号が携帯の場合は復唱確認のみ。
+      復唱確認で「いいえ」→手動聴取した番号は additionalPhoneNumber に格納。

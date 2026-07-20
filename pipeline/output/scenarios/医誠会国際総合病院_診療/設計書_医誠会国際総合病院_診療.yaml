@@ -1,0 +1,916 @@
+# 設計書 — 医誠会国際総合病院 診療（予約専用AI電話）
+# 生成元: @director エージェント
+# 生成日: 2026/04/23
+# 元資料: docs/reference/customer_docs/【診療1】：医誠会国際総合病院.md
+# BLOCKER: なし（非通知受入拒否=設定しない の挙動調整は NON-BLOCKER として運用確認で対応）
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "医誠会国際総合病院"
+  group_name: "医誠会国際総合病院"
+  flow_name: "医誠会国際総合病院$診療"
+  target_facility: "本院のみ"
+  office_id: "TODO_要確認"
+  phone_number: "0570-099-166"
+  business_hours: "祝日・年末年始を除く 月〜金 8:30〜17:00"
+  flow_type: "subflow"
+  work_type: "new"
+  environment: "demo"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "医誠会国際総合病院$診療"
+      role: "main"
+      description: >
+        予約専用AI電話メインフロー。冒頭チェーン → 診療科聴取（メインフロー内 hearing）
+        → 診察券番号・氏名・生年月日・電話番号の各サブフロー → 16:00 を境にした時間帯別終話。
+  subflows:
+    - name: "医誠会国際総合病院$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "個人情報サブフロー.bivr の氏名聴取を完全コピー。復唱なし（customer_doc 準拠）。"
+    - name: "医誠会国際総合病院$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "DOB Re-confirmation あり。西暦8桁 DTMF 対応。customer_doc の復唱あり指定に合致"
+    - name: "医誠会国際総合病院$診察券番号聴取"
+      target: "診察券番号聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: >
+        サンプルの診察券番号聴取サブフローをコピー。8 桁以内でバリデーション。
+        「わからない／持っていない」→ 空文字格納 → メインへ戻る。
+        サブフロー内リトライ失敗時は空文字のまま次のサブフローへ（skip 相当）。
+    - name: "医誠会国際総合病院$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: >
+        incoming-classifier で携帯/固定/非通知/海外を分岐する標準サブフロー。
+        携帯/固定は着信番号を復唱（customer_doc: 「今おかけいただいている XX-XXXX-XXXX でよろしいですか？」）、
+        非通知は音声/DTMF で連絡先を聴取（customer_doc: 「日中連絡のとれる携帯電話番号、
+        もしくは、0から始まる市外局番の電話番号をお話ください」）。
+        Phone Normalization + Re-confirmation を経由。
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  医誠会国際総合病院の予約専用AI電話として、月〜金 8:30〜17:00（祝日・年末年始を除く）
+  の稼働時間内に患者からの電話を受け付け、以下の情報を聴取して担当者の折り返し対応につなぐ:
+    - 診療科（わからない／聴取失敗時は「登録なし」として次へ進む）
+    - 診察券番号（わからない／聴取失敗時は空文字として次へ進む）
+    - 氏名
+    - 生年月日（復唱あり）
+    - 連絡先電話番号（復唱あり。非通知時は音声で聴取）
+  16:00 を境に終話アナウンス文言が変化する（前半: 順番に折り返し / 後半: 翌診療日までに折り返し）。
+  SMS 送信は行わず、全ルートで smsFlag=-1 に統一する。非通知着信も受け付ける（非通知受入拒否=設定しない）。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "医誠会国際総合病院$診療"
+    diagram: |
+      冒頭(wait 2000ms)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → 完了フラグ_非通知 → 切断
+            │          ※ 要運用確認: 顧客仕様「非通知受入拒否=設定しない」に沿って
+            │            非通知着信を冒頭_アナウンスへ合流させる場合は手動配線が必要
+            └─ 固定/携帯/海外/WebRTC/その他 → 受付時間判定(acceptance_times)
+                  ├─ 時間外 → 完了フラグ_時間外 → 切断
+                  └─ 受付可 → 冒頭_アナウンス(TTS)
+                                → 診療科(TTS → AmiVoice STT → OpenAI → Retry)
+                                    ├─ リスト該当 → saveContext_診療科
+                                    ├─ 「わからない」 → 登録なし
+                                    ├─ NO_RESULT → saveDefault 登録なし → リトライ
+                                    └─ リトライ失敗 → skip（登録なしのまま次へ）
+                                → [診察券番号聴取サブフロー] (Custom Jump to Flow)
+                                    └─ 「わからない」／失敗 → 空文字格納
+                                → [氏名聴取サブフロー] (Custom Jump to Flow)
+                                → [生年月日聴取サブフロー] (Custom Jump to Flow, 復唱あり)
+                                → [電話番号聴取サブフロー] (Custom Jump to Flow, 復唱あり)
+                                    ├─ 携帯/固定: 着信番号を復唱確認
+                                    └─ 非通知: 音声/DTMF で聴取＋復唱
+                                → 終話分岐_時間帯(Script: business_hours START=8 END=16)
+                                    ├─ 営業時間内（8:30〜15:59）→ END_受付完了_前半
+                                    └─ 営業時間外（16:00〜16:59）→ END_受付完了_後半
+
+      === 終話パス ===
+      END_受付完了_前半 → 完了フラグ_受付完了_前半(status=1, smsFlag=-1) → 切断
+      END_受付完了_後半 → 完了フラグ_受付完了_後半(status=1, smsFlag=-1) → 切断
+      END_非通知       → 完了フラグ_非通知(status=2, smsFlag=-1) → 切断  ※ 要運用確認
+      END_時間外       → 完了フラグ_時間外(status=6, smsFlag=-1) → 切断
+      END_聴取失敗     → 完了フラグ_聴取失敗(status=2, smsFlag=-1) → 切断
+    notes: |
+      - acceptance_times 使用。月〜金 8:30〜17:00（詳細スケジュールは Dr.JOY 側で設定）
+      - 非通知受入拒否=設定しない → scaffold のデフォルト配線は END_非通知 へ分岐するため、
+        本番運用前に「非通知着信を冒頭_アナウンスに合流させる」修正を fixer もしくは
+        人手で適用するか判断する（confirmation_items N-1）
+      - 16:00 での時間帯分岐は Brekeke Script（business_hours テンプレ）で実装。
+        より厳密な「16:00:00」境界判定が必要な場合は DateOfCall Classifier への切替を検討
+      - 診療科 NO_RESULT は「登録なし」を saveContext2DB → リトライへ戻す（モジュール選定ガイド 2.5）
+      - 診療科・診察券番号のリトライ失敗は skip（登録なし／空文字を保持して次へ進む）
+      - 氏名・生年月日・電話番号のリトライ失敗は end_failure（END_聴取失敗へ）
+      - SMS は全ルート不使用（smsFlag=-1 統一）
+      - 聴取失敗アナウンス文言（customer_doc 64-74 行）で施設固有の「順番に折り返し対応」
+        「翌診療日までに順番に折り返し対応」表現を利用。retry_failure_announcement は
+        時間帯の違いを gen_properties のデフォルトで吸収できないため、
+        段階的改善として `END_聴取失敗` 単一終話を採用（confirmation_items N-2）
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭 ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 診療科
+
+  # --- 診療科聴取（メインフロー内 hearing）---
+  - step: 診療科
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    conditions:
+      - match: "default"
+        next: jump_診察券番号聴取
+
+  # --- 個人情報サブフロー群（customer_doc 聴取順）---
+  - step: jump_診察券番号聴取
+    type: subflow
+    flowname: "医誠会国際総合病院$診察券番号聴取"
+    next: jump_氏名聴取
+
+  - step: jump_氏名聴取
+    type: subflow
+    flowname: "医誠会国際総合病院$氏名聴取"
+    next: jump_生年月日聴取
+
+  - step: jump_生年月日聴取
+    type: subflow
+    flowname: "医誠会国際総合病院$生年月日聴取"
+    next: jump_電話番号聴取
+
+  - step: jump_電話番号聴取
+    type: subflow
+    flowname: "医誠会国際総合病院$電話番号聴取"
+    next: 終話分岐_時間帯
+
+  # --- 16:00 境界の時間帯分岐 ---
+  - step: 終話分岐_時間帯
+    type: script
+    script_template: business_hours
+    template_params:
+      START_HOUR: 8
+      END_HOUR: 16
+    conditions:
+      - match: "営業時間内"
+        next: END_受付完了_前半
+      - match: "営業時間外"
+        next: END_受付完了_後半
+
+  # --- 終話（時間帯別）---
+  - step: END_受付完了_前半
+    type: termination
+    termination_ref: "END_受付完了_前半"
+
+  - step: END_受付完了_後半
+    type: termination
+    termination_ref: "END_受付完了_後半"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "予約"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "用件は「予約」単一（customer_doc 用件①=予約のみ）。固定値で保存"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "氏名聴取サブフローで格納。フルネーム"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "8桁以内の半角数字。わからない／聴取失敗時は空文字"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "YYYY-MM-DD 00:00。DOB Re-confirmation で復唱"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "非通知時は聴取した番号。携帯/固定時は着信番号を流用"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "内科"
+      - id: "2"
+        order: "2"
+        value: "総合診療科"
+      - id: "3"
+        order: "3"
+        value: "呼吸器"
+      - id: "4"
+        order: "4"
+        value: "消化器"
+      - id: "5"
+        order: "5"
+        value: "循環器"
+      - id: "6"
+        order: "6"
+        value: "腎臓"
+      - id: "7"
+        order: "7"
+        value: "糖尿病内科"
+      - id: "8"
+        order: "8"
+        value: "血液"
+      - id: "9"
+        order: "9"
+        value: "腫瘍"
+      - id: "10"
+        order: "10"
+        value: "リウマチ"
+      - id: "11"
+        order: "11"
+        value: "骨粗鬆症"
+      - id: "12"
+        order: "12"
+        value: "心臓血管"
+      - id: "13"
+        order: "13"
+        value: "末梢血管"
+      - id: "14"
+        order: "14"
+        value: "肛門"
+      - id: "15"
+        order: "15"
+        value: "泌尿器"
+      - id: "16"
+        order: "16"
+        value: "乳腺内分泌外科"
+      - id: "17"
+        order: "17"
+        value: "小児"
+      - id: "18"
+        order: "18"
+        value: "救急科"
+      - id: "19"
+        order: "19"
+        value: "耳鼻咽喉科"
+      - id: "20"
+        order: "20"
+        value: "整形外科"
+      - id: "21"
+        order: "21"
+        value: "リハビリテーション科"
+      - id: "22"
+        order: "22"
+        value: "皮膚科"
+      - id: "23"
+        order: "23"
+        value: "形成外科"
+      - id: "24"
+        order: "24"
+        value: "脳神経内科"
+      - id: "25"
+        order: "25"
+        value: "精神神経科"
+      - id: "26"
+        order: "26"
+        value: "脳神経外科"
+      - id: "27"
+        order: "27"
+        value: "脊椎脊髄外科"
+      - id: "28"
+        order: "28"
+        value: "麻酔科"
+      - id: "29"
+        order: "29"
+        value: "産婦人科"
+      - id: "30"
+        order: "30"
+        value: "産科"
+      - id: "31"
+        order: "31"
+        value: "婦人科"
+      - id: "32"
+        order: "32"
+        value: "脳神経"
+      - id: "33"
+        order: "33"
+        value: "放射線診断科"
+      - id: "34"
+        order: "34"
+        value: "放射線治療科"
+      - id: "35"
+        order: "35"
+        value: "核医学診断科"
+      - id: "36"
+        order: "36"
+        value: "放射線科"
+      - id: "37"
+        order: "37"
+        value: "歯科・矯正歯科"
+      - id: "38"
+        order: "38"
+        value: "歯科口腔外科"
+      - id: "39"
+        order: "39"
+        value: "美容皮膚科・美容外科"
+      - id: "40"
+        order: "40"
+        value: "国際診療部"
+      - id: "41"
+        order: "41"
+        value: "遺伝子診療部"
+      - id: "42"
+        order: "42"
+        value: "「胸のかたち」治療センター"
+      - id: "43"
+        order: "43"
+        value: "健診センター"
+      - id: "44"
+        order: "44"
+        value: "人間ドック"
+      - id: "45"
+        order: "45"
+        value: "脳神経センター"
+      - id: "46"
+        order: "46"
+        value: "小児センター"
+      - id: "47"
+        order: "47"
+        value: "超音波診断治療センター"
+      - id: "48"
+        order: "48"
+        value: "禁煙外来"
+      - id: "49"
+        order: "49"
+        value: "病理診断科"
+      - id: "50"
+        order: "50"
+        value: "臨床検査科"
+      - id: "51"
+        order: "51"
+        value: "登録なし"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "customer_doc 診療科一覧 50 科 + 「登録なし」。わからない／NO_RESULT 時は「登録なし」を格納"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "転送"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: >
+      customer_doc 状態定義から 0(途中切断)/4(処理中)/5(処理済み) を除外し、
+      1=未処理 / 2=代表案内（非通知・聴取失敗）/ 3=転送（現フローでは未使用・予約用） / 6=時間外 に集約。
+      Gen3 status 許可値 (1/2/3/6/7/8/9) 準拠。4/5 は Dr.JOY 側のワークフロー管理値のため除外。
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "受電日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: true
+    notes: "通話ID自動格納"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "診療科"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "内科"
+      - "総合診療科"
+      - "呼吸器"
+      - "消化器"
+      - "循環器"
+      - "腎臓"
+      - "糖尿病内科"
+      - "血液"
+      - "腫瘍"
+      - "リウマチ"
+      - "骨粗鬆症"
+      - "心臓血管"
+      - "末梢血管"
+      - "肛門"
+      - "泌尿器"
+      - "乳腺内分泌外科"
+      - "小児"
+      - "救急科"
+      - "耳鼻咽喉科"
+      - "整形外科"
+      - "リハビリテーション科"
+      - "皮膚科"
+      - "形成外科"
+      - "脳神経内科"
+      - "精神神経科"
+      - "脳神経外科"
+      - "脊椎脊髄外科"
+      - "麻酔科"
+      - "産婦人科"
+      - "産科"
+      - "婦人科"
+      - "脳神経"
+      - "放射線診断科"
+      - "放射線治療科"
+      - "核医学診断科"
+      - "放射線科"
+      - "歯科・矯正歯科"
+      - "歯科口腔外科"
+      - "美容皮膚科・美容外科"
+      - "国際診療部"
+      - "遺伝子診療部"
+      - "「胸のかたち」治療センター"
+      - "健診センター"
+      - "人間ドック"
+      - "脳神経センター"
+      - "小児センター"
+      - "超音波診断治療センター"
+      - "禁煙外来"
+      - "病理診断科"
+      - "臨床検査科"
+      - "登録なし"
+    notes: >
+      リスト 50 科 + 登録なし。「わからない」「分からない」発話は「登録なし」に分類。
+      NO_RESULT は saveContext2DB(value="登録なし") を経由してリトライ（モジュール選定ガイド 2.5）。
+      customer_doc 記載の類義語キーワードは amivoice_dictionary セクションに登録。
+
+  - order: 2
+    name: "診察券番号"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 8
+    retry_count: 1
+    echo_back: false
+    save_to: "medicalCardNumber"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: >
+      サブフロー（医誠会国際総合病院$診察券番号聴取）で聴取。8 桁以内。
+      「わからない」「持っていない」→ 空文字格納して次へ。
+      サブフロー内リトライ失敗時も空文字のまま次のサブフローへ進む（skip 相当）。
+      DTMF 8 桁入力可。
+
+  - order: 3
+    name: "氏名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "patientName"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: >
+      サブフロー（医誠会国際総合病院$氏名聴取）で聴取。復唱なし。
+      リトライ失敗時は END_聴取失敗 へ（customer_doc 失敗アナウンス該当）。
+
+  - order: 4
+    name: "生年月日"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 8
+    retry_count: 1
+    echo_back: true
+    save_to: "patientDateOfBirth"
+    openai_processing: "convert"
+    output_format: "datetime"
+    output_labels: []
+    notes: >
+      サブフロー（医誠会国際総合病院$生年月日聴取）で聴取。DOB Re-confirmation で復唱あり。
+      和暦/西暦対応。西暦 8 桁 DTMF 入力可。
+      リトライ失敗時は END_聴取失敗 へ。
+
+  - order: 5
+    name: "電話番号"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 11
+    retry_count: 1
+    echo_back: true
+    save_to: "additionalPhoneNumber"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: >
+      サブフロー（医誠会国際総合病院$電話番号聴取）で聴取。Phone Normalization + Re-confirmation で復唱あり。
+      通常着信: 着信番号を復唱して肯定/否定で確定。
+      非通知: 音声/DTMF で連絡先番号を聴取→復唱。
+      リトライ失敗時は END_聴取失敗 へ。
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "診療科"
+    tts_announcement: "予約を希望される診療科をお話しください。分からない場合には分からないとお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "内科"
+        - "総合診療科"
+        - "呼吸器"
+        - "消化器"
+        - "循環器"
+        - "腎臓"
+        - "糖尿病内科"
+        - "血液"
+        - "腫瘍"
+        - "リウマチ"
+        - "骨粗鬆症"
+        - "心臓血管"
+        - "末梢血管"
+        - "肛門"
+        - "泌尿器"
+        - "乳腺内分泌外科"
+        - "小児"
+        - "救急科"
+        - "耳鼻咽喉科"
+        - "整形外科"
+        - "リハビリテーション科"
+        - "皮膚科"
+        - "形成外科"
+        - "脳神経内科"
+        - "精神神経科"
+        - "脳神経外科"
+        - "脊椎脊髄外科"
+        - "麻酔科"
+        - "産婦人科"
+        - "産科"
+        - "婦人科"
+        - "脳神経"
+        - "放射線診断科"
+        - "放射線治療科"
+        - "核医学診断科"
+        - "放射線科"
+        - "歯科・矯正歯科"
+        - "歯科口腔外科"
+        - "美容皮膚科・美容外科"
+        - "国際診療部"
+        - "遺伝子診療部"
+        - "「胸のかたち」治療センター"
+        - "健診センター"
+        - "人間ドック"
+        - "脳神経センター"
+        - "小児センター"
+        - "超音波診断治療センター"
+        - "禁煙外来"
+        - "病理診断科"
+        - "臨床検査科"
+        - "登録なし"
+      mapping:
+        - input: "リストにある診療科名または customer_doc の類義語キーワード"
+          output: "該当する診療科名（正式名称）"
+        - input: "「わからない」「分からない」「わかりません」を含む発話"
+          output: "登録なし"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "診療科リストに合致せず、かつ「わからない」系の発話でもない"
+    save_to: "clinicalDepartment"
+    next_step: "jump_診察券番号聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+  # 診察券番号・氏名・生年月日・電話番号はサブフロー参照のため step_details なし
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須）---
+  - name: "END_非通知"
+    condition: "incoming-classifier で非通知と判定（顧客仕様では受入許容だが、scaffold デフォルトでは本 END に接続）"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "acceptance_times で時間外と判定（月〜金 8:30〜17:00 外、および土日祝・年末年始）"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "氏名/生年月日/電話番号のリトライ上限到達"
+    tts_announcement: "大変申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、順番に折り返し対応いたしますのでお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系（時間帯別）---
+  - name: "END_受付完了_前半"
+    condition: "全聴取完了 かつ 現在時刻が 8:30〜15:59"
+    tts_announcement: "かしこまりました。順番に折り返し対応いたしますのでお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_受付完了_前半"
+
+  - name: "END_受付完了_後半"
+    condition: "全聴取完了 かつ 現在時刻が 16:00〜16:59"
+    tts_announcement: "かしこまりました。翌診療日までに順番に折り返し対応いたしますのでお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_受付完了_後半"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+  # 全ルートで smsFlag=-1 統一（customer_doc「終話後のSMS送信はなし」）
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  # === メインフロー ===
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。医誠会国際総合病院の予約専用AI電話です。ここからは、予約専用AI電話が応対いたします。担当者より折り返しご連絡いたしますので、ガイダンスに従ってお話ください。"
+
+  - module_name: "診療科"
+    purpose: "診療科聴取案内"
+    announcement: "予約を希望される診療科をお話しください。分からない場合には分からないとお話ください。"
+
+  # === 終話（施設固有文言）===
+  - module_name: "END_受付完了_前半"
+    purpose: "受付完了終話（8:30〜15:59）"
+    announcement: "かしこまりました。順番に折り返し対応いたしますのでお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_受付完了_後半"
+    purpose: "受付完了終話（16:00〜16:59）"
+    announcement: "かしこまりました。翌診療日までに順番に折り返し対応いたしますのでお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "聴取失敗終話（customer_doc 失敗アナウンス）"
+    announcement: "大変申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、順番に折り返し対応いたしますのでお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_時間外"
+    purpose: "時間外終話"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_非通知"
+    purpose: "非通知終話（scaffold デフォルト配線。運用確認で合流配線に切替検討）"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  # === サブフロー（リファレンスbivr準拠 — IVRプロパティで文言上書き可能）===
+  - module_name: "診察券番号_聴取"
+    purpose: "診察券番号聴取案内（サブフロー）"
+    announcement: "診察券番号が分かる場合は、8桁以内で番号をお話しください。分からない場合は、「分からない」とお話しください。"
+
+  - module_name: "氏名_聴取"
+    purpose: "氏名聴取案内（サブフロー）"
+    announcement: "それでは、名前は、いせいかい太郎です、のようにフルネームでお話ください。"
+
+  - module_name: "生年月日_聴取"
+    purpose: "生年月日聴取案内（サブフロー）"
+    announcement: "続いて、患者さんの生年月日を、昭和50年4月1日のように、お話ください。西暦の場合、8桁でダイヤルプッシュでも操作可能です。"
+
+  - module_name: "電話番号_聴取"
+    purpose: "電話番号聴取案内 — 携帯/固定時の確認（サブフロー）"
+    announcement: "最後に、お電話番号をお伺いします。ご連絡先のお電話番号は、今おかけいただいている番号でよろしいですか？"
+
+  - module_name: "電話番号_聴取_非通知"
+    purpose: "電話番号聴取案内 — 非通知時の聴取（サブフロー）"
+    announcement: "それでは、日中連絡のとれる携帯電話番号、もしくは、0から始まる市外局番の電話番号をお話ください。ダイヤルプッシュでも操作可能です。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "診療科"
+    words: |
+      内科 ないか
+      総合診療科 そうごうしんりょうか
+      総合診療 そうごうしんりょう
+      呼吸器 こきゅうき
+      消化器 しょうかき
+      循環器 じゅんかんき
+      腎臓 じんぞう
+      糖尿病内科 とうにょうびょうないか
+      糖尿病 とうにょうびょう
+      糖尿 とうにょう
+      血液 けつえき
+      腫瘍 しゅよう
+      リウマチ りうまち
+      膠原病 こうげんびょう
+      アレルギー あれるぎー
+      骨粗鬆症 こつそしょうしょう
+      骨粗 こつそ
+      心臓血管 しんぞうけっかん
+      心臓 しんぞう
+      末梢血管 まっしょうけっかん
+      肛門 こうもん
+      泌尿器 ひにょうき
+      乳腺内分泌外科 にゅうせんないぶんぴつげか
+      乳腺内分泌 にゅうせんないぶんぴつ
+      乳腺 にゅうせん
+      小児 しょうに
+      小児科 しょうにか
+      救急科 きゅうきゅうか
+      救急 きゅうきゅう
+      耳鼻咽喉科 じびいんこうか
+      耳鼻科 じびか
+      整形外科 せいけいげか
+      整形 せいけい
+      骨折 こっせつ
+      リハビリテーション科 りはびりてーしょんか
+      リハビリ りはびり
+      リハ りは
+      皮膚科 ひふか
+      皮膚 ひふ
+      形成外科 けいせいげか
+      形成 けいせい
+      脳神経内科 のうしんけいないか
+      神経内科 しんけいないか
+      神経内 しんない
+      精神神経科 せいしんしんけいか
+      精神 せいしん
+      精神科 しんせいか
+      物忘れ ものわすれ
+      物忘れ外来 ものわすれがいらい
+      脳神経外科 のうしんけいげか
+      脳外 のうげ
+      神経外科 しんけいげか
+      脊椎脊髄外科 せきついせきずいげか
+      脊椎 せきつい
+      脊髄 せきずい
+      脊椎脊髄 せきついせきずい
+      麻酔科 ますいか
+      麻酔 ますい
+      ペインクリニック ぺいんくりにっく
+      産婦人科 さんふじんか
+      産科 さんか
+      婦人科 ふじんか
+      婦人 ふじん
+      脳神経 のうしんけい
+      放射線診断科 ほうしゃせんしんだんか
+      放射線診断 ほうしゃせんしんだん
+      放射線治療科 ほうしゃせんちりょうか
+      放射線治療 ほうしゃせんちりょう
+      核医学診断科 かくいがくかしんだん
+      核医学 かくいがくか
+      放射線科 ほうしゃせんか
+      アイブイアール あいぶいあーる
+      歯科矯正歯科 しかきょうせいしか
+      矯正 きょうせい
+      歯科口腔外科 しかこうくうげか
+      歯科 しか
+      口腔外科 こうぐうげか
+      美容皮膚科 びようひふか
+      美容外科 びようげか
+      国際 こくさい
+      国際診療部 こくさいしんりょうぶ
+      遺伝子 いでんし
+      遺伝子診療部 いでんししんりょうぶ
+      胸のかたち外来 むねのかたちがいらい
+      漏斗胸 ろうときょう
+      健診 けんしん
+      健診センター けんしんせんたー
+      人間ドック にんげんどっく
+      ドック どっく
+      脳神経センター のうしんけいせんたー
+      小児センター しょうにせんたー
+      超音波診断治療センター ちょうおんぱしんだんちりょうせんたー
+      禁煙外来 きんえんがいらい
+      禁煙 きんえん
+      病理診断科 びょうりしんだんか
+      病理診断 びょうりしんだん
+      臨床検査科 りんしょうけんさか
+      臨床検査 りんしょうけんさ
+      わからない わからない
+      分からない わからない
+      分かりません わかりません
+
+  - step_name: "氏名"
+    words: "(リファレンスbivrの氏名辞書を使用 — 個人情報サブフロー.bivr 準拠)"
+
+  - step_name: "生年月日"
+    words: "(リファレンスbivrの和暦辞書 + month辞書 + day辞書を使用 — 個人情報サブフロー.bivr 準拠)"
+
+  - step_name: "診察券番号"
+    words: "(リファレンスbivrの診察券番号辞書を使用 — 個人情報サブフロー.bivr 準拠)"
+
+  - step_name: "電話番号"
+    words: "(リファレンスbivrの電話番号辞書を使用 — 個人情報サブフロー.bivr 準拠)"
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "用件は「予約」単一。customer_doc 基本設定 用件①=予約のみで、変更・キャンセル・確認は対象外"
+  - "customer_doc 状態定義に 0(途中切断) / 4(処理中) / 5(処理済み) があるが、Gen3 status 許可値 1/2/3/6/7/8/9 に合わせて 4/5 は除外、0 は 2 に置換（CLAUDE.md 状態フラグ規則準拠）"
+  - "SMS 送信は行わない（customer_doc 『終話後のSMS送信はなし』）→ 全終話で smsFlag=-1"
+  - "リトライ回数は 1 回（合計 2 回質問）— customer_doc 指定に合致"
+  - "診療科・診察券番号は「わからない」／聴取失敗時に skip（空文字・登録なしのまま次へ）"
+  - "氏名・生年月日・電話番号のリトライ失敗は END_聴取失敗（customer_doc 1回失敗アナウンスを流用）"
+  - "16:00 を境に終話アナウンス文言が 2 パターンに分岐（前半=『順番に折り返し』／後半=『翌診療日までに順番に折り返し』）。Script(business_hours, START=8, END=16) で実装"
+  - "稼働曜日・時間（月〜金 8:30〜17:00、祝日・年末年始除く）の詳細スケジュールは Dr.JOY 側で設定（acceptance_times の business_hours パラメータに反映）"
+  - "非通知受入拒否=設定しない → 非通知着信も受け付ける仕様。customer_doc の 1回失敗アナウンス『非通知』バリエーションは非通知着信が電話番号聴取を通過する前提で書かれている。scaffold デフォルトでは冒頭 incoming-classifier から END_非通知 へ分岐するため、要運用確認（confirmation_items N-1）"
+  - "代表電話番号: 0570-099-166（customer_doc 基本設定1）"
+  - "050 番号: デモ 05058932432 / 本番 05058931670（customer_doc 基本設定1）"
+  - "施設住所: 〒530-0052 大阪府大阪市北区南扇町4-14（customer_doc 基本設定1）"
+  - "発話待機時間 1.5 秒 / 無回答待機時間 10 秒（customer_doc 基本設定1）"
+  - "customer_doc には「稼働前アナウンス」「通話切断ガイダンス」の文言記載があるが、現行 scaffold 対応範囲外のため本設計書では未反映（要運用確認 N-3）"
+  - "customer_doc の失敗アナウンスで『非通知・8:30-16:00』『非通知・16:00-17:00』の変種が定義されているが、電話番号聴取サブフローの retry_failure 専用文言として出し分ける実装は複雑なため、段階的改善として END_聴取失敗 単一終話に統合（confirmation_items N-2）"
+  - "診療科類義語 customer_doc の記載通り。『びょういりしんだんか』は『びょうり』のタイプミスと思われるが辞書は原文尊重（要確認 N-4）"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "office_id（施設ID）— Dr.JOY 管理画面で確認して Brekeke 設定時に埋める"
+    resolved: false
+  - item: "N-1: 非通知受入拒否=設定しない に合わせて、冒頭 incoming-classifier の『非通知』分岐を END_非通知 ではなく 冒頭_アナウンス へ合流させるべきか確認。scaffold のデフォルト配線では END_非通知 に接続される。運用上「電話番号を通知しておかけ直しください」で拒否してもよいのであれば現行のままでよい"
+    resolved: false
+  - item: "N-2: リトライ失敗時の終話アナウンスを『電話番号あり／非通知 × 前半／後半』の 4 バリエーションで出し分けるか。現設計は END_聴取失敗（前半相当の『順番に折り返し対応』）1 本に統合。4 バリエーション必要なら電話番号聴取サブフロー後に分岐を追加する必要あり"
+    resolved: false
+  - item: "N-3: customer_doc に記載されている『稼働前アナウンス』『通話切断ガイダンス（ご回答の確認ができませんでしたので...）』は本設計書で未反映。どのモジュールに割り当てるか運用確認（候補: 稼働前アナウンス → acceptance_times の時間外 TTS / 通話切断ガイダンス → STT timeout 時）"
+    resolved: false
+  - item: "N-4: customer_doc の診療科辞書で『病理診断科』の読みが『びょういりしんだんか』となっているが、正しくは『びょうりしんだんか』と思われる。辞書には正しい読みで登録したが原文通りに戻すべきか確認"
+    resolved: false
+  - item: "N-5: 対象環境（デモ / 本番）— 仮設定 demo。050 番号の使い分けで判断"
+    resolved: false
+  - item: "N-6: 稼働曜日・時間の詳細（祝日カレンダー、年末年始の期間）— Dr.JOY 管理画面で設定。フロー側は acceptance_times モジュールの配置のみ"
+    resolved: false
+  - item: "N-7: status rangeValues に customer_doc 定義の『4=処理中』『5=処理済み』を含めるか確認（Gen3 では 4/5 は許可値外のため除外したが Dr.JOY 連携の都合で必要な場合あり）"
+    resolved: false
+  - item: "N-8: サブフローの TTS 文言（氏名／生年月日／診察券番号／電話番号）は customer_doc の記載と一致するように IVR プロパティで上書きする運用でよいか確認（リファレンス bivr の汎用文言をそのまま使うか customer_doc 文言を上書きするか）"
+    resolved: false

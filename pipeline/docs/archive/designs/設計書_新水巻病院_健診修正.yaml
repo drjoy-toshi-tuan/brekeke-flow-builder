@@ -1,0 +1,143 @@
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "新水巻病院"
+  group_name: "福岡県新水巻病院"
+  flow_name: "福岡県新水巻病院$健診"
+  target_facility: "新水巻病院"
+  office_id: "5b8a537bd2122d061d517b7b"
+  phone_number: ""
+  business_hours: "IVRプロパティのacceptance_times.urlに設定済み"
+  flow_type: "subflow"
+  work_type: "modify"
+  environment: "demo"
+
+# --- 作業パターン ---
+# パターン2: 既存シナリオの修正
+# ベースBIVR: docs/reference/bivr/clients/福岡県新水巻病院.bivr
+# 対象フロー: 福岡県新水巻病院$健診、福岡県新水巻病院$個人情報新水、福岡県新水巻病院$新水RAG
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "福岡県新水巻病院$健診"
+      role: "main"
+      description: "健診受付メインフロー。用件聴取→分岐→各パス（予約/変更/キャンセル/お問い合わせ/結果確認）"
+  subflows:
+    - name: "福岡県新水巻病院$個人情報新水"
+      target: "氏名・生年月日聴取（既存サブフロー）"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "生年月日聴取精度改善のため修正対象"
+    - name: "福岡県新水巻病院$新水RAG"
+      target: "お問い合わせRAG検索（既存サブフロー）"
+      transition_module: "@General$Jump to Flow"
+      termination: "return"
+      notes: "お問い合わせ遷移修正後に動作確認が必要"
+    - name: "福岡県新水巻病院$電話番号聴取"
+      target: "電話番号聴取（既存サブフロー）"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "今回の修正対象外"
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  テスト通話で確認された3件の不具合を修正する。
+  ①用件分岐でお問い合わせが結果確認に遷移する問題（ContextMatchRouter遷移先の入れ替わり）
+  ②お問い合わせのSTT文字起こしが反映されない問題（①の修正後に再確認）
+  ③生年月日の聴取精度が低い問題（openAI_患者_生年月日のsuccess遷移先が空、probability、stop_play_when_speech、profile_words）
+
+# --- セクション4: 修正内容の詳細 ---
+modifications:
+  - id: "MOD-001"
+    priority: "HIGH"
+    target_flow: "福岡県新水巻病院$健診"
+    target_module: "用件分岐"
+    module_type: "ContextMatchRouter"
+    description: |
+      用件分岐（ContextMatchRouter）のnext配列において、
+      「お問い合わせ」と「結果確認」の遷移先が入れ替わっている。
+    current_state:
+      next_index_3: "nextModuleName: 相談_結果確認  # ← お問い合わせ選択時"
+      next_index_4: "nextModuleName: 相談_問合せ    # ← 結果確認選択時"
+    expected_state:
+      next_index_3: "nextModuleName: 相談_問合せ    # お問い合わせ → 問い合わせTTSへ"
+      next_index_4: "nextModuleName: 相談_結果確認  # 結果確認 → 結果確認TTS→入力_相談_結果確認へ"
+    change_type: "next配列のnextModuleNameを入れ替え（conditionとlabelは変更不要）"
+
+  - id: "MOD-002"
+    priority: "MEDIUM"
+    target_flow: "福岡県新水巻病院$新水RAG"
+    target_module: "入力_相談_お問い合わせ"
+    module_type: "Speech to Text"
+    description: |
+      MOD-001の修正後に再テストし、STT文字起こしがRAGに渡らない問題が残る場合のみ適用。
+      probabilityを0.55→0.4に引き下げる。
+    condition: "MOD-001適用後も文字起こしが反映されない場合のみ適用"
+    change_type: "params.probabilityを0.4に変更"
+
+  - id: "MOD-003"
+    priority: "HIGH"
+    target_flow: "福岡県新水巻病院$個人情報新水"
+    target_module: "openAI_患者_生年月日"
+    module_type: "generate_by_OpenAI"
+    description: |
+      openAI_患者_生年月日のnext配列において、success（condition=^.*$）の
+      nextModuleNameが空文字になっている。生年月日正規化後に結果返却スクリプトへ
+      遷移するよう、正しいモジュール名を設定する。
+    current_state:
+      success_next: "nextModuleName: \"\"  # 空欄 → フローが止まる"
+    expected_state:
+      success_next: "nextModuleName: サブフロー内の結果返却スクリプトモジュール名（展開して確認）"
+    note: |
+      extract_bivrで個人情報新水フローを展開し、生年月日入力後の
+      正常系遷移先モジュール名を確認してから設定すること。
+      個人情報サブフローのフロー全体構造を把握した上で修正する。
+    change_type: "next[3].nextModuleName を適切なモジュール名に設定"
+
+  - id: "MOD-004"
+    priority: "HIGH"
+    target_flow: "福岡県新水巻病院$個人情報新水"
+    target_module: "入力_患者_生年月日"
+    module_type: "DTMF AmiVoice STT Input"
+    description: |
+      生年月日聴取STTの認識精度を改善する。
+      1. probabilityを0.55→0.45に引き下げ
+      2. stop_play_when_speechをNo→Yesに変更
+      3. profile_wordsに令和・平成・昭和（正読）を追加
+    current_state:
+      probability: "0.55"
+      stop_play_when_speech: "No"
+      profile_words_missing: "令和、平成、昭和（正読）が未登録"
+    expected_state:
+      probability: "0.45"
+      stop_play_when_speech: "Yes"
+      profile_words_add: |
+        令和 れいわ
+        平成 へいせい
+        昭和 しょうわ
+        （既存の辞書に追記。誤読補正「きょうわ」「きょうは」等は維持する）
+    change_type: "params.probability、params.stop_play_when_speech、params.profile_wordsを変更"
+
+# --- セクション5: 検証方法 ---
+validation:
+  target_call_ids:
+    - "184000013186"  # お問い合わせ→結果確認遷移の問題
+    - "184000013595"  # お問い合わせ→結果確認遷移の問題
+    - "184000013518"  # 生年月日聴取精度の問題
+    - "184000013665"  # 生年月日聴取精度の問題
+  test_cases:
+    - case: "お問い合わせ選択（DTMF 5番または音声）"
+      expected: "相談_問合せ TTSに遷移 → FAQ検索 → 新水RAGフロー → 入力_相談_お問い合わせ"
+    - case: "結果確認選択（DTMF 4番または音声）"
+      expected: "相談_結果確認 TTSに遷移 → 入力_相談_結果確認 → 相談_問合せ2"
+    - case: "生年月日を明確に発話（例: 昭和50年1月1日）"
+      expected: "文字起こし正常 → openAI_患者_生年月日が1975-01-01 00:00を返す → 次のモジュールに遷移"
+
+# --- セクション6: ビルド設定 ---
+build:
+  merge_base: "docs/reference/bivr/clients/福岡県新水巻病院.bivr"
+  output_bivr: "output/scenarios/新水巻病院_健診/新水巻病院_健診.bivr"
+  note: "--merge-baseで既存4フローを全て引き継ぎ、修正済みフローのみ差し替える"

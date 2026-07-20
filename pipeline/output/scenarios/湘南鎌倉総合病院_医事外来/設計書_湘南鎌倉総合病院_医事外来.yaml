@@ -1,0 +1,520 @@
+# 設計書 — 湘南鎌倉総合病院 医事外来
+# 生成元: @director エージェント
+# 生成日: 2026/05/01
+# 確認レポート: output/scenarios/湘南鎌倉総合病院_医事外来/確認レポート_湘南鎌倉総合病院_医事外来_20260501.md
+# 作業種別: Gen1→Gen3 移管（callback ボット）
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "湘南鎌倉総合病院"
+  scenario_name: "医事外来"
+  group_name: "湘南鎌倉総合病院"
+  flow_name: "湘南鎌倉総合病院$医事外来"
+  target_facility: "湘南鎌倉総合病院（本院）"
+  office_id: "TODO_要確認"
+  phone_number: ""                   # callback ボットのため着信番号なし。Brekeke 側の発信フロー設定で割り当て
+  business_hours: "なし（24時間 callback 対応）"
+  flow_type: "subflow"
+  work_type: "gen1_migration"
+  environment: "prod"
+
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "湘南鎌倉総合病院$医事外来"
+      role: "main"
+      description: "医事課外来係への着信に折り返しで AI が一次受け。診察券→氏名/生年月日→連絡先→用件 の順で聴取し、3 診療日以内の担当者再架電を案内。"
+  subflows:
+    - name: "湘南鎌倉総合病院$診察券番号聴取"
+      target: "診察券番号聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "最初に聴取し、有/無で後続聴取をスキップ判定する Gen1 設計を尊重"
+    - name: "湘南鎌倉総合病院$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "PatientName サブフロー。診察券「無」ルートでのみ呼ばれる"
+    - name: "湘南鎌倉総合病院$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "DOB Re-confirmation 内蔵。診察券「無」ルートでのみ呼ばれる"
+    - name: "湘南鎌倉総合病院$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "全ルート共通。incoming-classifier + Phone Normalization + 復唱を内蔵"
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  湘南鎌倉総合病院 医事課外来係（外来会計・請求・諸手続きの窓口）への代表電話着信のうち、
+  回線混雑で担当者が出られなかったコールに対し、病院から折り返し時に AI が患者情報と用件を聴取する。
+  Dr.JOY 画面に蓄積された情報をもとに、3 診療日以内に担当者から再度折り返し電話する運用。
+  Gen1 commubo シナリオ「医事外来1_M_本番」の Gen3 移管。
+  callback ボット特性のため acceptance_times / call_transfer / 時間帯分岐は配置しない。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "湘南鎌倉総合病院$医事外来"
+    diagram: |
+      冒頭(wait)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → 非通知_アナウンス → 完了フラグ_非通知 → 切断（callback では到達しない想定）
+            └─ 通常   → 冒頭_アナウンス
+                          → 診察券_案内（"はじめに、"）
+                          → [SUBFLOW] 診察券番号聴取
+                          → 診察券有無分岐 [ContextMatchRouter]
+                              ├─ 有り(1) → 連絡先_案内（"では次に、"）
+                              │             → [SUBFLOW] 電話番号聴取
+                              │             → 用件_案内（"それでは、"）
+                              │             → 問い合わせ内容聴取（自由文）
+                              │             → 追加用件確認（Yes/No）
+                              │                 ├─ あり → 追加用件_案内 → 追加問い合わせ聴取 → END_受付完了
+                              │                 └─ なし(other) → END_受付完了
+                              │
+                              └─ 無し(other) → 氏名_案内（"それでは、"）
+                                              → [SUBFLOW] 氏名聴取
+                                              → 生年月日_案内（"続いて、"）
+                                              → [SUBFLOW] 生年月日聴取
+                                              → 連絡先_案内（"では次に、"）
+                                              → [SUBFLOW] 電話番号聴取
+                                              → 用件_案内（"それでは、"）
+                                              → 問い合わせ内容聴取
+                                              → 追加用件確認
+                                                  ├─ あり → 追加用件_案内 → 追加問い合わせ聴取 → END_受付完了
+                                                  └─ なし(other) → END_受付完了
+
+      [ 全聴取項目共通: retry 上限 2 回到達 → END_聴取失敗（DTMF ナビ付き代表電話案内）]
+    notes: |
+      Gen1 main.yaml の「最初の箱: API_DRJOY_CONTEXT_SETTINGS → 挨拶 → API_DRJOY → 次へ_4 →
+      診察券番号聞き取り → ...」を Gen3 9 ブロック型に再構成。API_DRJOY_1（氏名後の患者特定）は
+      Dr.JOY バックエンドで実施されるためフロー側に明示処理は配置しない（NON-BLOCKER N-5 参照）。
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭ブロック ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: false      # callback ボットなので営業時間チェックなし
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 診察券_案内
+
+  # --- 診察券番号聴取（最初に聴取し、有/無で後続を分岐） ---
+  - step: 診察券_案内
+    type: announcement
+    next: 診察券番号聴取
+
+  - step: 診察券番号聴取
+    type: subflow
+    flowname: "湘南鎌倉総合病院$診察券番号聴取"
+    next: 診察券有無分岐
+
+  - step: 診察券有無分岐
+    type: context_match_router
+    reference_module: "診察券番号聴取"
+    conditions:
+      - match: "1"                    # 診察券あり: 番号取得済み
+        next: 連絡先_案内
+      - match: "other"                # 診察券なし or 「分からない」: 氏名+生年月日聴取ルートへ
+        next: 氏名_案内
+
+  # --- 氏名聴取（診察券「無」ルートのみ） ---
+  - step: 氏名_案内
+    type: announcement
+    next: 氏名聴取
+
+  - step: 氏名聴取
+    type: subflow
+    flowname: "湘南鎌倉総合病院$氏名聴取"
+    next: 生年月日_案内
+
+  # --- 生年月日聴取（診察券「無」ルートのみ） ---
+  - step: 生年月日_案内
+    type: announcement
+    next: 生年月日聴取
+
+  - step: 生年月日聴取
+    type: subflow
+    flowname: "湘南鎌倉総合病院$生年月日聴取"
+    next: 連絡先_案内
+
+  # --- 連絡先電話番号聴取（全ルート共通の合流点） ---
+  - step: 連絡先_案内
+    type: announcement
+    next: 電話番号聴取
+
+  - step: 電話番号聴取
+    type: subflow
+    flowname: "湘南鎌倉総合病院$電話番号聴取"
+    next: 用件_案内
+
+  # --- 用件聴取（自由文、用件分類による分岐なし） ---
+  - step: 用件_案内
+    type: announcement
+    next: 問い合わせ内容聴取
+
+  - step: 問い合わせ内容聴取
+    type: hearing
+    output_format: text
+    next: 追加用件確認
+
+  # --- 追加用件有無確認（Yes/No） ---
+  - step: 追加用件確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "あり"
+        next: 追加用件_案内
+      - match: "other"                # 「なし」相当
+        next: END_受付完了
+
+  - step: 追加用件_案内
+    type: announcement
+    next: 追加問い合わせ聴取
+
+  - step: 追加問い合わせ聴取
+    type: hearing
+    output_format: text
+    next: END_受付完了
+
+  # --- 終話ブロック ---
+  - step: END_受付完了
+    type: termination
+    termination_ref: "END_受付完了"
+
+  - step: END_聴取失敗
+    type: termination
+    termination_ref: "END_聴取失敗"
+    # 全聴取項目共通: retry 上限 2 回到達時の終話。step_details[].retry_failure="end_failure" から接続される
+
+# --- セクション5: コンテキストフィールド一覧 ---
+context_fields:
+  - context_name: "patientName"
+    context_name_jp: "患者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "氏名聴取サブフローで保存。診察券「無」ルートのみ"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "診察券番号聴取サブフローで保存。8 桁以内"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日(和暦)"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "生年月日聴取サブフローで保存。診察券「無」ルートのみ"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "電話番号聴取サブフローで保存。全ルート共通"
+
+  - context_name: "reason"
+    context_name_jp: "ご用件"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "問い合わせ内容（自由文、用件分類なし）"
+
+  - context_name: "additionalRequest"
+    context_name_jp: "追加のご用件"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false               # 案件固有フィールド
+    editable: true
+    deletable: false
+    notes: "Gen1 の問い合わせ内容②聞き取り。① と内容同一だが Dr.JOY 画面で 2 段表示するため別 context"
+
+  - context_name: "additionalInquiryFlag"
+    context_name_jp: "追加用件有無"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false               # 案件固有フィールド
+    editable: true
+    deletable: false
+    notes: "追加用件確認の Yes/No 判定値を一旦保存（あり/なし）。CMR の参照源を明示化するための補助 context"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納（システム）"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=未処理（受付完了で担当者が再架電する） 2=代表案内（聴取失敗、患者自身に代表電話への架けなおしを依頼）"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "システム自動取得"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "問い合わせ内容聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "Gen1 の問い合わせ内容①聞き取り。自由文記録のみ、用件分類による分岐なし。openai_processing=none で OpenAI 経由せず STT 結果を直接保存"
+
+  - order: 2
+    name: "追加用件確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "additionalInquiryFlag"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "あり"
+      - "なし"
+    notes: "Yes/No（追加の用件があるか）。「はい/ある/あります」→ あり、「いいえ/ない/ありません/大丈夫」→ なし。other ルート（CMR）が「なし」相当"
+
+  - order: 3
+    name: "追加問い合わせ聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "additionalRequest"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "Gen1 の問い合わせ内容②聞き取り。① と同じ TTS 文言で再聴取（自由文）"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "問い合わせ内容聴取"
+    tts_announcement: "{tts_g:ご用件を簡潔におっしゃってください。}"
+    input_method: "voice_only"
+    save_to: "reason"
+    next_step: "追加用件確認"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "追加用件確認"
+    tts_announcement: "{tts_g:その他、追加のご用件はございますか?}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "あり"
+        - "なし"
+      mapping:
+        - input: "「はい」「ある」「あります」「もう一つ」「お願いします」等の肯定発話"
+          output: "あり"
+        - input: "「いいえ」「ない」「ありません」「大丈夫」「結構です」等の否定発話"
+          output: "なし"
+      no_result_condition: "上記いずれにも該当しない発話、または無音"
+    save_to: "additionalInquiryFlag"
+    next_step: ""                     # CMR で分岐するため空
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "追加問い合わせ聴取"
+    tts_announcement: "{tts_g:ご用件を簡潔におっしゃってください。}"
+    input_method: "voice_only"
+    save_to: "additionalRequest"
+    next_step: "END_受付完了"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外（callback ボットのため通常は到達しない、フォールバック用）"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "2"                         # 施設の STATUS range_values は 1/2 のみ（callback ボットで時間外フォールバックは「代表案内」扱い）
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達（任意の聴取項目で 2 回連続失敗）"
+    tts_announcement: "お電話が遠いようで、回答が確認できませんでした。恐れ入りますが、再度代表電話へおかけなおしください。代表電話では音声ガイダンスが流れますので、「患者さん、また、ご家族の方は」の1番を押した後に、「その他については」の4番を押してください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系 ---
+  - name: "END_受付完了"
+    condition: "全聴取完了（用件＋追加用件まで取得）"
+    tts_announcement: "ご用件を承りました。3診療日以内に担当者から折り返し電話連絡いたします。なお、代表電話は大変こみあっております。当院からの折り返し電話に出られなかった場合でも、必ずこちらから再度ご連絡をしますのでお待ちくださいますようお願い申し上げます。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_受付完了"
+
+# smsFlag 分岐: なし（全ルート smsFlag=-1。callback ボットなので SMS 通知不要）
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ 検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTS モジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "callback 開始時の施設・状況・対応方針案内"
+    announcement: "医事課外来係をお呼び出ししましたが、回線が混みあっておりお繋ぎできませんでした。AI電話がご用件をお伺いし、3診療日以内に担当者から折り返し電話連絡いたします。"
+
+  - module_name: "診察券_案内"
+    purpose: "診察券番号聴取サブフロー前の繋ぎ"
+    announcement: "はじめに、"
+
+  - module_name: "氏名_案内"
+    purpose: "氏名聴取サブフロー前の繋ぎ（診察券「無」ルート）"
+    announcement: "それでは、"
+
+  - module_name: "生年月日_案内"
+    purpose: "生年月日聴取サブフロー前の繋ぎ（診察券「無」ルート）"
+    announcement: "続いて、"
+
+  - module_name: "連絡先_案内"
+    purpose: "電話番号聴取サブフロー前の繋ぎ"
+    announcement: "では次に、"
+
+  - module_name: "用件_案内"
+    purpose: "問い合わせ内容聴取前の繋ぎ"
+    announcement: "それでは、"
+
+  - module_name: "追加用件_案内"
+    purpose: "追加問い合わせ聴取前の繋ぎ"
+    announcement: "それでは、"
+
+  - module_name: "問い合わせ内容聴取"
+    purpose: "用件本題の自由文聴取"
+    announcement: "ご用件を簡潔におっしゃってください。"
+
+  - module_name: "追加用件確認"
+    purpose: "追加用件の有無を Yes/No で確認"
+    announcement: "その他、追加のご用件はございますか?"
+
+  - module_name: "追加問い合わせ聴取"
+    purpose: "追加用件の自由文聴取"
+    announcement: "ご用件を簡潔におっしゃってください。"
+
+  - module_name: "END_受付完了"
+    purpose: "正常終話。3 診療日以内の再架電案内 + 代表電話混雑時のフォロー文言 + 終了挨拶"
+    announcement: "ご用件を承りました。3診療日以内に担当者から折り返し電話連絡いたします。なお、代表電話は大変こみあっております。当院からの折り返し電話に出られなかった場合でも、必ずこちらから再度ご連絡をしますのでお待ちくださいますようお願い申し上げます。お電話ありがとうございました。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ上限到達時の代表電話案内（DTMF ナビ付き、施設固有文言）"
+    announcement: "お電話が遠いようで、回答が確認できませんでした。恐れ入りますが、再度代表電話へおかけなおしください。代表電話では音声ガイダンスが流れますので、「患者さん、また、ご家族の方は」の1番を押した後に、「その他については」の4番を押してください。お電話ありがとうございました。"
+
+  - module_name: "END_非通知"
+    purpose: "非通知着信時のフォールバック（callback ボットでは通常到達しない）"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_時間外"
+    purpose: "時間外フォールバック（callback ボットでは通常到達しない）"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+# --- セクション10: AmiVoice 辞書（profile_words）---
+# 本フローには診療科聴取ステップが存在しないため、47 診療科リストは profile_words に積まない
+# （NON-BLOCKER N-6 参照）。Yes/No・用件用の STT テンプレ（hearing_yesno_common 等）は
+# 共通テンプレートとしてプラットフォーム側に既存登録があるため、ここでは個別 profile_words 不要。
+amivoice_dictionary: []
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "callback ボット：病院側から患者へ折り返し時に AI が一次受け。通常の inbound 着信フローではない。acceptance_times / call_transfer / date_of_call_classifier は配置しない"
+  - "聴取順序が特殊：診察券→氏名→生年月日→電話番号 の順（通常順序の逆）。診察券「有」のとき氏名/生年月日をスキップする Gen1 設計を尊重"
+  - "問い合わせ① と ② は Gen1 では完全同一サブフロー（コピー）。Gen3 では別 context（reason / additionalRequest）に保存して Dr.JOY 画面で 2 段表示"
+  - "終話 TTS は施設固有の長文（3 文連結）。「3 診療日以内に折り返し」「代表電話混雑時のフォロー」「終了挨拶」を 1 つの termination_patterns.tts_announcement に連結"
+  - "聴取失敗終話 TTS には DTMF ナビゲーション（『患者さん、また、ご家族の方は』の1番 → 『その他については』の4番）が含まれる施設固有文言。テンプレート汎用文言で上書きしないこと"
+  - "Gen1 の API_DRJOY / API_DRJOY_1 はフロー側に明示処理を配置しない（Dr.JOY バックエンドの Webhook で処理）"
+  - "Gen1 の携帯電話番号チェックは実質分岐なし（一致でも不一致でも next が同じ）のため Gen3 では省略"
+  - "Gen1 main.yaml に 47 診療科のカスタムエンティティが定義されているが本フロー内に診療科聴取ブロックがないため STT 辞書には積まない"
+
+# --- セクション12: 要確認事項 ---
+confirmation_items:
+  - item: "office_id（Dr.JOY 管理画面で確認、設計書には反映不要）"
+    resolved: false
+  - item: "問い合わせ内容②の保存先 context（additionalRequest として item_default: false で新設）が運用上問題ないか Dr.JOY 担当に確認"
+    resolved: false
+  - item: "診察券番号聴取サブフローの結果返却スクリプトが「1=有り / 2 等=無し」を返すことを generator 実行後に確認"
+    resolved: false
+  - item: "END_聴取失敗 の DTMF ナビゲーション文言が施設固有のためテンプレート標準文言に上書きされていないか generator 実行後に確認"
+    resolved: false
+  - item: "通話テスト：診察券「有」ルートと「無」ルートの両方を確認（特に「無」→ 氏名 → 生年月日 → 電話番号 の長い経路）"
+    resolved: false
+  - item: "RAG/FAQ サブフローを将来追加する場合は rag_subflow.pattern を変更（現状 none）"
+    resolved: false

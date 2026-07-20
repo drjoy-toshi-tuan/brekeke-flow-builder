@@ -1,0 +1,173 @@
+scenario:
+  name: 訪問看護
+  updated: "2027-03-27"
+  facility: 北里大学病院 トータルサポートセンター
+
+flow:
+  - step: 冒頭アナウンス
+    type: announce
+    branches:
+      - condition: 固定電話からの着信
+        action: terminate
+        announce: 冒頭アナウンス（固定電話→終話）
+      - condition: 非通知着信
+        action: terminate
+        announce: 非通知アナウンス
+      - condition: はい（訪問看護指示書作成依頼）
+        next: 患者同意
+      - condition: いいえ（非該当）
+        action: terminate
+        announce: 非該当
+
+  - step: 患者同意
+    type: input
+    question: 患者様の同意は得られておりますか。同意済みの場合は「同意済み」、未取得の場合は「取れていない」とお話しください。
+    retry:
+      no_answer_max: 2
+      re_question_max: 1
+    branches:
+      - condition: 同意済み
+        next: 事業所名
+      - condition: 取れていない
+        action: terminate
+        announce: 終話（受付不可）
+
+  - step: 事業所名
+    type: input
+    question: 事業所名を正式名称でお話しください。
+    retry:
+      no_answer_max: 2
+      re_question_max: 1
+    next: 担当者名
+
+  - step: 担当者名
+    type: input
+    question: 担当者名を「名前は山田太郎です」のようにお話しください。
+    retry:
+      no_answer_max: 2
+      re_question_max: 1
+    next: 連絡先電話番号
+
+  - step: 連絡先電話番号
+    type: input
+    question: ご連絡先の電話番号は、今おかけいただいている番号でよろしいですか。「はい、そうです」または「いいえ、違います」とお話しください。
+    retry:
+      no_answer_max: 2
+      re_question_max: 1
+    branches:
+      - condition: はい（発信番号をそのまま使用）
+        next: 指示書種別
+      - condition: いいえ（番号が異なる）
+        next: 連絡先電話番号_入力
+
+  - step: 連絡先電話番号_入力
+    type: input
+    question: 日中連絡のとれる携帯電話番号をお話しください。プッシュボタンでも操作できます。入力がおわりましたら最後に「こめじるし」を押してください。
+    input_method:
+      - 音声
+      - DTMFプッシュ（終端：#）
+    retry:
+      no_answer_max: 2
+      re_question_max: 1
+    next: 指示書種別
+
+  - step: 指示書種別
+    type: input
+    question: >
+      指示書の種別を、「1.訪問看護指示書」「2.精神科訪問看護指示書」「3.特別訪問看護指示書」
+      「4.精神科特別訪問看護指示書」「5.医療観察精神科訪問看護指示書」のいずれかでお話しください。
+    options:
+      - "1": 訪問看護指示書
+      - "2": 精神科訪問看護指示書
+      - "3": 特別訪問看護指示書
+      - "4": 精神科特別訪問看護指示書
+      - "5": 医療観察精神科訪問看護指示書
+    retry:
+      no_answer_max: 2
+      re_question_max: 1
+    next: 診療科
+
+  - step: 診療科
+    type: input
+    question: 診療科を「診療科は精神科です」のようにお話しください。わからない場合は「わからない」とお話しください。
+    allow_unknown: true
+    retry:
+      no_answer_max: 2
+      re_question_max: 1
+    next: 主治医名
+
+  - step: 主治医名
+    type: input
+    question: 主治医名を「先生は木村先生です」のようにお話しください。
+    retry:
+      no_answer_max: 2
+      re_question_max: 1
+    next: 患者氏名
+
+  - step: 患者氏名
+    type: input
+    question: 患者氏名を「名前は佐藤花子です」のようにお話しください。
+    retry:
+      no_answer_max: 2
+      re_question_max: 1
+    next: 患者生年月日
+
+  - step: 患者生年月日
+    type: input
+    question: 患者様の生年月日を西暦でお話しください。
+    format: 西暦（例：1950年4月1日）
+    retry:
+      no_answer_max: 2
+      re_question_max: 1
+    next: 診察券番号
+
+  - step: 診察券番号
+    type: input
+    question: 7桁の診察券番号をお話しください。
+    validation:
+      digits: 7
+      re_question_if_invalid: true
+    retry:
+      no_answer_max: 2
+      re_question_max: 1
+    next: 指示期間開始日
+
+  - step: 指示期間開始日
+    type: input
+    question: 指示期間の開始日を、西暦でお話しください。
+    format: 西暦（例：2026年5月1日）
+    retry:
+      no_answer_max: 2
+      re_question_max: 1
+    next: 訪問看護リハビリ内容
+
+  - step: 訪問看護リハビリ内容
+    type: input
+    question: >
+      訪問看護・リハビリテーションの内容を、「病状観察」「理学療法士が行う訪問看護を1日あたり30分、週1回」
+      などのようにお話しください。
+    retry:
+      no_answer_max: 2
+      re_question_max: 1
+    next: 終話
+
+  - step: 終話
+    type: terminate
+    announce: >
+      ご依頼を承りました。このお電話での受付は確定ではありません。
+      平日3日以内に、AI電話番号よりショートメッセージにてご連絡いたします。
+      お電話ありがとうございました。
+
+error_handling:
+  no_answer:
+    max_retries: 2
+    guidance: 恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。
+  retry_exceeded:
+    action: terminate
+    announce: ご回答の確認ができませんでしたのでこちらからお電話失礼させていただきます。
+  out_of_hours:
+    action: terminate
+    announce: >
+      お電話ありがとうございます。北里大学病院、訪問看護指示書専用のAI電話です。
+      ただいまの時間は受付時間外です。恐れ入りますが、土日祝日を除く月曜から金曜の
+      8時30分から17時の間におかけ直しください。お電話ありがとうございました。

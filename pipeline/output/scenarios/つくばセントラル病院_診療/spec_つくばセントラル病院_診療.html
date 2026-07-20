@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>シナリオ仕様書 — つくばセントラル病院</title>
+<style>
+  :root {
+    --primary: #2563eb; --primary-light: #eff6ff;
+    --success: #16a34a; --success-light: #f0fdf4;
+    --warning: #d97706; --warning-light: #fffbeb;
+    --danger: #dc2626; --danger-light: #fef2f2;
+    --gray-50: #f9fafb; --gray-100: #f3f4f6; --gray-200: #e5e7eb;
+    --gray-300: #d1d5db; --gray-500: #6b7280; --gray-700: #374151; --gray-900: #111827;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI','Hiragino Sans','Yu Gothic UI',sans-serif; background: var(--gray-50); color: var(--gray-900); line-height: 1.7; }
+  .header { background: linear-gradient(135deg, #1e40af, #3b82f6); color: white; padding: 2.5rem 2rem; text-align: center; }
+  .header h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 0.5rem; }
+  .header .meta { opacity: 0.85; font-size: 0.9rem; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+  /* 読み物セクション（テキスト主体）は読みやすさ優先で中幅に絞る */
+  .readable { max-width: 900px; margin-left: auto; margin-right: auto; }
+  .overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+  .overview-card { background: white; border-radius: 12px; padding: 1.2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); text-align: center; }
+  .overview-card .num { font-size: 2rem; font-weight: 700; color: var(--primary); }
+  .overview-card .label { font-size: 0.85rem; color: var(--gray-500); margin-top: 0.2rem; }
+  .flow-overview { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin: 1.5rem 0; }
+  .flow-chain { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.3rem; padding: 1rem 0; }
+  .flow-node { background: var(--primary-light); border: 2px solid var(--primary); border-radius: 8px; padding: 0.5rem 1rem; font-size: 0.85rem; font-weight: 600; color: var(--primary); white-space: nowrap; }
+  .flow-node.start { background: var(--success-light); border-color: var(--success); color: var(--success); }
+  .flow-node.end { background: var(--danger-light); border-color: var(--danger); color: var(--danger); }
+  .flow-node.branch { background: var(--warning-light); border-color: var(--warning); color: var(--warning); }
+  .flow-arrow { font-size: 1.2rem; color: var(--gray-300); }
+  .section { margin: 1.5rem 0; }
+  .section-title { font-size: 1.3rem; font-weight: 700; color: var(--gray-900); padding-bottom: 0.5rem; border-bottom: 2px solid var(--primary); margin-bottom: 1rem; }
+  .block { background: white; border-radius: 12px; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); overflow: hidden; }
+  .block-header { background: var(--gray-100); padding: 0.8rem 1.2rem; cursor: pointer; display: flex; align-items: center; gap: 0.8rem; user-select: none; transition: background 0.2s; }
+  .block-header:hover { background: var(--gray-200); }
+  .block-header .icon { font-size: 1.3rem; }
+  .block-header .title { font-weight: 600; flex: 1; }
+  .block-header .badge { font-size: 0.75rem; padding: 0.15rem 0.6rem; border-radius: 999px; font-weight: 600; }
+  .badge-blue { background: var(--primary-light); color: var(--primary); }
+  .badge-green { background: var(--success-light); color: var(--success); }
+  .badge-orange { background: var(--warning-light); color: var(--warning); }
+  .badge-red { background: var(--danger-light); color: var(--danger); }
+  .badge-purple { background: #f3e8ff; color: #7c3aed; }
+  .badge-gray { background: var(--gray-100); color: var(--gray-500); }
+  .block-header .chevron { transition: transform 0.3s; font-size: 0.8rem; color: var(--gray-500); }
+  .block.open .block-header .chevron { transform: rotate(90deg); }
+  .block-body { display: none; padding: 1.2rem; }
+  .block.open .block-body { display: block; }
+  .speech { background: var(--primary-light); border-left: 4px solid var(--primary); border-radius: 0 8px 8px 0; padding: 0.8rem 1rem; margin: 0.5rem 0 0.5rem 2rem; font-size: 0.9rem; position: relative; }
+  .speech::before { content: '\1F50A'; position: absolute; left: -2rem; top: 0.7rem; font-size: 1rem; }
+  .speech .label { font-size: 0.75rem; color: var(--gray-500); font-weight: 600; margin-bottom: 0.3rem; }
+  .branch-table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; font-size: 0.9rem; }
+  .branch-table th { background: var(--gray-100); padding: 0.5rem 0.8rem; text-align: left; font-weight: 600; font-size: 0.8rem; color: var(--gray-500); }
+  .branch-table td { padding: 0.5rem 0.8rem; border-bottom: 1px solid var(--gray-200); }
+  .steps { list-style: none; padding: 0; }
+  .steps li { padding: 0.6rem 0 0.6rem 2.5rem; position: relative; border-left: 2px solid var(--gray-200); margin-left: 0.8rem; }
+  .steps li::before { content: attr(data-num); position: absolute; left: -0.85rem; top: 0.5rem; width: 1.5rem; height: 1.5rem; border-radius: 50%; background: var(--primary); color: white; font-size: 0.75rem; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+  .steps li:last-child { border-left-color: transparent; }
+  .step-title { font-weight: 600; }
+  .step-desc { font-size: 0.85rem; color: var(--gray-500); margin-top: 0.2rem; }
+  .info-box { background: var(--warning-light); border-left: 4px solid var(--warning); padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-size: 0.85rem; }
+  .error-box { background: var(--danger-light); border-left: 4px solid var(--danger); padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-size: 0.85rem; }
+  .collect-table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; }
+  .collect-table th { background: var(--gray-100); padding: 0.6rem 1rem; text-align: left; font-size: 0.85rem; }
+  .collect-table td { padding: 0.6rem 1rem; border-bottom: 1px solid var(--gray-200); font-size: 0.9rem; }
+  .footer { text-align: center; color: var(--gray-500); font-size: 0.8rem; padding: 2rem 0; }
+  /* 縦型ツリー図 */
+  /* ツリーは複雑になりがち。コンテナ幅を超えてビューポートの広さを使えるよう breakout させる */
+  .tree-section {
+    background: white; border-radius: 12px; padding: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin: 1.5rem 0;
+    /* ビューポート幅までブレイクアウト（左右1rem の余白を残す） */
+    width: calc(100vw - 2rem);
+    max-width: 1600px;
+    position: relative;
+    left: 50%;
+    transform: translateX(-50%);
+    overflow-x: auto;
+  }
+  .vtree { display: flex; flex-direction: column; align-items: center; gap: 0; }
+  .vtree-node { background: var(--primary-light); border: 2px solid var(--primary); border-radius: 8px; padding: 0.35rem 0.9rem; font-size: 0.8rem; font-weight: 600; color: var(--primary); white-space: nowrap; text-align: center; min-width: 88px; }
+  .vtree-node.t-opening { background: var(--success-light); border-color: var(--success); color: var(--success); }
+  .vtree-node.t-announcement { background: #e0f2fe; border-color: #0284c7; color: #0284c7; }
+  .vtree-node.t-hearing { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
+  .vtree-node.t-subflow { background: #f3e8ff; border-color: #7c3aed; color: #7c3aed; }
+  .vtree-node.t-context_match_router, .vtree-node.t-script, .vtree-node.t-date_of_call_classifier { background: var(--warning-light); border-color: var(--warning); color: var(--warning); }
+  .vtree-node.t-call_transfer { background: #fce7f3; border-color: #db2777; color: #db2777; }
+  .vtree-node.t-termination { background: var(--danger-light); border-color: var(--danger); color: var(--danger); }
+  .vtree-arrow { color: var(--gray-300); font-size: 0.9rem; line-height: 1; text-align: center; padding: 2px 0; }
+  /* 分岐が多い場合は折り返して縦スクロールに切り替える（横スクロール回避） */
+  .vtree-branches { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; gap: 0.8rem; row-gap: 1rem; margin: 0.3rem 0; }
+  .vtree-branch { display: flex; flex-direction: column; align-items: center; gap: 0; border: 1px solid var(--gray-200); border-radius: 10px; padding: 0.5rem 0.6rem; background: var(--gray-50); min-width: 0; }
+  .vtree-branch-label { font-size: 0.7rem; font-weight: 700; color: var(--gray-500); background: white; border-radius: 4px; padding: 0.1rem 0.5rem; margin-bottom: 0.2rem; border: 1px solid var(--gray-200); }
+  .vtree-merge { text-align: center; font-size: 0.75rem; color: var(--gray-500); padding: 0.2rem 0; font-weight: 600; }
+  /* 要件別分岐（横並び折りたたみ） */
+  .vtree-branches.collapsible { gap: 0.6rem; row-gap: 0.8rem; align-items: flex-start; }
+  details.vtree-branch { padding: 0; border: 1px solid var(--gray-200); border-radius: 10px; background: var(--gray-50); overflow: hidden; flex: 0 1 auto; max-width: 100%; }
+  details.vtree-branch[open] { flex-basis: 280px; }
+  details.vtree-branch > summary { list-style: none; cursor: pointer; padding: 0.55rem 0.9rem; background: white; display: flex; align-items: center; gap: 0.45rem; font-weight: 700; font-size: 0.85rem; color: var(--gray-700); user-select: none; transition: background 0.15s; }
+  details.vtree-branch > summary:hover { background: var(--gray-100); }
+  details.vtree-branch > summary::-webkit-details-marker { display: none; }
+  details.vtree-branch > summary::before { content: '\25B6'; font-size: 0.65rem; color: var(--gray-500); transition: transform 0.25s; display: inline-block; }
+  details.vtree-branch[open] > summary::before { transform: rotate(90deg); }
+  details.vtree-branch > summary .req-badge { font-size: 0.72rem; background: var(--primary-light); color: var(--primary); padding: 0.1rem 0.5rem; border-radius: 999px; font-weight: 700; }
+  details.vtree-branch > .vtree-branch-body { padding: 0.8rem; display: flex; flex-direction: column; align-items: center; gap: 0; border-top: 1px solid var(--gray-200); background: var(--gray-50); }
+  /* 共通トランクに畳んだ分岐（vtree-branch-merged）はラベルのみ小さく表示 */
+  .vtree-branch-merged { display: inline-flex; flex-wrap: wrap; gap: 0.3rem; justify-content: center; margin: 0.2rem 0; }
+  .vtree-branch-merged .req-badge { font-size: 0.7rem; background: var(--gray-100); color: var(--gray-700); padding: 0.15rem 0.55rem; border-radius: 999px; font-weight: 600; border: 1px solid var(--gray-200); }
+  .vtree-branch-merged-note { font-size: 0.7rem; color: var(--gray-500); margin-right: 0.3rem; align-self: center; }
+  .vtree-expand-bar { display: flex; gap: 0.6rem; justify-content: flex-end; margin-bottom: 0.6rem; font-size: 0.8rem; }
+  .vtree-expand-bar button { background: white; border: 1px solid var(--gray-300); color: var(--gray-700); padding: 0.3rem 0.7rem; border-radius: 6px; cursor: pointer; font-size: 0.75rem; font-weight: 600; }
+  .vtree-expand-bar button:hover { background: var(--gray-100); }
+  /* タブレット以下: branches を縦積みに切り替えて見切れを回避 */
+  @media (max-width: 820px) {
+    .tree-section { width: calc(100vw - 1rem); padding: 1rem 0.75rem; }
+    .vtree-branches { flex-direction: column; align-items: stretch; }
+    .vtree-branch { align-items: center; }
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>シナリオ仕様書</h1>
+  <div class="meta">つくばセントラル病院 | 作成日: 2026年05月22日</div>
+</div>
+<div class="container">
+
+<div class="overview">
+  <div class="overview-card"><div class="num">43</div><div class="label">総ブロック数</div></div>
+  <div class="overview-card"><div class="num">2</div><div class="label">用件メニュー</div></div>
+  <div class="overview-card"><div class="num">4</div><div class="label">サブフロー</div></div>
+  <div class="overview-card"><div class="num">0</div><div class="label">分岐ブロック</div></div>
+  <div class="overview-card"><div class="num">15</div><div class="label">終話パターン</div></div>
+</div>
+
+<div class="tree-section">
+  <h3 style="margin-bottom:0.8rem;color:var(--gray-700);">通話の全体フロー（樹形図）</h3>
+  <div class="vtree-expand-bar"><button onclick="document.querySelectorAll('details.vtree-branch').forEach(d=>d.open=true)">全て展開</button><button onclick="document.querySelectorAll('details.vtree-branch').forEach(d=>d.open=false)">全て閉じる</button></div><div class="vtree"><div class="vtree-node t-opening">冒頭</div><div class="vtree-arrow">↓</div><div class="vtree-node t-announcement">冒頭_アナウンス</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">日程確認</div><div class="vtree-arrow">↓</div><div class="vtree-branches collapsible"><details class="vtree-branch"><summary><span class="req-badge">はい</span></summary><div class="vtree-branch-body"><div class="vtree-node t-termination">END_代表案内_当日翌日</div></div></details><details class="vtree-branch"><summary><span class="req-badge">いいえ</span></summary><div class="vtree-branch-body"><div class="vtree-node t-subflow">電話番号聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">診察券番号聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">氏名聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">生年月日聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">診療科</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">骨粗しょう症検診</div><div class="vtree-node t-hearing">受診券所持確認_骨粗しょう症</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">予約希望日聴取_骨粗しょう症</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_骨粗しょう症健診</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-hearing">自費確認_骨粗しょう症</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">default</div></div></div><div class="vtree-merge">↓ 合流</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日聴取_骨粗しょう症</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_骨粗しょう症健診</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-merged"><span class="vtree-branch-merged-note">共通:</span><span class="req-badge">子宮がん検診</span> <span class="req-badge">乳がん検診</span></div><div class="vtree-node t-hearing">症状確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-termination">END_来院案内</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-hearing">受診券所持確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">市町村確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">他検診受診確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日聴取_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_子宮がん乳がん検診</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-hearing">自費確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">市町村確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">他検診受診確認_がん検診</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div></div></div><div class="vtree-merge">↓ 合流</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日聴取_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_子宮がん乳がん検診</div></div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">産婦人科</div><div class="vtree-node t-hearing">検診確認_産婦人科</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">症状確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-termination">END_来院案内</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-hearing">受診券所持確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">市町村確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">他検診受診確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日聴取_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_子宮がん乳がん検診</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-hearing">自費確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">市町村確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">他検診受診確認_がん検診</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div></div></div><div class="vtree-merge">↓ 合流</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日聴取_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_子宮がん乳がん検診</div></div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-termination">END_来院案内</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">一般内科</div><div class="vtree-node t-termination">END_代表案内1</div></div><div class="vtree-branch"><div class="vtree-branch-label">特定健診</div><div class="vtree-node t-termination">END_代表案内2</div></div><div class="vtree-branch"><div class="vtree-branch-label">予防接種</div><div class="vtree-node t-termination">END_代表案内3</div></div><div class="vtree-branch"><div class="vtree-branch-label">健診希望</div><div class="vtree-node t-hearing">健診内容確認</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_健診_人間ドック</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-hearing">用件確認</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">予約</div><div class="vtree-node t-hearing">受診歴確認</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">再診</div><div class="vtree-node t-hearing">症状聴取_一般予約</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">産婦人科</div><div class="vtree-node t-hearing">検診確認_産婦人科</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">症状確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-termination">END_来院案内</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-hearing">受診券所持確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">市町村確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">他検診受診確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日聴取_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_子宮がん乳がん検診</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-hearing">自費確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">市町村確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">他検診受診確認_がん検診</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div></div></div><div class="vtree-merge">↓ 合流</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日聴取_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_子宮がん乳がん検診</div></div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-termination">END_来院案内</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-merged"><span class="vtree-branch-merged-note">共通:</span><span class="req-badge">子宮がん検診</span> <span class="req-badge">乳がん検診</span></div><div class="vtree-node t-hearing">症状確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-termination">END_来院案内</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-hearing">受診券所持確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">市町村確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">他検診受診確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日聴取_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_子宮がん乳がん検診</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-hearing">自費確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">市町村確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">他検診受診確認_がん検診</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div></div></div><div class="vtree-merge">↓ 合流</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日聴取_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_子宮がん乳がん検診</div></div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">骨粗しょう症検診</div><div class="vtree-node t-hearing">受診券所持確認_骨粗しょう症</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">予約希望日聴取_骨粗しょう症</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_骨粗しょう症健診</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-hearing">自費確認_骨粗しょう症</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">default</div></div></div><div class="vtree-merge">↓ 合流</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日聴取_骨粗しょう症</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_骨粗しょう症健診</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">予防接種</div><div class="vtree-node t-termination">END_代表案内3</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-hearing">予約希望日聴取_一般予約</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_予約</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">初診</div><div class="vtree-node t-hearing">紹介状確認</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">あり</div><div class="vtree-node t-hearing">紹介元医療機関聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">担当医聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日聴取_一般予約</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_予約</div></div><div class="vtree-branch"><div class="vtree-branch-label">なし</div><div class="vtree-node t-hearing">症状聴取_一般予約</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">産婦人科</div><div class="vtree-node t-hearing">検診確認_産婦人科</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">症状確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-termination">END_来院案内</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-hearing">受診券所持確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">市町村確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">他検診受診確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日聴取_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_子宮がん乳がん検診</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-hearing">自費確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">市町村確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">他検診受診確認_がん検診</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div></div></div><div class="vtree-merge">↓ 合流</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日聴取_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_子宮がん乳がん検診</div></div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-termination">END_来院案内</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-merged"><span class="vtree-branch-merged-note">共通:</span><span class="req-badge">子宮がん検診</span> <span class="req-badge">乳がん検診</span></div><div class="vtree-node t-hearing">症状確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-termination">END_来院案内</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-hearing">受診券所持確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">市町村確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">他検診受診確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日聴取_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_子宮がん乳がん検診</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-hearing">自費確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">市町村確認_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">他検診受診確認_がん検診</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div></div></div><div class="vtree-merge">↓ 合流</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日聴取_がん検診</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_子宮がん乳がん検診</div></div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">骨粗しょう症検診</div><div class="vtree-node t-hearing">受診券所持確認_骨粗しょう症</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-hearing">予約希望日聴取_骨粗しょう症</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_骨粗しょう症健診</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree-node t-hearing">自費確認_骨粗しょう症</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">default</div></div></div><div class="vtree-merge">↓ 合流</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日聴取_骨粗しょう症</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_骨粗しょう症健診</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">予防接種</div><div class="vtree-node t-termination">END_代表案内3</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-hearing">予約希望日聴取_一般予約</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_予約</div></div></div></div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-hearing">予約日聴取_変更</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約希望日聴取_変更</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_変更</div></div><div class="vtree-branch"><div class="vtree-branch-label">キャンセル</div><div class="vtree-node t-hearing">予約日聴取_キャンセル</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">キャンセル理由聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_キャンセル</div></div><div class="vtree-branch"><div class="vtree-branch-label">確認</div><div class="vtree-node t-hearing">内容確認_予約確認</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_終話_お問い合わせ</div></div></div></div></div></div></details></div></div>
+</div>
+
+<div style="background:white;border-radius:12px;padding:1rem 1.5rem;box-shadow:0 1px 3px rgba(0,0,0,0.08);margin:1.5rem 0;display:flex;flex-wrap:wrap;gap:1.5rem;align-items:center;">
+  <span style="font-weight:600;color:var(--gray-700);font-size:0.9rem;">処理方式の凡例:</span>
+  <span style="display:flex;align-items:center;gap:0.4rem;"><span class="badge badge-gray">音声認識のみ</span><span style="font-size:0.8rem;color:var(--gray-500);">患者の発話をそのまま記録</span></span>
+  <span style="display:flex;align-items:center;gap:0.4rem;"><span class="badge badge-purple">AI判定</span><span style="font-size:0.8rem;color:var(--gray-500);">AIが発話内容を分類・変換して分岐</span></span>
+</div>
+<div class="section">
+<div class="section-title">1. 着信～用件選択</div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F4DE;</span><span class="title">冒頭アナウンス</span><span class="badge badge-green">自動</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">AIが話す内容</div>お電話ありがとうございます。セントラル総合クリニックのAI電話です。このお電話にてご連絡いただいた内容は、当院にて確認後、折り返しご連絡差し上げますので最後までお話しください。</div>
+<div class="info-box">&#9888;&#65039; <strong>非通知の場合</strong>: {tts_g:恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。}</div>
+<div class="info-box">&#x1F553; <strong>時間外の場合</strong>: {tts_g:お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。}</div>
+</div></div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F500;</span><span class="title">日程確認</span><span class="badge badge-orange">分岐</span><span class="badge badge-purple">AI判定</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">AIが話す内容</div>お電話は、今日、明日の予約に関するお問い合わせでしょうか？「はい」、または「いいえ」でお答えください。</div>
+<table class="branch-table">
+<tr><th>選択</th><th>遷移先</th></tr>
+<tr><td><strong>1</strong> または「はい」</td><td>&rarr; END_代表案内_当日翌日</td></tr>
+<tr><td><strong>2</strong> または「いいえ」</td><td>&rarr; 電話番号聴取</td></tr>
+</table>
+<div class="error-box">&#x1F504; 聞き取れなかった場合: 最大<strong>1回</strong>再質問</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">2. はいフロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">はいフロー</span><span class="badge badge-blue">0ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">3. いいえフロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">いいえフロー</span><span class="badge badge-blue">0ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">4. 個人情報聴取（共通サブフロー）</div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F464;</span><span class="title">聴取する項目</span><span class="badge badge-blue">4項目</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th>順序</th><th>項目</th><th>入力方法</th></tr>
+<tr><td>1</td><td><strong>氏名聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>2</td><td><strong>生年月日聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>3</td><td><strong>電話番号聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>4</td><td><strong>診察券番号聴取</strong></td><td>音声 / プッシュ</td></tr>
+</table>
+<div class="info-box">&#x1F4F1; <strong>携帯電話からの着信の場合</strong>: 電話番号は着信番号を復唱確認</div>
+<div class="error-box">&#x1F504; 各項目とも聞き取れなかった場合は最大<strong>2回</strong>再質問</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">5. ブロック構成（技術仕様）</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F9E9;</span><span class="title">全ブロック一覧（43ブロック）</span><span class="badge badge-blue">43件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th style="width:5%">#</th><th style="width:25%">ブロック名</th><th style="width:15%">タイプ</th><th style="width:25%">接続先</th><th style="width:30%">詳細</th></tr>
+<tr><td>1</td><td>&#x1F3E0; <strong>冒頭</strong></td><td><span class="badge badge-green">冒頭</span></td><td style="font-size:0.8rem">冒頭_アナウンス</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>2</td><td>&#x1F50A; <strong>冒頭_アナウンス</strong></td><td><span class="badge badge-blue">発話</span></td><td style="font-size:0.8rem">日程確認</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>3</td><td>&#x1F3A4; <strong>日程確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">END_代表案内_当日翌日 / 電話番号聴取</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>4</td><td>&#x1F517; <strong>電話番号聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">診察券番号聴取</td><td style="font-size:0.8rem">flow: つくばセントラル病院$電話番号聴取</td></tr>
+<tr><td>5</td><td>&#x1F517; <strong>診察券番号聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">氏名聴取</td><td style="font-size:0.8rem">flow: つくばセントラル病院$診察券番号聴取</td></tr>
+<tr><td>6</td><td>&#x1F517; <strong>氏名聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">生年月日聴取</td><td style="font-size:0.8rem">flow: つくばセントラル病院$氏名聴取</td></tr>
+<tr><td>7</td><td>&#x1F517; <strong>生年月日聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">診療科</td><td style="font-size:0.8rem">flow: つくばセントラル病院$生年月日聴取</td></tr>
+<tr><td>8</td><td>&#x1F3A4; <strong>診療科</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">受診券所持確認_骨粗しょう症 / 症状確認_がん検診 / 症状確認_がん検診 / 検診確認_産婦人科 / END_代表案内1 / END_代表案内2 / END_代表案内3 / 健診内容確認 / 用件確認</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>9</td><td>&#x1F3A4; <strong>用件確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">受診歴確認 / 予約日聴取_変更 / 予約日聴取_キャンセル / 内容確認_予約確認</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>10</td><td>&#x1F3A4; <strong>受診歴確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">症状聴取_一般予約 / 紹介状確認</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>11</td><td>&#x1F3A4; <strong>紹介状確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">紹介元医療機関聴取 / 症状聴取_一般予約</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>12</td><td>&#x1F3A4; <strong>紹介元医療機関聴取</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">担当医聴取</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>13</td><td>&#x1F3A4; <strong>担当医聴取</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">予約希望日聴取_一般予約</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>14</td><td>&#x1F3A4; <strong>症状聴取_一般予約</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">検診確認_産婦人科 / 症状確認_がん検診 / 症状確認_がん検診 / 受診券所持確認_骨粗しょう症 / END_代表案内3 / 予約希望日聴取_一般予約</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>15</td><td>&#x1F3A4; <strong>予約希望日聴取_一般予約</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">END_終話_予約</td><td style="font-size:0.8rem">format: datetime</td></tr>
+<tr><td>16</td><td>&#x1F3A4; <strong>予約日聴取_変更</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">予約希望日聴取_変更</td><td style="font-size:0.8rem">format: datetime</td></tr>
+<tr><td>17</td><td>&#x1F3A4; <strong>予約希望日聴取_変更</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">END_終話_変更</td><td style="font-size:0.8rem">format: datetime</td></tr>
+<tr><td>18</td><td>&#x1F3A4; <strong>予約日聴取_キャンセル</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">キャンセル理由聴取</td><td style="font-size:0.8rem">format: datetime</td></tr>
+<tr><td>19</td><td>&#x1F3A4; <strong>キャンセル理由聴取</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">END_終話_キャンセル</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>20</td><td>&#x1F3A4; <strong>内容確認_予約確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">END_終話_お問い合わせ</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>21</td><td>&#x1F3A4; <strong>受診券所持確認_骨粗しょう症</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">予約希望日聴取_骨粗しょう症 / 自費確認_骨粗しょう症</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>22</td><td>&#x1F3A4; <strong>自費確認_骨粗しょう症</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">予約希望日聴取_骨粗しょう症</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>23</td><td>&#x1F3A4; <strong>予約希望日聴取_骨粗しょう症</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">END_終話_骨粗しょう症健診</td><td style="font-size:0.8rem">format: datetime</td></tr>
+<tr><td>24</td><td>&#x1F3A4; <strong>検診確認_産婦人科</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">症状確認_がん検診 / END_来院案内</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>25</td><td>&#x1F3A4; <strong>症状確認_がん検診</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">END_来院案内 / 受診券所持確認_がん検診</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>26</td><td>&#x1F3A4; <strong>受診券所持確認_がん検診</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">市町村確認_がん検診 / 自費確認_がん検診</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>27</td><td>&#x1F3A4; <strong>自費確認_がん検診</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">市町村確認_がん検診 / 予約希望日聴取_がん検診</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>28</td><td>&#x1F3A4; <strong>市町村確認_がん検診</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">他検診受診確認_がん検診</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>29</td><td>&#x1F3A4; <strong>他検診受診確認_がん検診</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">予約希望日聴取_がん検診</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>30</td><td>&#x1F3A4; <strong>予約希望日聴取_がん検診</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">END_終話_子宮がん乳がん検診</td><td style="font-size:0.8rem">format: datetime</td></tr>
+<tr><td>31</td><td>&#x1F3A4; <strong>健診内容確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">END_終話_健診_人間ドック</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>32</td><td>&#x1F6D1; <strong>END_終話_予約</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_終話_予約</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>33</td><td>&#x1F6D1; <strong>END_終話_変更</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_終話_変更</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>34</td><td>&#x1F6D1; <strong>END_終話_キャンセル</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_終話_キャンセル</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>35</td><td>&#x1F6D1; <strong>END_終話_お問い合わせ</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_終話_お問い合わせ</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>36</td><td>&#x1F6D1; <strong>END_終話_子宮がん乳がん検診</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_終話_子宮がん乳がん検診</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>37</td><td>&#x1F6D1; <strong>END_終話_骨粗しょう症健診</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_終話_骨粗しょう症健診</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>38</td><td>&#x1F6D1; <strong>END_終話_健診_人間ドック</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_終話_健診_人間ドック</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>39</td><td>&#x1F6D1; <strong>END_代表案内1</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_代表案内1</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>40</td><td>&#x1F6D1; <strong>END_代表案内2</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_代表案内2</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>41</td><td>&#x1F6D1; <strong>END_代表案内3</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_代表案内3</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>42</td><td>&#x1F6D1; <strong>END_代表案内_当日翌日</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_代表案内_当日翌日</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>43</td><td>&#x1F6D1; <strong>END_来院案内</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_来院案内</td><td style="font-size:0.8rem">—</td></tr>
+</table>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">6. エラー・例外時の挙動</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x26A0;&#xFE0F;</span><span class="title">エラー時の対応一覧</span><span class="badge badge-red">重要</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th>状況</th><th>対応</th></tr>
+<tr><td>非通知着信</td><td>{tts_g:恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。}</td></tr>
+<tr><td>受付時間外</td><td>{tts_g:お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。}</td></tr>
+<tr><td>リトライ上限到達</td><td>{tts_g:申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。}</td></tr>
+<tr><td>予約ルート完了</td><td>{tts_g:お電話承りました。予約の申し込みを受付いたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、日曜、祝日を除く3診療日内に折り返し電話</td></tr>
+<tr><td>変更ルート完了</td><td>{tts_g:お電話承りました。予約変更の申し込みを受付いたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、日曜、祝日を除く3診療日内に折り返し</td></tr>
+<tr><td>キャンセルルート完了</td><td>{tts_g:お電話承りました。予約キャンセルの申し込みを受付いたしました。必要がある場合のみ、当院より折り返しさせていただきます。それでは失礼いたします。}</td></tr>
+<tr><td>予約確認ルート完了</td><td>{tts_g:お電話承りました。予約確認の申し込みを受付いたしました。日曜、祝日を除く3診療日以内に折り返しショートメッセージをお送りいたします。内容のご確認を</td></tr>
+<tr><td>がん検診ルート完了</td><td>{tts_g:お電話承りました。AI電話で一旦申し込みを受け付けいたしました。このお電話にてご連絡いただいた内容は当院にて確認後、日曜、祝日を除く3診療日以内に</td></tr>
+<tr><td>骨粗しょう症健診ルート完了</td><td>{tts_g:お電話承りました。AI電話で一旦申し込みを受け付けいたしました。このお電話にてご連絡いただいた内容は当院にて確認後、日曜、祝日を除く3診療日以内に</td></tr>
+<tr><td>健診・人間ドックルート完了</td><td>{tts_g:お電話承りました。AI電話で一旦申し込みを受け付けいたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、日曜、祝日を除く3診療日以内</td></tr>
+<tr><td>診療科=一般内科</td><td>{tts_g:申し訳ございません。一般内科に関しては、こちらのAI電話ではお受けできません。受付時間内に直接ご来院ください。お電話ありがとうございました。それで</td></tr>
+<tr><td>診療科=特定健診（緩和ケア/眼科/救急/歯科口腔/放射線腫瘍/麻酔/リハビリ/化学療法 等）</td><td>{tts_g:申し訳ございません。該当診療科に関しては、こちらのAI電話ではお受けできません。代表電話へおかけ直しください。電話番号を申し上げます。メモをご準備</td></tr>
+<tr><td>診療科=予防接種（予防注射/ワクチン/HPV/乳幼児健診 等）</td><td>{tts_g:申し訳ございません。該当キーワードに関しては、こちらのAI電話ではお受けできません。代表電話へおかけ直しください。電話番号を申し上げます。メモをご</td></tr>
+<tr><td>日程確認=はい（当日翌日の問い合わせ）</td><td>{tts_g:申し訳ございません。当日、翌日のお問い合わせに関しては、こちらのAI電話ではお受けできません。代表電話へおかけ直しください。電話番号を申し上げます</td></tr>
+<tr><td>がん検診症状あり / 産婦人科非検診</td><td>{tts_g:症状がある方へのご案内です。症状のある方で、産婦人科をご希望の方は、診療日当日の午前8時から午前11時30分までに、直接ご来院ください。乳腺外科を</td></tr>
+</table>
+<div class="speech"><div class="label">聞き取り失敗時の切断アナウンス</div>{tts_g:申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。}</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">7. 終話パターン一覧</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F6AA;</span><span class="title">全終話パターンの発話テキスト</span><span class="badge badge-red">15件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">END_非通知</div>{tts_g:恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。}</div>
+<div class="speech"><div class="label">END_時間外</div>{tts_g:お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。}</div>
+<div class="speech"><div class="label">END_聴取失敗</div>{tts_g:申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。}</div>
+<div class="speech"><div class="label">END_終話_予約</div>{tts_g:お電話承りました。予約の申し込みを受付いたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、日曜、祝日を除く3診療日内に折り返し電話、またはショートメッセージをお送りし、確定となります。それでは失礼いたします。}</div>
+<div class="speech"><div class="label">END_終話_変更</div>{tts_g:お電話承りました。予約変更の申し込みを受付いたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、日曜、祝日を除く3診療日内に折り返し電話、またはショートメッセージをお送りし、確定となります。それでは失礼いたします。}</div>
+<div class="speech"><div class="label">END_終話_キャンセル</div>{tts_g:お電話承りました。予約キャンセルの申し込みを受付いたしました。必要がある場合のみ、当院より折り返しさせていただきます。それでは失礼いたします。}</div>
+<div class="speech"><div class="label">END_終話_お問い合わせ</div>{tts_g:お電話承りました。予約確認の申し込みを受付いたしました。日曜、祝日を除く3診療日以内に折り返しショートメッセージをお送りいたします。内容のご確認をお願いします。必要がある場合のみ、当院より折り返しさせていただきます。それでは失礼いたします。}</div>
+<div class="speech"><div class="label">END_終話_子宮がん乳がん検診</div>{tts_g:お電話承りました。AI電話で一旦申し込みを受け付けいたしました。このお電話にてご連絡いただいた内容は当院にて確認後、日曜、祝日を除く3診療日以内に折り返し電話またはショートメッセージをお送りし確定となります。それでは失礼いたします。}</div>
+<div class="speech"><div class="label">END_終話_骨粗しょう症健診</div>{tts_g:お電話承りました。AI電話で一旦申し込みを受け付けいたしました。このお電話にてご連絡いただいた内容は当院にて確認後、日曜、祝日を除く3診療日以内に折り返し電話またはショートメッセージをお送りし確定となります。それでは失礼いたします。}</div>
+<div class="speech"><div class="label">END_終話_健診_人間ドック</div>{tts_g:お電話承りました。AI電話で一旦申し込みを受け付けいたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、日曜、祝日を除く3診療日以内に折り返し電話またはショートメッセージをお送りし、確定となります。それでは失礼いたします。}</div>
+<div class="speech"><div class="label">END_代表案内1</div>{tts_g:申し訳ございません。一般内科に関しては、こちらのAI電話ではお受けできません。受付時間内に直接ご来院ください。お電話ありがとうございました。それでは失礼いたします。}</div>
+<div class="speech"><div class="label">END_代表案内2</div>{tts_g:申し訳ございません。該当診療科に関しては、こちらのAI電話ではお受けできません。代表電話へおかけ直しください。電話番号を申し上げます。メモをご準備ください。番号は029-872-1771です。くりかえします。029-872-1771です。くりかえします。029-872-1771です。お電話ありがとうございました。それでは失礼いたします。}</div>
+<div class="speech"><div class="label">END_代表案内3</div>{tts_g:申し訳ございません。該当キーワードに関しては、こちらのAI電話ではお受けできません。代表電話へおかけ直しください。電話番号を申し上げます。メモをご準備ください。番号は029-875-3511です。くりかえします。029-875-3511です。くりかえします。029-875-3511です。お電話ありがとうございました。それでは失礼いたします。}</div>
+<div class="speech"><div class="label">END_代表案内_当日翌日</div>{tts_g:申し訳ございません。当日、翌日のお問い合わせに関しては、こちらのAI電話ではお受けできません。代表電話へおかけ直しください。電話番号を申し上げます。メモをご準備ください。番号は029-872-1771です。くりかえします。029-872-1771です。くりかえします。029-872-1771です。お電話ありがとうございました。それでは失礼いたします。}</div>
+<div class="speech"><div class="label">END_来院案内</div>{tts_g:症状がある方へのご案内です。症状のある方で、産婦人科をご希望の方は、診療日当日の午前8時から午前11時30分までに、直接ご来院ください。乳腺外科を希望の方は、木曜日と土曜日の午後1時から午後4時までに、直接ご来院ください。休診などの診療案内につきましては、当院ホームページをご確認のうえ、ご来院くださいますようお願いいたします。なお、産婦人科の予約変更、確認、キャンセルにつきましては、代表電話へおかけ直しください。電話番号は029-875-3511です。くりかえします。029-875-3511です。くりかえします。029-875-3511です。それでは失礼いたします。}</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">8. 発話テキスト全文一覧</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F4DD;</span><span class="title">全発話テキスト（41件）</span><span class="badge badge-blue">41件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th style="width:30%">ステップ名</th><th>発話テキスト</th></tr>
+<tr><td><strong>冒頭_アナウンス</strong></td><td>お電話ありがとうございます。セントラル総合クリニックのAI電話です。このお電話にてご連絡いただいた内容は、当院にて確認後、折り返しご連絡差し上げますので最後までお話しください。</td></tr>
+<tr><td><strong>日程確認</strong></td><td>お電話は、今日、明日の予約に関するお問い合わせでしょうか？「はい」、または「いいえ」でお答えください。</td></tr>
+<tr><td><strong>診療科</strong></td><td>受診を希望されている診療科をお話ください。検査の方は検査とお話しください。</td></tr>
+<tr><td><strong>用件確認</strong></td><td>ご用件をお伺いします。次の4つのうち、いずれかでお話ください。1「予約」、2「変更」、3「キャンセル」、4「予約確認」、それではお話ください。プッシュボタンでも操作できます。</td></tr>
+<tr><td><strong>受診歴確認</strong></td><td>当院でのご受診は初めてですか？</td></tr>
+<tr><td><strong>紹介状確認</strong></td><td>他の医療機関からの紹介状はお持ちですか。</td></tr>
+<tr><td><strong>紹介元医療機関聴取</strong></td><td>紹介元医療機関をお話しください。なければ「ない」とお話しください。</td></tr>
+<tr><td><strong>担当医聴取</strong></td><td>指定の担当医はございますか。</td></tr>
+<tr><td><strong>症状聴取_一般予約</strong></td><td>症状を簡潔にお話しください。</td></tr>
+<tr><td><strong>予約希望日聴取_一般予約</strong></td><td>受診を希望されるお日にちがあればお話しください。</td></tr>
+<tr><td><strong>予約日聴取_変更</strong></td><td>予約票に記載されている予約日を「4月1日」のように日付でお話ください。</td></tr>
+<tr><td><strong>予約希望日聴取_変更</strong></td><td>受診を希望されるお日にちがあればお話しください。</td></tr>
+<tr><td><strong>予約日聴取_キャンセル</strong></td><td>予約票に記載されている予約日を「4月1日」のように日付でお話ください。</td></tr>
+<tr><td><strong>キャンセル理由聴取</strong></td><td>キャンセル理由をお話しください。</td></tr>
+<tr><td><strong>内容確認_予約確認</strong></td><td>ご確認内容についてお伺いします。「次回の予約日時を教えて欲しい」等、その他ご不明な点等ございましたら、こちらでお話しください。</td></tr>
+<tr><td><strong>受診券所持確認_骨粗しょう症</strong></td><td>牛久市の受診券はお持ちですか？</td></tr>
+<tr><td><strong>自費確認_骨粗しょう症</strong></td><td>自費で受診されますか？</td></tr>
+<tr><td><strong>予約希望日聴取_骨粗しょう症</strong></td><td>骨粗しょう症検診のご予約は月曜日午後になります。受診を希望されるお日にちがあればお話しください。</td></tr>
+<tr><td><strong>検診確認_産婦人科</strong></td><td>子宮がん検診・乳がん検診をご希望ですか。</td></tr>
+<tr><td><strong>症状確認_がん検診</strong></td><td>症状はありますか？「はい」、または「いいえ」でお答えください。</td></tr>
+<tr><td><strong>受診券所持確認_がん検診</strong></td><td>受診券もしくは利用券などはありますか？</td></tr>
+<tr><td><strong>自費確認_がん検診</strong></td><td>自費で受診されますか？</td></tr>
+<tr><td><strong>市町村確認_がん検診</strong></td><td>市町村はどちらでしょうか？</td></tr>
+<tr><td><strong>他検診受診確認_がん検診</strong></td><td>ご一緒に子宮がん、乳がん検診のご予約はございますか？</td></tr>
+<tr><td><strong>予約希望日聴取_がん検診</strong></td><td>受診を希望されるお日にちがあればお話しください。</td></tr>
+<tr><td><strong>健診内容確認</strong></td><td>ご用件をお伺いいたします。お話し途中で次に進んだ場合、当院より折り返しご連絡をいたしますので、ご連絡をお待ちください。</td></tr>
+<tr><td><strong>END_終話_予約</strong></td><td>お電話承りました。予約の申し込みを受付いたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、日曜、祝日を除く3診療日内に折り返し電話、またはショートメッセージをお送りし、確定となります。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_終話_変更</strong></td><td>お電話承りました。予約変更の申し込みを受付いたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、日曜、祝日を除く3診療日内に折り返し電話、またはショートメッセージをお送りし、確定となります。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_終話_キャンセル</strong></td><td>お電話承りました。予約キャンセルの申し込みを受付いたしました。必要がある場合のみ、当院より折り返しさせていただきます。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_終話_お問い合わせ</strong></td><td>お電話承りました。予約確認の申し込みを受付いたしました。日曜、祝日を除く3診療日以内に折り返しショートメッセージをお送りいたします。内容のご確認をお願いします。必要がある場合のみ、当院より折り返しさせていただきます。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_終話_子宮がん乳がん検診</strong></td><td>お電話承りました。AI電話で一旦申し込みを受け付けいたしました。このお電話にてご連絡いただいた内容は当院にて確認後、日曜、祝日を除く3診療日以内に折り返し電話またはショートメッセージをお送りし確定となります。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_終話_骨粗しょう症健診</strong></td><td>お電話承りました。AI電話で一旦申し込みを受け付けいたしました。このお電話にてご連絡いただいた内容は当院にて確認後、日曜、祝日を除く3診療日以内に折り返し電話またはショートメッセージをお送りし確定となります。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_終話_健診_人間ドック</strong></td><td>お電話承りました。AI電話で一旦申し込みを受け付けいたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、日曜、祝日を除く3診療日以内に折り返し電話またはショートメッセージをお送りし、確定となります。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_代表案内1</strong></td><td>申し訳ございません。一般内科に関しては、こちらのAI電話ではお受けできません。受付時間内に直接ご来院ください。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_代表案内2</strong></td><td>申し訳ございません。該当診療科に関しては、こちらのAI電話ではお受けできません。代表電話へおかけ直しください。電話番号を申し上げます。メモをご準備ください。番号は029-872-1771です。くりかえします。029-872-1771です。くりかえします。029-872-1771です。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_代表案内3</strong></td><td>申し訳ございません。該当キーワードに関しては、こちらのAI電話ではお受けできません。代表電話へおかけ直しください。電話番号を申し上げます。メモをご準備ください。番号は029-875-3511です。くりかえします。029-875-3511です。くりかえします。029-875-3511です。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_代表案内_当日翌日</strong></td><td>申し訳ございません。当日、翌日のお問い合わせに関しては、こちらのAI電話ではお受けできません。代表電話へおかけ直しください。電話番号を申し上げます。メモをご準備ください。番号は029-872-1771です。くりかえします。029-872-1771です。くりかえします。029-872-1771です。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_来院案内</strong></td><td>症状がある方へのご案内です。症状のある方で、産婦人科をご希望の方は、診療日当日の午前8時から午前11時30分までに、直接ご来院ください。乳腺外科を希望の方は、木曜日と土曜日の午後1時から午後4時までに、直接ご来院ください。休診などの診療案内につきましては、当院ホームページをご確認のうえ、ご来院くださいますようお願いいたします。なお、産婦人科の予約変更、確認、キャンセルにつきましては、代表電話へおかけ直しください。電話番号は029-875-3511です。くりかえします。029-875-3511です。くりかえします。029-875-3511です。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_非通知</strong></td><td>恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_時間外</strong></td><td>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_聴取失敗</strong></td><td>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。</td></tr>
+</table>
+</div></div>
+</div>
+
+</div>
+<div class="footer">自動生成: VoiceBot Flow Builder | つくばセントラル病院 | 2026年05月22日</div>
+<script>
+document.querySelectorAll('.block-header').forEach(function(el){
+  el.addEventListener('click', function(){});
+});
+</script>
+</body>
+</html>

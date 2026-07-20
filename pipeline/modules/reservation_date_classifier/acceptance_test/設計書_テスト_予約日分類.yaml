@@ -1,0 +1,111 @@
+# Pattern 6 (テストフロー) — 予約日 抽出・正規化スクリプト (reservation_date_classifier) 単体受入テスト
+#
+# 検証対象: modules/reservation_date_classifier/script.js（このモジュールの正本・期間制限なし版）
+#
+# このテストの狙い:
+#   - script.js を script_file で **そのまま** 読み込み（バイト一致）、input_placeholder "入力_変更_予約日" を
+#     case ごとの <id>_in に置換するだけで、ロジックは 1 文字も変えない。
+#   - **日付非依存ケースのみ** を bivr 化する（システム日付 new Date() に依存しない入力＝
+#     絶対日付 / 8桁DTMF / 無効日 / 不明意図 / NO_RESULT）。期待値は実行日に関わらず不変。
+#   - 相対日付（今日/明日/来週/月末/裸の月日/4桁DTMF/過去日補正）は today 依存のため
+#     Python オラクル (../test_oracle.py, today パラメタ化) 側で網羅検証する（bivr には載せない）。
+#
+# 期待値の根拠: ../oracle.py（script.js の忠実 Python 移植）+ ../test_oracle.py 48/48 PASS。
+#   日付非依存ケースは「設計意図 == JS 挙動」が一致する範囲のみを採用。
+#
+# 実機検証時の確認方法:
+#   Brekeke ログを grep "[TEST FAIL]" して件数 0 なら全 PASS。
+#   FAIL 行は "[TEST FAIL] <id> in=<入力> exp=<期待> got=<clf実出力>" 形式。
+#   ログ末尾に "[TEST DONE]" が出れば全ケースのチェーンを完走している。
+#
+# モジュール数: dispatch 1 + 29×5 + 冒頭/開始ログ/終了ログ/終了 = 1 + 145 + 4 = 150 (1コール900上限内)。
+# engine v2（#265）: 上記 20 に today 非依存の v2 ケース 9（has_月 回収 5 + 事故①曖昧時期→不明 4）を追加。
+# today 依存の v2 ケース（hasm_md_*/hasm_ten/hasm_nod/hasm_selfcorr/jiko1_guard）は相対系ゆえ oracle 専用（bivr 非搭載）。
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$予約日分類"
+  flow_name: "テスト$予約日分類"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$予約日分類"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] 予約日 抽出・正規化 単体受入テスト (日付非依存 29 ケース・engine v2)");
+      $runner.getLogger().info("対象: reservation_date_classifier/script.js / オラクル 63/63 PASS 済");
+      $runner.getLogger().info("grep [TEST FAIL] = 0 なら実機も全 PASS");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: matrix
+
+  - step: matrix
+    type: script_test_matrix
+    script_file: "../script.js"
+    input_placeholder: "__SOURCE_MODULE__"  # 2026-06-23 refactor で wiring placeholder が 入力_変更_予約日 → __SOURCE_MODULE__ に変更済（yaml 追従）
+    final_next: ログ_終了
+    cases:
+      # --- abs01-03: 絶対日付（年月日完全指定・遠未来＝実行日非依存） ---
+      - {id: abs01, input: "2030年7月15日", expected: "2030-07-15 00:00"}
+      - {id: abs02, input: "2030年12月31日", expected: "2030-12-31 00:00"}
+      - {id: abs03, input: "令和12年3月3日", expected: "2030-03-03 00:00"}
+      # --- dtmf8: 8桁DTMF（YYYYMMDD） ---
+      - {id: dtmf8, input: "20300715", expected: "2030-07-15 00:00"}
+      - {id: dtmf8p, input: "20200101", expected: "NO_RESULT"}   # 過去日(DTMF) → NO_RESULT
+      # --- inv01-03: 無効日付 → NO_RESULT ---
+      - {id: inv01, input: "13月5日", expected: "NO_RESULT"}      # 無効月
+      - {id: inv02, input: "2030年2月30日", expected: "NO_RESULT"} # 2/30
+      - {id: inv03, input: "2030年4月31日", expected: "NO_RESULT"} # 4/31
+      # --- unk01-08: 不明意図 → 不明 ---
+      - {id: unk01, input: "わからない", expected: "不明"}
+      - {id: unk02, input: "わかりません", expected: "不明"}
+      - {id: unk03, input: "未定", expected: "不明"}
+      - {id: unk04, input: "忘れました", expected: "不明"}
+      - {id: unk05, input: "覚えていない", expected: "不明"}
+      - {id: unk06, input: "上旬", expected: "不明"}
+      - {id: unk07, input: "中旬", expected: "不明"}
+      - {id: unk08, input: "下旬", expected: "不明"}
+      # --- nr01-04: NO_RESULT（空/無関係発話/フィラー） ---
+      - {id: nr01, input: "", expected: "NO_RESULT"}
+      - {id: nr02, input: "予約したい", expected: "NO_RESULT"}
+      - {id: nr03, input: "こんにちは", expected: "NO_RESULT"}
+      - {id: nr04, input: "あのー", expected: "NO_RESULT"}
+      # --- engine v2: has_月 回収（西暦年あり=実行日非依存）+ Mガード（scorecard 昇格 #265）---
+      - {id: hasm_yr, input: "2030年7月20", expected: "2030-07-20 00:00"}        # Rule B: N月M→N月M日
+      - {id: hasm_ten_yr, input: "2030年6月3十", expected: "2030-06-30 00:00"}    # Rule A: 3十→30 → Rule B
+      - {id: hasm_punct_yr, input: "2030年7月20。", expected: "2030-07-20 00:00"}  # 末尾句点でも 日 補完
+      - {id: hasm_guard_year, input: "1月20年", expected: "NO_RESULT"}            # Mガード: M月D年 化けは NO_RESULT
+      - {id: hasm_guard_overflow, input: "1月100", expected: "NO_RESULT"}         # Mガード: 3桁化けは NO_RESULT
+      # --- engine v2: 事故① 曖昧な時期表現→不明（NO_RESULT ループ回避・上旬/中旬/下旬 と統一）---
+      - {id: jiko1_shojun, input: "6月初旬", expected: "不明"}                    # 初旬 を UNKNOWN_RE へ追加
+      - {id: jiko1_gurai, input: "5月ぐらい", expected: "不明"}                   # VAGUE_PERIOD 遅延フォールバック
+      - {id: jiko1_dokoka, input: "5月のどこか", expected: "不明"}
+      - {id: jiko1_hajime, input: "5月初め頃", expected: "不明"}
+
+  - step: ログ_終了
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST DONE] 予約日 抽出・正規化 単体受入テスト 29 ケース 完走");
+      $runner.getLogger().info("Brekeke ログを grep [TEST FAIL] で件数確認 (0 なら全 PASS)");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: 終了
+
+  - step: 終了
+    type: termination

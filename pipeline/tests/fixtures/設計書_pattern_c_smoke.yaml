@@ -1,0 +1,214 @@
+# Pattern C smoke test 用 minimal YAML
+# DTMF 分離 hearing 1 つ + cmr_chain 1 つ
+version: "1.0"
+
+basic_info:
+  facility_name: "テスト施設_PatternC"
+  group_name: "テスト施設_PatternC"
+  flow_name: "テスト施設_PatternC$DTMF分離テスト"
+  target_facility: "テスト"
+  office_id: "TODO_要確認"
+  phone_number: ""
+  business_hours: "なし"
+  flow_type: "1flow"
+  work_type: "new"
+  environment: "demo"
+  openai_platform: "OPENAI"
+
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "テスト施設_PatternC$DTMF分離テスト"
+      role: "main"
+      description: "Pattern C smoke test"
+  subflows: []
+
+purpose: |
+  Pattern C (DTMF 分離 hearing + cmr_chain) の動作確認用最小フロー。
+
+flow_diagrams:
+  - flow_name: "テスト施設_PatternC$DTMF分離テスト"
+    diagram: |
+      冒頭 → 用件聴取(DTMF分離 1=予約/2=変更/3=もう一度/発話分類)
+        → 用件_終話判定_cmr_chain (3 値で分岐)
+        → END_*
+
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - {id: "1", order: "1", value: "予約"}
+      - {id: "2", order: "2", value: "変更"}
+    item_default: true
+    editable: true
+    deletable: true
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号(着信)"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - {id: "1", order: "1", value: "未処理"}
+      - {id: "3", order: "3", value: "聴取失敗"}
+      - {id: "7", order: "7", value: "非通知"}
+      - {id: "6", order: "6", value: "時間外"}
+      - {id: "2", order: "2", value: "代表案内"}
+    item_default: true
+    editable: true
+    deletable: false
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+
+hearing_items:
+  - order: 1
+    name: "用件聴取"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "予約"
+      - "変更"
+    notes: "DTMF 分離テスト用"
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: false
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 用件聴取
+
+  - step: 用件聴取
+    type: hearing
+    input_method: dtmf_split
+    output_format: enum
+    save_to: classification
+    retry_failure: end_failure
+    dtmf_options:
+      - {dtmf: "1", label: "予約",     next: 用件_終話判定}
+      - {dtmf: "2", label: "変更",     next: 用件_終話判定}
+      - {dtmf: "3", label: "もう一度", action: replay}
+
+  - step: 用件_終話判定
+    type: cmr_chain
+    reference_modules:
+      - {module: "save_用件聴取_予約", next: END_予約}
+      - {module: "save_用件聴取_変更", next: END_変更}
+    default_next: END_エラー
+
+  - step: END_予約
+    type: termination
+    termination_ref: END_予約
+
+  - step: END_変更
+    type: termination
+    termination_ref: END_変更
+
+  - step: END_エラー
+    type: termination
+    termination_ref: END_エラー
+
+step_details:
+  - step_name: "冒頭_アナウンス"
+    tts_announcement: "テスト施設PatternCです。"
+    input_method: "voice_only"
+    openai_rules: {}
+    save_to: ""
+    next_step: "用件聴取"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "用件聴取"
+    tts_announcement: "ご用件を、予約は1、変更は2、もう一度聞きたい方は3を押すか、お話ください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "予約"
+        - "変更"
+      mapping:
+        - input: "予約"
+          output: "予約"
+        - input: "変更"
+          output: "変更"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "classification"
+    next_step: "用件_終話判定"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+termination_patterns:
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "非通知です。"
+    status: "7"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "時間外"
+    tts_announcement: "時間外です。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "聴取失敗"
+    tts_announcement: "聴取失敗です。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+  - name: "END_予約"
+    condition: "予約"
+    tts_announcement: "予約を承りました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約"
+  - name: "END_変更"
+    condition: "変更"
+    tts_announcement: "変更を承りました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_変更"
+  - name: "END_エラー"
+    condition: "エラー"
+    tts_announcement: "エラーが発生しました。"
+    status: "2"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_エラー"
+
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "テスト施設PatternCです。"
+
+amivoice_dictionary: []
+special_notes: []
+confirmation_items: []
+sms_flag_routing:
+  enabled: false
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false

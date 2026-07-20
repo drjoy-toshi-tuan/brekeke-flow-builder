@@ -1,0 +1,80 @@
+{
+  "_description": "復唱確認パターン: Re-confirmation TTS → STT → OpenAI(肯定/否定) → 分岐",
+  "_usage": "confirmation=true の聴取項目に追加。ITEMを実際の項目名に置換",
+  "modules": {
+    "復唱_ITEM": {
+      "layout": {"x": 200, "y": 0},
+      "next": [{"condition": "^.*$", "label": "Next Module", "nextModuleName": "入力_復唱_ITEM"}],
+      "subs": [{"moduleName": "save-復唱_ITEM", "label": "save-復唱_ITEM"}, {"moduleName": "", "label": ""}, {"moduleName": "", "label": ""}],
+      "name": "復唱_ITEM",
+      "description": "",
+      "matchingmethod": 1,
+      "type": "Custom$Re-confirmation node data",
+      "params": {"prompt": "{tts_g:#data# でよろしいですか？}"}
+    },
+    "入力_復唱_ITEM": {
+      "layout": {"x": 200, "y": 150},
+      "next": [
+        {"condition": "^TIMEOUT$", "label": "timeout", "nextModuleName": "リトライ_復唱_ITEM"},
+        {"condition": "^ERROR$", "label": "error", "nextModuleName": "リトライ_復唱_ITEM"},
+        {"condition": "^NO_RESULT$", "label": "no_result", "nextModuleName": "リトライ_復唱_ITEM"},
+        {"condition": "^.+$", "label": "success", "nextModuleName": "OpenAI_復唱_ITEM"}
+      ],
+      "subs": [{"moduleName": "save-復唱_ITEM", "label": "save-復唱_ITEM"}, {"moduleName": "", "label": ""}, {"moduleName": "", "label": ""}],
+      "name": "入力_復唱_ITEM",
+      "description": "",
+      "matchingmethod": 1,
+      "type": "drjoy^External Integration$DTMF AmiVoice STT Input",
+      "params": {
+        "prompt": "{recstart}", "max_dtmf_length": "1", "retry": "2",
+        "termdtmf": "#", "remove_term": "Yes", "stop_play_when_speech": "Yes"
+      }
+    },
+    "OpenAI_復唱_ITEM": {
+      "layout": {"x": 200, "y": 300},
+      "next": [
+        {"condition": "^TIMEOUT$", "label": "timeout", "nextModuleName": "リトライ_復唱_ITEM"},
+        {"condition": "^ERROR$", "label": "error", "nextModuleName": "リトライ_復唱_ITEM"},
+        {"condition": "^NO_RESULT$", "label": "no_result", "nextModuleName": "リトライ_復唱_ITEM"},
+        {"condition": "^肯定$", "label": "肯定", "nextModuleName": "TODO_NEXT"},
+        {"condition": "^否定$", "label": "否定", "nextModuleName": "TODO_RETRY_TTS"}
+      ],
+      "subs": [{"moduleName": "", "label": ""}, {"moduleName": "", "label": ""}, {"moduleName": "", "label": ""}],
+      "name": "OpenAI_復唱_ITEM",
+      "description": "",
+      "matchingmethod": 1,
+      "type": "drjoy^External Integration$generate_by_OpenAI",
+      "params": {
+        "contextName": "", "contextDisplayType": "TEXT",
+        "promptTTS": "", "module": "入力_復唱_ITEM", "functionCall": "", "prompt": ""
+      }
+    },
+    "リトライ_復唱_ITEM": {
+      "layout": {"x": 450, "y": 150},
+      "next": [
+        {"condition": "true", "label": "Retry", "nextModuleName": "復唱_ITEM"},
+        {"condition": "false", "label": "No more", "nextModuleName": "TODO_NO_MORE"}
+      ],
+      "subs": [{"moduleName": "save-復唱_ITEM", "label": "save-復唱_ITEM"}, {"moduleName": "", "label": ""}, {"moduleName": "", "label": ""}],
+      "name": "リトライ_復唱_ITEM",
+      "description": "",
+      "matchingmethod": 0,
+      "type": "drjoy^Text To Speech$Speech Retry Counter",
+      "params": {
+        "retry_count": "1",
+        "prompt_true": "{tts_g:申し訳ございません。うまく聞き取りが出来ませんでした。再度、}",
+        "prompt_false": ""
+      }
+    },
+    "save-復唱_ITEM": {
+      "layout": {"x": 700, "y": 150},
+      "next": [],
+      "subs": [{"moduleName": "", "label": ""}, {"moduleName": "", "label": ""}, {"moduleName": "", "label": ""}],
+      "name": "save-復唱_ITEM",
+      "description": "",
+      "matchingmethod": 1,
+      "type": "drjoy^Persistence$save2db",
+      "params": {"contextName": "", "contextDisplayType": "TEXT"}
+    }
+  }
+}

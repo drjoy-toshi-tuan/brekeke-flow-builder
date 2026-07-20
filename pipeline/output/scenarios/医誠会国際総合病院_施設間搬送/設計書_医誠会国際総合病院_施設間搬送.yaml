@@ -1,0 +1,932 @@
+# 設計書 -- 医誠会国際総合病院 施設間搬送
+# 生成元: @director エージェント
+# 生成日: 2026/04/30
+# 確認レポート: docs/designs/確認レポート_医誠会国際総合病院_施設間搬送_20260430.md
+# 元資料: commubo抽出/【011】医誠会国際総合病院/【0012医誠会国際総合病院】施設間搬送1_M_本番/
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "医誠会国際総合病院"
+  scenario_name: "施設間搬送"
+  group_name: "医誠会国際総合病院"
+  flow_name: "医誠会国際総合病院$施設間搬送"
+  target_facility: "医誠会国際総合病院（救急搬送・施設間搬送受け入れ）"
+  office_id: "TODO_要確認"
+  phone_number: "TODO_要確認"             # 着信用 050 番号は IVR プロパティで設定
+  business_hours: "24時間（救急搬送受付のため受付時間制限なし）"
+  flow_type: "subflow"
+  work_type: "gen1_migration"
+  environment: "prod"
+
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+# 救急搬送受付向けの 24h フロー。Gen1 commubo 移管。
+# メイン主分岐は「救急搬送（医療施設からの転院搬送依頼）/ 直接来院（自家用車等で来院）」の二択。
+#
+# 救急搬送ルート（Gen1 移管ノートで指定された包括的な聴取シーケンス）:
+#   施設名 → 住所 → 状態 → バイタル → 患者氏名 → 個人情報 → 連絡先 → 緊急手術確認 → Blind Transfer
+#
+# 直接来院ルート:
+#   選定療養費案内（紹介状無し時 9,900 円） → 患者氏名 → 個人情報 → 症状聴取 → 連絡先 → 終話（はしか流行案内付き）
+#
+# 患者氏名・電話番号は標準サブフロー使用。両ルートから同じサブフローを呼び出すため、
+# scenario_flow 内では subflow ブロックを 2 回（_搬送 / _来院）配置するが、
+# flow_structure.subflows[] には各サブフロー 1 エントリのみ登録する（PatientName §3.1.1 準拠）。
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "医誠会国際総合病院$施設間搬送"
+      role: "main"
+      description: "冒頭挨拶 → 用件二択（救急搬送/直接来院）→ 各ルートに応じた聴取 → 救急搬送はBlind Transfer / 直接来院ははしか流行案内を含む終話"
+  subflows:
+    - name: "医誠会国際総合病院$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "PatientName 標準サブフロー。患者氏名のフルネーム聴取。Gen1 患者名聴取.yaml に対応。両ルート（救急搬送/直接来院）から同サブフローを呼び出す（PatientName §3.1.1: 1 サブフロー登録、複数ジャンプ点 OK）"
+    - name: "医誠会国際総合病院$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "Phone Normalization + Re-confirmation 標準サブフロー。連絡先電話番号聴取。Gen1 連絡先聴取.yaml に対応。両ルートから同サブフローを呼び出す"
+
+# --- セクション3: フローの目的 ---
+purpose: "医誠会国際総合病院の施設間搬送（救急搬送・転院搬送）受付専用 AI 電話。24時間着信を受け、医療施設からの救急搬送依頼は施設名・住所・患者状態・バイタル・氏名・個人情報・連絡先・緊急手術要否を聴取した上で受け入れ担当者へ転送。患者本人または家族による直接来院希望は選定療養費案内（紹介状無し時 9,900 円）の上で氏名・個人情報・症状・連絡先を聴取して受付完了とする。終話時には国内はしか流行への注意喚起アナウンスを含める。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "医誠会国際総合病院$施設間搬送"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → END_非通知(TTS) → 完了フラグ_非通知(status=2) → 切断
+            └─ 通常/携帯/固定 → 冒頭_アナウンス(TTS: 「医誠会無料救急搬送です。AI電話が対応いたします。」)
+                                  → 搬送or来院確認(hearing: enum, DTMF 1=救急搬送 / 2=直接来院)
+                                      │
+                                      ├─ 救急搬送 ───────────────────────────────────┐
+                                      │   施設名聴取_アナウンス(TTS: 「それでは、はじめに、」)
+                                      │     → 施設名聴取(hearing: text)
+                                      │     → 住所聴取_アナウンス(TTS: 「続いて、」)
+                                      │     → 住所聴取(hearing: text)
+                                      │     → 状態聴取_アナウンス(TTS: 「次に、」)
+                                      │     → 状態聴取(hearing: text)
+                                      │     → バイタル聴取(hearing: text)
+                                      │     → 氏名聴取_搬送_アナウンス(TTS: 「かしこまりました。続いて、」)
+                                      │     → 氏名聴取_搬送 [subflow PatientName]
+                                      │     → 個人情報聴取_搬送_アナウンス(TTS: 「続いて、」)
+                                      │     → 個人情報聴取_搬送(hearing: text)
+                                      │     → 連絡先聴取_搬送_アナウンス(TTS: 「最後に、」)
+                                      │     → 連絡先聴取_搬送 [subflow Phone]
+                                      │     → 緊急手術確認(hearing: enum, 必要/不要)
+                                      │       │
+                                      │       └─ 必要/other → 転送ガイダンス(TTS: 「電話を転送いたします。少々お待ちください。」)
+                                      │                       → 担当者へ転送(call_transfer Blind Transfer 080-9923-2523)
+                                      │                            ├─ 成功 → 完了フラグ_転送成功(status=3) → END_転送成功 → 切断
+                                      │                            └─ 失敗 → END_転送失敗(TTS) → 完了フラグ_転送失敗(status=9) → 切断
+                                      │
+                                      └─ other(=直接来院) ─────────────────────────┐
+                                          直接来院_アナウンス(TTS: 「かしこまりました。紹介状持参がない場合、選定療養費、9900円をお支払いいただきますので、ご了承ください。それでは、」)
+                                            → 氏名聴取_来院 [subflow PatientName 同 flowname]
+                                            → 個人情報聴取_来院_アナウンス(TTS: 「続いて、」)
+                                            → 個人情報聴取_来院(hearing: text)
+                                            → 症状聴取(hearing: text)
+                                            → 連絡先聴取_来院_アナウンス(TTS: 「最後に、」)
+                                            → 連絡先聴取_来院 [subflow Phone 同 flowname]
+                                            → END_直接来院完了(TTS: 受付完了+はしか流行案内) → 完了フラグ_直接来院完了(status=1) → 切断
+    notes: |
+      - 24時間受付（救急搬送）のため acceptance_times モジュールは配置しない（use_acceptance_times: false）
+      - 主分岐は 搬送or来院確認 hearing で Pattern A（OpenAI 直後分岐）。enum 2 値（救急搬送 / other=直接来院）
+      - 両ルートから同一の氏名聴取・電話番号聴取サブフローを呼び出す（scenario_flow に subflow ブロックを 2 回配置、step 名は _搬送 / _来院 で区別）
+      - flow_structure.subflows[] には「氏名聴取」「電話番号聴取」を各 1 エントリのみ登録（PatientName 1 枠ルール §3.1.1 準拠）
+      - 緊急手術確認は enum hearing で必要/不要（other）を context 保存するが、両ブランチとも転送ガイダンスへ進む（受け入れ担当者の事前情報として保存）
+      - 転送先は Blind Transfer 1 系統（080-9923-2523）。第2系統（080-7031-1207）の順次フォールバックは Brekeke IVR UI 側で手動配置（NON-BLOCKER N-2）
+      - 緊急時オーバーライド（ベット逼迫時の公設救急優先案内）は Gen3 第1版では未実装。運用フラグでの出し分けは将来課題（NON-BLOCKER N-3）
+      - 入電番号からの施設名自動取得 → 施設名確認の auto-skip ルートは Gen3 第1版では未実装（Brekeke 側に標準モジュール無し）。常に施設名聴取から開始（NON-BLOCKER N-4）
+      - 個人情報聴取（生年月日・年齢・性別）は Gen1 と同様に自由テキスト 1 ステップで聴取（emergency context での dialog 短縮を優先）。構造化が必要な場合は将来 DOB Re-confirmation サブフロー + 年齢/性別 hearing に分割可能（NON-BLOCKER N-5）
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭ブロック ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: false             # 24時間受付（救急搬送のため時間外なし）
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 搬送or来院確認
+
+  # --- 主分岐: 救急搬送 / 直接来院 ---
+  - step: 搬送or来院確認
+    type: hearing
+    output_format: enum
+    save_to: classification
+    retry_failure: end_failure
+    conditions:
+      - match: "救急搬送"
+        next: 施設名聴取_アナウンス
+      - match: "other"                      # = 直接来院（custom entity「直接来院」または DTMF 2）
+        next: 直接来院_アナウンス
+
+  # ============================================================
+  # 救急搬送ルート（Gen1 移管ノート 「搬送ルート」セクションに対応）
+  # ============================================================
+  - step: 施設名聴取_アナウンス
+    type: announcement
+    next: 施設名聴取
+
+  - step: 施設名聴取
+    type: hearing
+    output_format: text
+    save_to: facilityName
+    retry_failure: end_failure
+    next: 住所聴取_アナウンス
+
+  - step: 住所聴取_アナウンス
+    type: announcement
+    next: 住所聴取
+
+  - step: 住所聴取
+    type: hearing
+    output_format: text
+    save_to: pickupAddress
+    retry_failure: end_failure
+    next: 状態聴取_アナウンス
+
+  - step: 状態聴取_アナウンス
+    type: announcement
+    next: 状態聴取
+
+  - step: 状態聴取
+    type: hearing
+    output_format: text
+    save_to: patientStatus
+    retry_failure: end_failure
+    next: バイタル聴取
+
+  - step: バイタル聴取
+    type: hearing
+    output_format: text
+    save_to: vitalSigns
+    retry_failure: end_failure
+    next: 氏名聴取_搬送_アナウンス
+
+  - step: 氏名聴取_搬送_アナウンス
+    type: announcement
+    next: 氏名聴取_搬送
+
+  - step: 氏名聴取_搬送
+    type: subflow
+    flowname: "医誠会国際総合病院$氏名聴取"
+    next: 個人情報聴取_搬送_アナウンス
+
+  - step: 個人情報聴取_搬送_アナウンス
+    type: announcement
+    next: 個人情報聴取_搬送
+
+  - step: 個人情報聴取_搬送
+    type: hearing
+    output_format: text
+    save_to: personalInfo
+    retry_failure: end_failure
+    next: 連絡先聴取_搬送_アナウンス
+
+  - step: 連絡先聴取_搬送_アナウンス
+    type: announcement
+    next: 連絡先聴取_搬送
+
+  - step: 連絡先聴取_搬送
+    type: subflow
+    flowname: "医誠会国際総合病院$電話番号聴取"
+    next: 緊急手術確認
+
+  - step: 緊急手術確認
+    type: hearing
+    output_format: enum
+    save_to: emergencySurgery
+    retry_failure: end_failure
+    conditions:
+      - match: "必要"
+        next: 転送ガイダンス
+      - match: "other"                      # = 不要（必要以外。両ブランチとも転送へ進む。値は受け入れ担当者の事前情報として context 保存）
+        next: 転送ガイダンス
+
+  - step: 転送ガイダンス
+    type: announcement
+    next: 担当者へ転送
+
+  - step: 担当者へ転送
+    type: call_transfer
+    transfer_type: "Blind Transfer"
+    # 転送先電話番号は IVR プロパティ側で設定（params.number は空文字）
+    # 第1段の転送先: 転送1 = 080-9923-2523（migration note 参照）
+    # ※ 第2段 080-7031-1207 への順次フォールバックは Brekeke IVR UI で手動配置（NON-BLOCKER N-2）
+    # call_transfer は scaffold が自動で status=3(成功)/9(失敗) と END_転送成功/END_転送失敗 を補完
+
+  # ============================================================
+  # 直接来院ルート（Gen1 移管ノート 「直接来院ルート」セクションに対応）
+  # ============================================================
+  - step: 直接来院_アナウンス
+    type: announcement
+    next: 氏名聴取_来院
+
+  - step: 氏名聴取_来院
+    type: subflow
+    flowname: "医誠会国際総合病院$氏名聴取"
+    next: 個人情報聴取_来院_アナウンス
+
+  - step: 個人情報聴取_来院_アナウンス
+    type: announcement
+    next: 個人情報聴取_来院
+
+  - step: 個人情報聴取_来院
+    type: hearing
+    output_format: text
+    save_to: personalInfo
+    retry_failure: end_failure
+    next: 症状聴取
+
+  - step: 症状聴取
+    type: hearing
+    output_format: text
+    save_to: symptoms
+    retry_failure: end_failure
+    next: 連絡先聴取_来院_アナウンス
+
+  - step: 連絡先聴取_来院_アナウンス
+    type: announcement
+    next: 連絡先聴取_来院
+
+  - step: 連絡先聴取_来院
+    type: subflow
+    flowname: "医誠会国際総合病院$電話番号聴取"
+    next: END_直接来院完了
+
+  # ============================================================
+  # 終話ブロック
+  # ============================================================
+  - step: END_直接来院完了
+    type: termination
+    termination_ref: END_直接来院完了
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+# 標準フィールドのうち、診察券番号・診療科・予約日・理由は本フロー（救急搬送）では使用しないため
+# 標準フィールドとして定義のみ保持し、聴取は行わない（item_default は標準値を維持）。
+# 救急搬送固有フィールド（facilityName / pickupAddress / patientStatus / vitalSigns / personalInfo /
+# symptoms / emergencySurgery）を施設固有フィールド（item_default: false）として追加する。
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "救急搬送"
+      - id: "2"
+        order: "2"
+        value: "直接来院"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件二択。Gen1 の救急搬送希望/直接来院 entity に対応"
+
+  - context_name: "patientName"
+    context_name_jp: "患者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "氏名聴取サブフローで保存。両ルートで使用"
+
+  - context_name: "facilityName"
+    context_name_jp: "お迎え先施設名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "施設固有フィールド。Gen1 施設名聴取.yaml に対応。救急搬送ルートのみ"
+
+  - context_name: "pickupAddress"
+    context_name_jp: "お迎え先住所"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "施設固有フィールド。Gen1 住所聞き取り.yaml に対応。救急搬送ルートのみ"
+
+  - context_name: "patientStatus"
+    context_name_jp: "患者状態"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "施設固有フィールド。Gen1 状態聴取.yaml に対応。救急搬送ルートのみ（自由テキスト）"
+
+  - context_name: "vitalSigns"
+    context_name_jp: "バイタル（血圧・体温・治療中の病気）"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "施設固有フィールド。Gen1 血圧や体温の聴取（旧バイタル）.yaml に対応。救急搬送ルートのみ（自由テキスト）"
+
+  - context_name: "personalInfo"
+    context_name_jp: "個人情報（生年月日・年齢・性別）"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "施設固有フィールド。Gen1 個人情報聴取.yaml に対応。両ルートで使用（自由テキスト 1 発話）。Gen1 と同じく構造化せず一括保存。将来 DOB/年齢/性別 に分割する場合は NON-BLOCKER N-5 参照"
+
+  - context_name: "symptoms"
+    context_name_jp: "症状・治療中の病気"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "施設固有フィールド。Gen1 症状聴取.yaml に対応。直接来院ルートのみ（自由テキスト）"
+
+  - context_name: "emergencySurgery"
+    context_name_jp: "緊急手術要否"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "必要"
+      - id: "2"
+        order: "2"
+        value: "不要"
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "施設固有フィールド。Gen1 緊急手術必要か確認.yaml に対応。救急搬送ルートのみ。受け入れ担当者の事前準備情報として保存（フロー分岐用ではなく転送前の情報収集）"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "電話番号聴取サブフローで保存。両ルートで使用"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納（システム）"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "転送"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+      - id: "9"
+        order: "9"
+        value: "転送失敗"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=未処理(直接来院完了) / 2=代表案内/非通知/聴取失敗 / 3=転送成功 / 6=時間外（24h受付のため実フローでは未到達。互換性のため定義のみ保持）/ 9=転送失敗"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "システム自動取得"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "搬送or来院確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 3
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "救急搬送"
+      - "直接来院"
+    notes: "DTMF 1=救急搬送, 2=直接来院。音声では「救急/搬送/緊急/1番/いち」→救急搬送、「直接/自分で/行きます/2番/に」→直接来院。Gen1 中村さん作成：搬送or来院.yaml + 搬送or来院.yaml の主分岐 entity に対応"
+
+  - order: 2
+    name: "施設名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "facilityName"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "音声のみ。お迎え先の施設名（医療機関名）を自由発話で聴取。Gen1 施設名聴取.yaml に対応"
+
+  - order: 3
+    name: "住所聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "pickupAddress"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "音声のみ。お迎え先の住所を自由発話で聴取。Gen1 住所聞き取り.yaml に対応"
+
+  - order: 4
+    name: "状態聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "patientStatus"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "音声のみ。患者様の状態（意識レベル・症状概要等）を自由発話で聴取。Gen1 状態聴取.yaml に対応"
+
+  - order: 5
+    name: "バイタル聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "vitalSigns"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "音声のみ。血圧・体温・治療中の病気等を自由発話で聴取。Gen1 血圧や体温の聴取（旧バイタル）.yaml に対応"
+
+  - order: 6
+    name: "個人情報聴取_搬送"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "personalInfo"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "音声のみ。生年月日・年齢・性別を一括自由発話で聴取（Gen1 個人情報聴取.yaml に対応）。救急搬送ルート用の hearing。同 save_to を直接来院ルートと共有"
+
+  - order: 7
+    name: "緊急手術確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 3
+    echo_back: false
+    save_to: "emergencySurgery"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "必要"
+      - "不要"
+    notes: "DTMF 1=必要, 2=不要。音声では「必要です/お願いします/はい/1番」→必要、「不要/違います/いいえ/2番」→不要。両ブランチとも転送ガイダンスへ遷移（情報収集のみ、フロー分岐用ではない）。Gen1 緊急手術必要か確認.yaml に対応"
+
+  - order: 8
+    name: "個人情報聴取_来院"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "personalInfo"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "音声のみ。生年月日・年齢・性別を一括自由発話で聴取。直接来院ルート用の hearing。同 save_to を救急搬送ルートと共有"
+
+  - order: 9
+    name: "症状聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "symptoms"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "音声のみ。体温・治療中の病気等を自由発話で聴取。Gen1 症状聴取.yaml に対応。直接来院ルートのみ"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "搬送or来院確認"
+    tts_announcement: "{tts_g:救急搬送をご希望の場合は、1、ご自身で直接お越しになる場合は、2、と、お答えください。}"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "救急搬送"
+        - "直接来院"
+      mapping:
+        - input: "DTMF 1 / 「救急/搬送/緊急/一番/1番/いち」を含む発話"
+          output: "救急搬送"
+        - input: "DTMF 2 / 「直接/自分で/行きます/行く/二番/2番/に」を含む発話"
+          output: "直接来院"
+      no_result_condition: "上記いずれにも該当せず認識できない場合"
+    save_to: "classification"
+    next_step: "施設名聴取_アナウンス（救急搬送）/ 直接来院_アナウンス（other=直接来院）"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "施設名聴取_アナウンス"
+    tts_announcement: "{tts_g:それでは、はじめに、}"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "施設名聴取"
+    retry_failure: "skip"
+
+  - step_name: "施設名聴取"
+    tts_announcement: "{tts_g:お迎え先の施設名を、お話ください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "認識できない場合は再質問。リトライ上限到達時は END_聴取失敗 へ"
+    save_to: "facilityName"
+    next_step: "住所聴取_アナウンス"
+    retry_failure: "end_failure"
+
+  - step_name: "住所聴取_アナウンス"
+    tts_announcement: "{tts_g:続いて、}"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "住所聴取"
+    retry_failure: "skip"
+
+  - step_name: "住所聴取"
+    tts_announcement: "{tts_g:お迎え先のご住所を、お話ください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "認識できない場合は再質問。リトライ上限到達時は END_聴取失敗 へ"
+    save_to: "pickupAddress"
+    next_step: "状態聴取_アナウンス"
+    retry_failure: "end_failure"
+
+  - step_name: "状態聴取_アナウンス"
+    tts_announcement: "{tts_g:次に、}"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "状態聴取"
+    retry_failure: "skip"
+
+  - step_name: "状態聴取"
+    tts_announcement: "{tts_g:患者様の状態を、お話ください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "認識できない場合は再質問。リトライ上限到達時は END_聴取失敗 へ"
+    save_to: "patientStatus"
+    next_step: "バイタル聴取"
+    retry_failure: "end_failure"
+
+  - step_name: "バイタル聴取"
+    tts_announcement: "{tts_g:分かる範囲で、血圧や体温、治療中の病気など、お話ください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "認識できない場合は再質問。リトライ上限到達時は END_聴取失敗 へ"
+    save_to: "vitalSigns"
+    next_step: "氏名聴取_搬送_アナウンス"
+    retry_failure: "end_failure"
+
+  - step_name: "氏名聴取_搬送_アナウンス"
+    tts_announcement: "{tts_g:かしこまりました。続いて、}"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "氏名聴取_搬送"
+    retry_failure: "skip"
+
+  - step_name: "個人情報聴取_搬送_アナウンス"
+    tts_announcement: "{tts_g:続いて、}"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "個人情報聴取_搬送"
+    retry_failure: "skip"
+
+  - step_name: "個人情報聴取_搬送"
+    tts_announcement: "{tts_g:生年月日、年齢、性別を、お話ください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "認識できない場合は再質問。リトライ上限到達時は END_聴取失敗 へ"
+    save_to: "personalInfo"
+    next_step: "連絡先聴取_搬送_アナウンス"
+    retry_failure: "end_failure"
+
+  - step_name: "連絡先聴取_搬送_アナウンス"
+    tts_announcement: "{tts_g:最後に、}"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "連絡先聴取_搬送"
+    retry_failure: "skip"
+
+  - step_name: "緊急手術確認"
+    tts_announcement: "{tts_g:病院、クリニックからの緊急手術が必要な方ですか？必要な場合は、1、不要な場合は、2、と、お答えください。}"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "必要"
+        - "不要"
+      mapping:
+        - input: "DTMF 1 / 「必要/お願いします/そうです/はい/一番/1番」を含む発話"
+          output: "必要"
+        - input: "DTMF 2 / 「不要/違います/いいえ/二番/2番/ありません」を含む発話"
+          output: "不要"
+      no_result_condition: "上記いずれにも該当せず認識できない場合"
+    save_to: "emergencySurgery"
+    next_step: "転送ガイダンス（両ブランチ共通）"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "転送ガイダンス"
+    tts_announcement: "{tts_g:それでは、電話を転送いたします。少々お待ちください。}"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "担当者へ転送（call_transfer Blind Transfer）"
+    retry_failure: "skip"
+
+  - step_name: "直接来院_アナウンス"
+    tts_announcement: "{tts_g:かしこまりました。紹介状持参がない場合、選定療養費、9900円をお支払いいただきますので、ご了承ください。それでは、}"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "氏名聴取_来院"
+    retry_failure: "skip"
+
+  - step_name: "個人情報聴取_来院_アナウンス"
+    tts_announcement: "{tts_g:続いて、}"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "個人情報聴取_来院"
+    retry_failure: "skip"
+
+  - step_name: "個人情報聴取_来院"
+    tts_announcement: "{tts_g:生年月日、年齢、性別を、お話ください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "認識できない場合は再質問。リトライ上限到達時は END_聴取失敗 へ"
+    save_to: "personalInfo"
+    next_step: "症状聴取"
+    retry_failure: "end_failure"
+
+  - step_name: "症状聴取"
+    tts_announcement: "{tts_g:分かる範囲で、体温、治療中の病気などを、お話ください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: "認識できない場合は再質問。リトライ上限到達時は END_聴取失敗 へ"
+    save_to: "symptoms"
+    next_step: "連絡先聴取_来院_アナウンス"
+    retry_failure: "end_failure"
+
+  - step_name: "連絡先聴取_来院_アナウンス"
+    tts_announcement: "{tts_g:最後に、}"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "連絡先聴取_来院"
+    retry_failure: "skip"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "{tts_g:恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。}"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外（24h受付のため実フローでは未到達。互換性のため定義のみ保持）"
+    tts_announcement: "{tts_g:お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。}"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "{tts_g:大変申し訳ございません。うまく聞き取ることができませんでした。今おかけいただいている電話番号へ折り返しご連絡しますので、お待ちください。}"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+  # --- 正常系（直接来院ルートの終話）---
+  - name: "END_直接来院完了"
+    condition: "直接来院ルートの全聴取完了"
+    tts_announcement: "{tts_g:受診のお申し込みを受け付けました。なお現在、国内ではしかの流行が確認されています。発疹や発熱などの症状がある方、または1ヶ月以内に海外渡航歴のある方、そのほか思い当たることがある方は、受付までお申し出ください。それでは、お気を付けてお越しください。}"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_直接来院完了"
+  # --- 正常系（救急搬送ルートの終話 = 転送）---
+  # call_transfer ブロック「担当者へ転送」配置時に scaffold が以下を自動生成:
+  #   - 完了フラグ_転送成功 (status=3, smsFlag=-1) → END_転送成功
+  #   - 完了フラグ_転送失敗 (status=9, smsFlag=-1) → END_転送失敗（"転送に失敗しました..." 標準文言）
+
+# smsFlag 分岐は不要（救急搬送・直接来院ともに SMS 送信なし。固定電話・携帯混在の救急現場のため）
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+# 救急搬送フローには RAG/FAQ サブフローを配置しない（緊急事態の dialog 短縮を優先）
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+# IVR プロパティに記載するモジュール名と発話文言の一覧
+tts_modules:
+  # 冒頭
+  - module_name: "冒頭_アナウンス"
+    purpose: "施設名・自動応答案内"
+    announcement: "{tts_g:医誠会無料救急搬送です。AI電話が対応いたします。}"
+
+  # 主分岐
+  - module_name: "搬送or来院確認"
+    purpose: "用件二択の聴取（救急搬送 / 直接来院）"
+    announcement: "{tts_g:救急搬送をご希望の場合は、1、ご自身で直接お越しになる場合は、2、と、お答えください。}"
+
+  # 救急搬送ルート
+  - module_name: "施設名聴取_アナウンス"
+    purpose: "救急搬送ルート: 施設名聴取への接続案内"
+    announcement: "{tts_g:それでは、はじめに、}"
+  - module_name: "施設名聴取"
+    purpose: "お迎え先の施設名（医療機関名）を聴取"
+    announcement: "{tts_g:お迎え先の施設名を、お話ください。}"
+  - module_name: "住所聴取_アナウンス"
+    purpose: "救急搬送ルート: 住所聴取への接続案内"
+    announcement: "{tts_g:続いて、}"
+  - module_name: "住所聴取"
+    purpose: "お迎え先の住所を聴取"
+    announcement: "{tts_g:お迎え先のご住所を、お話ください。}"
+  - module_name: "状態聴取_アナウンス"
+    purpose: "救急搬送ルート: 状態聴取への接続案内"
+    announcement: "{tts_g:次に、}"
+  - module_name: "状態聴取"
+    purpose: "患者様の状態を聴取"
+    announcement: "{tts_g:患者様の状態を、お話ください。}"
+  - module_name: "バイタル聴取"
+    purpose: "血圧・体温・治療中の病気を聴取"
+    announcement: "{tts_g:分かる範囲で、血圧や体温、治療中の病気など、お話ください。}"
+  - module_name: "氏名聴取_搬送_アナウンス"
+    purpose: "救急搬送ルート: 氏名聴取への接続案内"
+    announcement: "{tts_g:かしこまりました。続いて、}"
+  - module_name: "個人情報聴取_搬送_アナウンス"
+    purpose: "救急搬送ルート: 個人情報聴取への接続案内"
+    announcement: "{tts_g:続いて、}"
+  - module_name: "個人情報聴取_搬送"
+    purpose: "生年月日・年齢・性別を一括聴取（救急搬送ルート）"
+    announcement: "{tts_g:生年月日、年齢、性別を、お話ください。}"
+  - module_name: "連絡先聴取_搬送_アナウンス"
+    purpose: "救急搬送ルート: 連絡先聴取への接続案内"
+    announcement: "{tts_g:最後に、}"
+  - module_name: "緊急手術確認"
+    purpose: "緊急手術の要否を聴取（受け入れ担当者の事前情報）"
+    announcement: "{tts_g:病院、クリニックからの緊急手術が必要な方ですか？必要な場合は、1、不要な場合は、2、と、お答えください。}"
+  - module_name: "転送ガイダンス"
+    purpose: "Blind Transfer 直前の案内"
+    announcement: "{tts_g:それでは、電話を転送いたします。少々お待ちください。}"
+
+  # 直接来院ルート
+  - module_name: "直接来院_アナウンス"
+    purpose: "選定療養費（9,900円）案内 + 直接来院ルート開始"
+    announcement: "{tts_g:かしこまりました。紹介状持参がない場合、選定療養費、9900円をお支払いいただきますので、ご了承ください。それでは、}"
+  - module_name: "個人情報聴取_来院_アナウンス"
+    purpose: "直接来院ルート: 個人情報聴取への接続案内"
+    announcement: "{tts_g:続いて、}"
+  - module_name: "個人情報聴取_来院"
+    purpose: "生年月日・年齢・性別を一括聴取（直接来院ルート）"
+    announcement: "{tts_g:生年月日、年齢、性別を、お話ください。}"
+  - module_name: "症状聴取"
+    purpose: "体温・治療中の病気を聴取（直接来院ルート）"
+    announcement: "{tts_g:分かる範囲で、体温、治療中の病気などを、お話ください。}"
+  - module_name: "連絡先聴取_来院_アナウンス"
+    purpose: "直接来院ルート: 連絡先聴取への接続案内"
+    announcement: "{tts_g:最後に、}"
+
+  # 終話
+  - module_name: "END_非通知"
+    purpose: "非通知着信時のアナウンス"
+    announcement: "{tts_g:恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。}"
+  - module_name: "END_時間外"
+    purpose: "時間外アナウンス（24h受付のため実フローでは未到達。互換性のため定義のみ保持）"
+    announcement: "{tts_g:お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。}"
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ上限到達時の終話アナウンス（Gen1 「3回失敗⇒終話へ（番号OK）」 + 「それでは、失礼いたします。」 を統合）"
+    announcement: "{tts_g:大変申し訳ございません。うまく聞き取ることができませんでした。今おかけいただいている電話番号へ折り返しご連絡しますので、お待ちください。それでは、失礼いたします。}"
+  - module_name: "END_直接来院完了"
+    purpose: "直接来院ルート: 受付完了 + はしか流行案内 + 退室案内（Gen1 「直接来院終話」 + 「直接来院終話 3/26 追加」 を統合）"
+    announcement: "{tts_g:受診のお申し込みを受け付けました。なお現在、国内ではしかの流行が確認されています。発疹や発熱などの症状がある方、または1ヶ月以内に海外渡航歴のある方、そのほか思い当たることがある方は、受付までお申し出ください。それでは、お気を付けてお越しください。}"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+# 主分岐 + 緊急手術確認は DTMF + 音声の混合受付。Gen1 entity_classification.md の R2/R3 規則に基づき
+# 既存テンプレ（hearing_yesno_common / hearing_yoken_common）で吸収可能な surface 群はテンプレ参照とし、
+# 施設固有エントリは下記に列挙する。
+amivoice_dictionary:
+  - step_name: "搬送or来院確認"
+    words: |
+      救急 きゅうきゅう
+      搬送 はんそう
+      緊急 きんきゅう
+      直接 ちょくせつ
+      自分で じぶんで
+      行きます いきます
+      行く いく
+      一番 いちばん
+      二番 にばん
+
+  - step_name: "緊急手術確認"
+    words: |
+      必要 ひつよう
+      必要です ひつようです
+      不要 ふよう
+      お願いします おねがいします
+      手術 しゅじゅつ
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "本フローは救急搬送（医療施設からの転院搬送）と直接来院（自家用車来院）の両方を受け付ける特殊フロー。診療予約系の標準テンプレートと構造が大きく異なる（用件分類は 2 値、診療科聴取なし、予約日聴取なし、診察券番号なし）。"
+  - "24時間受付のため acceptance_times モジュールは使用しない。時間外終話パスは互換性のためデフォルトで定義するが、実運用では到達しない。"
+  - "救急搬送ルートは医療従事者からの依頼を想定。施設名・住所は受け入れ準備のため必須項目。バイタル・緊急手術要否は受け入れ担当者の事前情報として保存。"
+  - "直接来院ルートは患者本人または家族からの来院希望を想定。選定療養費（紹介状無し時 9,900 円）の案内を必ず含める。"
+  - "終話時のはしか流行注意アナウンスは季節要因の固定文言。Dr.JOY 側で定期的な文言更新が必要（季節終了時の差し替え）。"
+  - "個人情報聴取（生年月日・年齢・性別）は Gen1 と同様に自由テキスト 1 ステップで実装。emergency context での dialog 短縮を優先。構造化ニーズが顕在化した場合は将来 DOB Re-confirmation サブフロー + 年齢 hearing + 性別 enum hearing に分割可能（NON-BLOCKER N-5）。"
+  - "両ルートから同一サブフロー（氏名聴取・電話番号聴取）を呼び出すため、scenario_flow には subflow ブロックを 2 回（_搬送 / _来院 サフィックス付き）配置するが、flow_structure.subflows[] には各サブフロー 1 エントリのみ登録する（PatientName 1 枠ルール §3.1.1 準拠）。"
+  - "緊急手術確認 hearing は enum 出力（必要/不要）を context 保存するが、両ブランチとも転送ガイダンスへ進む（フロー分岐用ではなく受け入れ担当者の事前情報として保存）。"
+  - "転送先 2 系統の順次フォールバック（転送1=080-9923-2523 → 転送2=080-7031-1207）は Brekeke IVR UI 側で手動配置が必要（NON-BLOCKER N-2）。設計書には 1 系統（080-9923-2523）のみ記載。"
+  - "緊急時オーバーライド（ベット逼迫時の公設救急優先案内）は Gen3 第1版では未実装。Gen1 で「緊急時対応ノードへ繋ぐ場合はここから」という運用フラグで切り替えていた挙動を Gen3 で再現するには、acceptance_times の特殊スケジュール設定または別フロー分割が必要（NON-BLOCKER N-3）。"
+  - "Gen1 で構想されていた「入電番号からの施設名自動取得 → 施設名確認 yes/no で auto-skip」は Gen3 第1版では未実装（Brekeke 側に標準モジュール無し）。常に施設名聴取から開始する（NON-BLOCKER N-4）。"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+# generator への入力前に人間が確認・埋めるべき項目。
+# BLOCKER: TODO_要確認 が設計書本文に残っているもの。
+# NON-BLOCKER: デフォルト値・仮値で埋めた上で確認を依頼するもの。
+confirmation_items:
+  - item: "BLOCKER B-1: office_id（Dr.JOY 管理画面の施設ID）"
+    resolved: false
+  - item: "BLOCKER B-2: 着信用電話番号（050 番号）— デモ環境/本番環境ともに必要"
+    resolved: false
+  - item: "NON-BLOCKER N-1: 転送先電話番号は IVR プロパティで設定（params.number は空文字）。第1段 080-9923-2523 を移管ノートから採用。本番投入前に最新の転送先電話番号を確認"
+    resolved: false
+  - item: "NON-BLOCKER N-2: 転送 2 系統の順次フォールバック（転送1=080-9923-2523 → 転送2=080-7031-1207）は Brekeke IVR UI 側で手動追加。call_transfer の on_failure パスに 「ただいまお繋ぎしております、少々お待ちください。」アナウンス + 第2段 call_transfer モジュールを連結する設定が必要"
+    resolved: false
+    assignee: "人間（Brekeke IVR UI）"
+  - item: "NON-BLOCKER N-3: 緊急時オーバーライド（ベット逼迫時の公設救急優先案内）の Gen3 実装方法を確認。候補: (a) acceptance_times の特殊スケジュール設定で時間外時に切替, (b) 別フロー分割で IVR 着信ルーティング側で切替, (c) Gen3 第1版では未対応として運用許容。Gen1 では「緊急時対応ノードへ繋ぐ場合はここから」を手動切替していた"
+    resolved: false
+  - item: "NON-BLOCKER N-4: 入電番号からの施設名自動取得 → 「○○様からのお電話ですね？」確認 → ヒット時に施設名聴取スキップという機能の Gen3 実装方法を確認。Brekeke 側に標準モジュール無し。Gen1 でも実は dead code だった可能性が高い。第1版では未実装で運用許容することを推奨"
+    resolved: false
+  - item: "NON-BLOCKER N-5: 個人情報聴取（生年月日・年齢・性別）の構造化ニーズを確認。Gen1 と同じく自由テキスト 1 ステップ（personalInfo）で実装している。Dr.JOY 側で生年月日/年齢/性別を別カラムで管理したい場合は、DOB Re-confirmation サブフロー + 年齢 hearing + 性別 enum hearing に分割可能（dialog turns が増えるトレードオフ）"
+    resolved: false
+  - item: "NON-BLOCKER N-6: 緊急手術確認の不要応答時（emergencySurgery=不要）も転送する設計で問題ないか確認。Gen1 では緊急手術必要か確認.yaml が dead code（main.yaml 未接続）のため、必要/不要時の遷移先が未定義。設計書では両ブランチとも転送ガイダンスへ進む設計（情報収集のみ、フロー分岐用ではない）"
+    resolved: false
+  - item: "NON-BLOCKER N-7: 終話アナウンスのはしか流行案内（季節要因の固定文言）の更新メンテナンス方針を確認。Dr.JOY 側 IVR プロパティで季節終了時に差し替えるか、固定文言として常設するか"
+    resolved: false
+  - item: "NON-BLOCKER N-8: SMS 送信は本フローでは未使用（救急搬送現場のため）。smsFlag は全終話で -1（送信なし）固定。本仕様で問題ないか確認"
+    resolved: false

@@ -1,0 +1,441 @@
+# ゴールデンテンプレート: 本人確認型（Personal Identity Verification）
+# パターン概要: 最もシンプルな受付自動化フロー。用件確認（DTMF 1択）→ 個人情報聴取サブフロー（氏名・生年月日・電話番号）。
+# 用途: Directorエージェントが新規設計書を生成する際のリファレンス。
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "テスト病院"
+  group_name: "テスト病院"
+  flow_name: "テスト病院$受付_20260401"
+  target_facility: "テスト病院（本院のみ）"
+  office_id: "TODO_要確認"
+  phone_number: "03-1234-5678"
+  business_hours: "祝日除く月〜金 9:00〜17:00"
+  flow_type: "subflow"
+  work_type: "new"
+  environment: "demo"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "テスト病院$受付_20260401"
+      role: "main"
+      description: "冒頭チェーン → 用件確認（DTMF 1択）→ サブフロー遷移 → 終話（代表案内系）"
+    - name: "テスト病院$個人情報聴取"
+      role: "sub"
+      description: "氏名 → 生年月日 → 電話番号 → 終話（受付完了）"
+  subflows:
+    - name: "テスト病院$個人情報聴取"
+      target: "個人情報聴取（氏名・生年月日・電話番号）"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。個人情報サブフローのリファレンスbivrを完全コピー"
+
+# --- セクション3: フローの目的 ---
+purpose: "患者からの電話を受け、用件を確認した後、患者情報（氏名・生年月日・連絡先電話番号）を聴取して折り返し受付を自動化する。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "テスト病院$受付_20260401"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → 非通知_アナウンス(TTS) → 完了フラグ_非通知 → END_非通知 → 切断
+            └─ 通常 → acceptance_times
+                        ├─ 時間外 → 時間外_アナウンス(TTS) → 完了フラグ_時間外 → END_時間外 → 切断
+                        └─ 受付可 → 冒頭_アナウンス(TTS)
+                                      → 用件確認(TTS)
+                                      → 入力_用件確認(DTMF AmiVoice STT, max_dtmf_length=1)
+                                      → OpenAI_用件確認(generate_by_OpenAI)
+                                          ├─ 受付 → saveContext_用件 → サブフロー遷移_個人情報聴取
+                                          └─ NO_RESULT → リトライ_用件確認
+                                                           ├─ Retry → 用件確認(TTS)
+                                                           └─ No more → END_上限エラー → 切断
+
+      ─── メインフロー内終話パターン ───
+      END_時間外 → 切断
+      END_非通知 → 切断
+      END_上限エラー → 切断
+    notes: "incoming-classifier → acceptance_times → 冒頭アナウンス の標準冒頭チェーン"
+
+  - flow_name: "テスト病院$個人情報聴取"
+    diagram: |
+      ★★★ 完全コピー対象（CLAUDE.md Rule 9） ★★★
+      docs/reference/bivr/samples/個人情報サブフロー.bivr の「診察券番号聴取」フローを完全コピーする。
+      フロー名プレフィックスのみ「テスト病院$」に置換。構造・接続・スクリプトは一切変更不可。
+
+      このサブフローは以下の4つの聴取ステップを順に実行する:
+        1. 診察券番号（DTMF AmiVoice STT, max_dtmf_length=10）
+        2. 氏名（AmiVoice STT — 音声のみ）
+        3. 生年月日（DTMF AmiVoice STT, max_dtmf_length=8 + DOB Re-confirmation）
+        4. 電話番号（incoming-classifier → 携帯/固定分岐 → Phone Normalization → Re-confirmation）
+
+      電話番号聴取後、終話チェーンを実行して切断。
+      リファレンス.bivr 内の構成: 41モジュール（Disconnect含む）
+    notes: |
+      CLAUDE.md Rule 9/10/11 準拠。
+      個人情報サブフロー.bivr を完全コピー。独自のモジュール追加・削除・接続変更は禁止。
+      フロー名プレフィックスのみ施設名に置換すること。
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "受付"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件区分。本フローでは「受付」のみ"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "患者氏名（フルネーム）"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "患者生年月日"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "聴取する電話番号"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "0"
+        order: "0"
+        value: "途中切断"
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "0=途中切断 1=未処理 2=代表案内 6=時間外"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "受電日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: true
+    notes: "通話ID自動格納"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "用件確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "受付"
+    notes: "DTMF 1=受付。1択のため実質確認のみ"
+
+  - order: 2
+    name: "氏名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientName"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "サブフロー内。profile_words: 氏名辞書"
+
+  - order: 3
+    name: "生年月日"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 8
+    retry_count: 2
+    echo_back: true
+    save_to: "patientDateOfBirth"
+    openai_processing: "convert"
+    output_format: "date_text"
+    output_labels:
+      - "valid"
+      - "不正値"
+      - "2桁_0007"
+      - "2桁_0831"
+      - "2桁_3263"
+    notes: "サブフロー内。DOB Re-confirmation あり。2桁入力時は元号確認ステップへ分岐"
+
+  - order: 4
+    name: "電話番号"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 11
+    retry_count: 2
+    echo_back: true
+    save_to: "additionalPhoneNumber"
+    openai_processing: "normalize"
+    output_format: "number"
+    output_labels: []
+    notes: "サブフロー内。Phone Normalization + Re-confirmation。incoming-classifierで携帯/その他分岐"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "用件確認"
+    tts_announcement: "テスト病院のAI電話がお受けします。受付のご用件でよろしいでしょうか。1を押してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "受付"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「受付」「はい」を含む"
+          output: "受付"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "classification"
+    next_step: "サブフロー遷移_個人情報聴取"
+    retry_failure: "end_failure"
+
+  - step_name: "氏名"
+    tts_announcement: "患者さんのお名前を、フルネームでお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "氏名テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "氏名テキスト（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "patientName"
+    next_step: "生年月日_聴取"
+    retry_failure: "skip"
+
+  - step_name: "生年月日"
+    tts_announcement: "患者さんの生年月日をお話しください。ダイヤルプッシュの場合は、8桁で入力してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "valid"
+        - "不正値"
+        - "2桁_0007"
+        - "2桁_0831"
+        - "2桁_3263"
+      mapping:
+        - input: "8桁の有効な日付"
+          output: "valid"
+        - input: "不正な形式・存在しない日付"
+          output: "不正値"
+        - input: "2桁入力かつ00〜07の範囲"
+          output: "2桁_0007"
+        - input: "2桁入力かつ08〜31の範囲"
+          output: "2桁_0831"
+        - input: "2桁入力かつ32〜63の範囲"
+          output: "2桁_3263"
+      no_result_condition: "音声認識結果が空または解析不能"
+    save_to: "patientDateOfBirth"
+    next_step: "連絡先_着信番号判定"
+    retry_failure: "skip"
+
+  - step_name: "電話番号"
+    tts_announcement: "ご連絡先の電話番号をお話しください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "正規化済み電話番号"
+      mapping:
+        - input: "10〜11桁の数値（先頭0）"
+          output: "正規化済み電話番号"
+      no_result_condition: "電話番号として不正な形式"
+    save_to: "additionalPhoneNumber"
+    next_step: "終話チェーン"
+    retry_failure: "end_failure"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  - name: "END_受付完了"
+    condition: "全聴取完了（正常終話）"
+    tts_announcement: "受付を承りました。担当者から折り返し電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了"
+
+  - name: "END_時間外"
+    condition: "acceptance_times で時間外と判定"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_非通知"
+    condition: "incoming-classifier で非通知と判定"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_上限エラー"
+    condition: "用件確認のリトライ上限到達"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_上限エラー"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  # メインフロー
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。テスト病院のAI電話受付です。"
+
+  - module_name: "用件確認"
+    purpose: "用件聴取案内"
+    announcement: "受付のご用件でよろしいでしょうか。1を押してください。"
+
+  - module_name: "時間外_アナウンス"
+    purpose: "時間外案内"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知案内"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。"
+
+  - module_name: "END_受付完了"
+    purpose: "受付完了終話"
+    announcement: "受付を承りました。担当者から折り返し電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_上限エラー"
+    purpose: "リトライ上限終話"
+    announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+
+  # サブフロー
+  - module_name: "氏名_聴取"
+    purpose: "氏名聴取案内"
+    announcement: "患者さんのお名前を、フルネームでお話しください。"
+
+  - module_name: "生年月日_聴取"
+    purpose: "生年月日聴取案内"
+    announcement: "患者さんの生年月日をお話しください。ダイヤルプッシュの場合は、8桁で入力してください。"
+
+  - module_name: "生年月日_再聴取"
+    purpose: "生年月日再聴取"
+    announcement: "恐れ入りますが再度、患者さんの生年月日をお話しください。ダイヤルプッシュの場合は、8桁で入力してください。"
+
+  - module_name: "生年月日_00_07確認"
+    purpose: "元号確認（00-07）"
+    announcement: "令和ですか？平成ですか？"
+
+  - module_name: "生年月日_08_31確認"
+    purpose: "元号確認（08-31）"
+    announcement: "西暦ですか？または昭和、平成ですか？"
+
+  - module_name: "生年月日_32_63確認"
+    purpose: "元号確認（32-63）"
+    announcement: "西暦ですか？昭和ですか？"
+
+  - module_name: "電話番号_聴取"
+    purpose: "電話番号聴取案内"
+    announcement: "ご連絡先の電話番号をお話しください。"
+
+  - module_name: "携帯_確認"
+    purpose: "携帯番号復唱確認"
+    announcement: "ご連絡先の電話番号は{telephoneNumber}でよろしいでしょうか。1、はい。2、いいえ。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "用件確認"
+    words: |
+      受付 うけつけ
+      はい はい
+
+  - step_name: "氏名"
+    words: |
+      （氏名辞書を設定）
+
+  - step_name: "生年月日"
+    words: |
+      （和暦辞書 + month辞書 + day辞書を設定）
+
+  - step_name: "携帯_確認"
+    words: |
+      はい はい
+      いいえ いいえ
+
+  - step_name: "電話番号_確認"
+    words: |
+      はい はい
+      いいえ いいえ
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "最もシンプルな受付パターン。用件確認はDTMF 1択で実質確認のみ"
+  - "個人情報聴取サブフローはリファレンスbivrを完全コピー（CLAUDE.md Rule 9）"
+  - "電話番号聴取はincoming-classifierで携帯/その他を分岐（CLAUDE.md Rule 10）"
+  - "サブフローの出口に結果返却スクリプトを必ず配置（CLAUDE.md Rule 11）"
+  - "acceptance_timesを使用。祝日除く月〜金 9:00〜17:00"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "office_id"
+    resolved: false
+  - item: "営業時間（曜日・時間帯）の最終確認"
+    resolved: false
+  - item: "時間外アナウンスの文言"
+    resolved: true
+  - item: "非通知アナウンスの文言"
+    resolved: true
+  - item: "smsFlag の割り当て（1=受付完了、-1=それ以外）"
+    resolved: true

@@ -1,0 +1,182 @@
+# ゴールデンテンプレート: 時間外案内型（Business Hours Gating）
+# 営業時間外の発信者を検知し、案内を出して切断する最小フロー。
+# 最もシンプルなパターンのリファレンス実装。
+# サブフローなし・聴取項目なし・OpenAI不使用。
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "テスト医院"
+  group_name: "テスト医院"
+  flow_name: "テスト医院$時間外案内"
+  target_facility: "本院のみ"
+  office_id: "12345"
+  phone_number: "03-1234-5678"
+  business_hours: "祝日除く月〜金 9:00〜17:00"
+  flow_type: "1flow"
+  work_type: "new"
+  environment: "demo"
+
+# --- セクション2: フロー構成 ---
+# 最小構成: メインフロー1本のみ。サブフローなし。
+flow_structure:
+  type: "1flow"
+  flows:
+    - name: "テスト医院$時間外案内"
+      role: "main"
+      description: "営業時間外の着信に案内を出して切断する最小フロー"
+  subflows: []
+
+# --- セクション3: フローの目的 ---
+purpose: "営業時間外の発信者を検知し、時間外アナウンスを再生して切断する。営業時間内の場合は受付案内を再生し切断する。聴取項目は一切なく、案内のみの最小フロー。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "テスト医院$時間外案内"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+          → incoming-classifier
+              ├─ 非通知 → 非通知_アナウンス(TTS) → 完了フラグ_非通知 → 切断_非通知
+              └─ 通常   → acceptance_times
+                            ├─ 時間外 → 時間外_アナウンス(TTS) → 完了フラグ_時間外 → 切断_時間外
+                            └─ 受付可 → 冒頭_アナウンス(TTS) → 受付案内_アナウンス(TTS) → 完了フラグ_受付案内 → 切断_受付案内
+    notes: "海外着信の分岐は本フローでは不要のため省略"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+# 最小限のフィールドのみ定義。聴取項目がないため患者情報系フィールドは不要。
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "時間外案内"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "本フローは用件区分が1種類のみ"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "受付案内"
+      - id: "2"
+        order: "2"
+        value: "非通知"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "1=受付案内 2=非通知 6=時間外"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "着信番号自動格納"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+# --- セクション6: 聴取項目一覧 ---
+# 時間外案内型は聴取項目なし。アナウンス再生のみ。
+hearing_items: []
+
+# --- セクション7: ステップ詳細 ---
+# 聴取ステップなし。TTSアナウンスのみのため省略。
+step_details: []
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  - name: "END_時間外"
+    condition: "acceptance_timesで時間外判定"
+    tts_announcement: "お電話ありがとうございます。テスト医院でございます。申し訳ございませんが、ただいまの時間は受付時間外となっております。受付時間は、祝日を除く月曜日から金曜日の、午前9時から午後5時までとなっております。恐れ入りますが、受付時間内におかけ直しください。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_非通知"
+    condition: "incoming-classifierで非通知判定"
+    tts_announcement: "恐れ入りますが、電話番号の通知をお願いいたします。電話番号の前に186をつけて、おかけ直しください。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_受付案内"
+    condition: "受付時間内の着信"
+    tts_announcement: "お電話ありがとうございます。テスト医院でございます。ただいまお電話が混み合っております。恐れ入りますが、しばらくしてからおかけ直しいただくか、直接窓口までお越しください。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付案内"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知着信時の案内"
+    announcement: "恐れ入りますが、電話番号の通知をお願いいたします。電話番号の前に186をつけて、おかけ直しください。"
+
+  - module_name: "時間外_アナウンス"
+    purpose: "営業時間外の案内"
+    announcement: "お電話ありがとうございます。テスト医院でございます。申し訳ございませんが、ただいまの時間は受付時間外となっております。受付時間は、祝日を除く月曜日から金曜日の、午前9時から午後5時までとなっております。恐れ入りますが、受付時間内におかけ直しください。"
+
+  - module_name: "冒頭_アナウンス"
+    purpose: "受付時間内の冒頭施設案内"
+    announcement: "お電話ありがとうございます。テスト医院でございます。"
+
+  - module_name: "受付案内_アナウンス"
+    purpose: "受付時間内の案内メッセージ"
+    announcement: "ただいまお電話が混み合っております。恐れ入りますが、しばらくしてからおかけ直しいただくか、直接窓口までお越しください。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+# 本フローはSTTモジュールを使用しないため辞書登録なし。
+amivoice_dictionary: []
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "本フローは聴取項目が一切ない最小構成のため、サブフローは不要"
+  - "受付案内終話時のみSMS送信あり（smsFlag=1）。時間外・非通知はSMS送信なし（smsFlag=-1）"
+  - "営業時間の設定はIVRプロパティのacceptance_timesで制御する"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "営業時間（祝日除く月〜金 9:00〜17:00）で正しいか"
+    resolved: true
+  - item: "時間外アナウンスの文言"
+    resolved: true
+  - item: "非通知アナウンスの文言"
+    resolved: true
+  - item: "office_id（12345はダミー値。本番設定時に要変更）"
+    resolved: false
+  - item: "受付案内終話時のSMS送信有無（現在: 送信あり）"
+    resolved: true

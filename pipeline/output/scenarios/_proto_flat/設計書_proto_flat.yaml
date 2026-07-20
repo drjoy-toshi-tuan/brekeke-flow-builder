@@ -1,0 +1,132 @@
+version: "2.0"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# プロトタイプ: type: slot による個人情報の決定論インライン展開（OpenAI/Jump to Flow 不使用）
+# 3 slot を 1 本道で並べて scaffold が固定マップで部品鎖に展開することを実証する。
+#   patient_name → date_of_birth → phone → 終話
+# ─────────────────────────────────────────────────────────────────────────────
+
+basic_info:
+  facility_name: "プロト_フラット"
+  scenario_name: "個人情報インライン展開"
+  group_name: "プロト_フラット$個人情報インライン"
+  flow_name: "プロト_フラット$個人情報インライン"
+  office_id: ""
+  environment: "demo"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "プロト_フラット$個人情報インライン"
+      role: main
+  subflows: []
+
+context_fields:
+  - context_name: "patientName"
+    context_name_jp: "患者氏名"
+    display_type: "TEXT"
+    item_default: true
+    editable: true
+    deletable: false
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE"
+    item_default: true
+    editable: true
+    deletable: false
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "追加電話番号"
+    display_type: "PHONE_NUMBER"
+    item_default: true
+    editable: true
+    deletable: false
+  - context_name: "status"
+    context_name_jp: "ステータス"
+    display_type: "STATUS"
+    item_default: true
+    editable: true
+    deletable: false
+    range_values:
+      - {id: "1", order: 1, value: "完了"}
+
+hearing_items:
+  - name: "氏名聴取"
+    stt_type: "AmiVoice_STT"
+    retry_count: 2
+    save_to: "patientName"
+    echo_back: false
+    output_format: "text"
+  - name: "生年月日聴取"
+    stt_type: "DTMF_AmiVoice"
+    retry_count: 2
+    dtmf_max_length: 8
+    save_to: "patientDateOfBirth"
+    echo_back: false
+    output_format: "text"
+  - name: "電話番号聴取"
+    stt_type: "DTMF_AmiVoice"
+    retry_count: 2
+    dtmf_max_length: 11
+    save_to: "additionalPhoneNumber"
+    echo_back: false
+    output_format: "text"
+
+scenario_flow:
+  - step: "冒頭"
+    type: opening
+    next: "冒頭_アナウンス"
+
+  - step: "冒頭_アナウンス"
+    type: announcement
+    next: "氏名聴取"
+
+  - step: "氏名聴取"
+    type: slot
+    slot: patient_name
+    save_to: "patientName"
+    next: "生年月日聴取"
+
+  - step: "生年月日聴取"
+    type: slot
+    slot: date_of_birth
+    save_to: "patientDateOfBirth"
+    next: "電話番号聴取"
+
+  - step: "電話番号聴取"
+    type: slot
+    slot: phone
+    save_to: "additionalPhoneNumber"
+    next: "終了"
+
+  - step: "終了"
+    type: termination
+    termination_ref: "END_完了"
+
+termination_patterns:
+  - name: "END_完了"
+    condition: "完了"
+    tts_announcement: "ありがとうございました。"
+    status: "1"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_完了"
+  - name: "END_聴取失敗"
+    condition: "聴取失敗"
+    tts_announcement: "お聞き取りできませんでした。改めておかけ直しください。"
+    status: "1"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_聴取失敗"
+  - name: "END_非通知"
+    condition: "非通知"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。"
+    status: "1"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "時間外"
+    tts_announcement: "ただいまの時間は受付時間外です。"
+    status: "1"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_時間外"

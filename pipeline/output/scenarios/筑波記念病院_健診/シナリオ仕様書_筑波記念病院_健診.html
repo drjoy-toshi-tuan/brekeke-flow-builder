@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>シナリオ仕様書 — 筑波記念病院</title>
+<style>
+  :root {
+    --primary: #2563eb; --primary-light: #eff6ff;
+    --success: #16a34a; --success-light: #f0fdf4;
+    --warning: #d97706; --warning-light: #fffbeb;
+    --danger: #dc2626; --danger-light: #fef2f2;
+    --gray-50: #f9fafb; --gray-100: #f3f4f6; --gray-200: #e5e7eb;
+    --gray-300: #d1d5db; --gray-500: #6b7280; --gray-700: #374151; --gray-900: #111827;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI','Hiragino Sans','Yu Gothic UI',sans-serif; background: var(--gray-50); color: var(--gray-900); line-height: 1.7; }
+  .header { background: linear-gradient(135deg, #1e40af, #3b82f6); color: white; padding: 2.5rem 2rem; text-align: center; }
+  .header h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 0.5rem; }
+  .header .meta { opacity: 0.85; font-size: 0.9rem; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+  /* 読み物セクション（テキスト主体）は読みやすさ優先で中幅に絞る */
+  .readable { max-width: 900px; margin-left: auto; margin-right: auto; }
+  .overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+  .overview-card { background: white; border-radius: 12px; padding: 1.2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); text-align: center; }
+  .overview-card .num { font-size: 2rem; font-weight: 700; color: var(--primary); }
+  .overview-card .label { font-size: 0.85rem; color: var(--gray-500); margin-top: 0.2rem; }
+  .flow-overview { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin: 1.5rem 0; }
+  .flow-chain { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.3rem; padding: 1rem 0; }
+  .flow-node { background: var(--primary-light); border: 2px solid var(--primary); border-radius: 8px; padding: 0.5rem 1rem; font-size: 0.85rem; font-weight: 600; color: var(--primary); white-space: nowrap; }
+  .flow-node.start { background: var(--success-light); border-color: var(--success); color: var(--success); }
+  .flow-node.end { background: var(--danger-light); border-color: var(--danger); color: var(--danger); }
+  .flow-node.branch { background: var(--warning-light); border-color: var(--warning); color: var(--warning); }
+  .flow-arrow { font-size: 1.2rem; color: var(--gray-300); }
+  .section { margin: 1.5rem 0; }
+  .section-title { font-size: 1.3rem; font-weight: 700; color: var(--gray-900); padding-bottom: 0.5rem; border-bottom: 2px solid var(--primary); margin-bottom: 1rem; }
+  .block { background: white; border-radius: 12px; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); overflow: hidden; }
+  .block-header { background: var(--gray-100); padding: 0.8rem 1.2rem; cursor: pointer; display: flex; align-items: center; gap: 0.8rem; user-select: none; transition: background 0.2s; }
+  .block-header:hover { background: var(--gray-200); }
+  .block-header .icon { font-size: 1.3rem; }
+  .block-header .title { font-weight: 600; flex: 1; }
+  .block-header .badge { font-size: 0.75rem; padding: 0.15rem 0.6rem; border-radius: 999px; font-weight: 600; }
+  .badge-blue { background: var(--primary-light); color: var(--primary); }
+  .badge-green { background: var(--success-light); color: var(--success); }
+  .badge-orange { background: var(--warning-light); color: var(--warning); }
+  .badge-red { background: var(--danger-light); color: var(--danger); }
+  .badge-purple { background: #f3e8ff; color: #7c3aed; }
+  .badge-gray { background: var(--gray-100); color: var(--gray-500); }
+  .block-header .chevron { transition: transform 0.3s; font-size: 0.8rem; color: var(--gray-500); }
+  .block.open .block-header .chevron { transform: rotate(90deg); }
+  .block-body { display: none; padding: 1.2rem; }
+  .block.open .block-body { display: block; }
+  .speech { background: var(--primary-light); border-left: 4px solid var(--primary); border-radius: 0 8px 8px 0; padding: 0.8rem 1rem; margin: 0.5rem 0 0.5rem 2rem; font-size: 0.9rem; position: relative; }
+  .speech::before { content: '\1F50A'; position: absolute; left: -2rem; top: 0.7rem; font-size: 1rem; }
+  .speech .label { font-size: 0.75rem; color: var(--gray-500); font-weight: 600; margin-bottom: 0.3rem; }
+  .branch-table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; font-size: 0.9rem; }
+  .branch-table th { background: var(--gray-100); padding: 0.5rem 0.8rem; text-align: left; font-weight: 600; font-size: 0.8rem; color: var(--gray-500); }
+  .branch-table td { padding: 0.5rem 0.8rem; border-bottom: 1px solid var(--gray-200); }
+  .steps { list-style: none; padding: 0; }
+  .steps li { padding: 0.6rem 0 0.6rem 2.5rem; position: relative; border-left: 2px solid var(--gray-200); margin-left: 0.8rem; }
+  .steps li::before { content: attr(data-num); position: absolute; left: -0.85rem; top: 0.5rem; width: 1.5rem; height: 1.5rem; border-radius: 50%; background: var(--primary); color: white; font-size: 0.75rem; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+  .steps li:last-child { border-left-color: transparent; }
+  .step-title { font-weight: 600; }
+  .step-desc { font-size: 0.85rem; color: var(--gray-500); margin-top: 0.2rem; }
+  .info-box { background: var(--warning-light); border-left: 4px solid var(--warning); padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-size: 0.85rem; }
+  .error-box { background: var(--danger-light); border-left: 4px solid var(--danger); padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-size: 0.85rem; }
+  .collect-table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; }
+  .collect-table th { background: var(--gray-100); padding: 0.6rem 1rem; text-align: left; font-size: 0.85rem; }
+  .collect-table td { padding: 0.6rem 1rem; border-bottom: 1px solid var(--gray-200); font-size: 0.9rem; }
+  .footer { text-align: center; color: var(--gray-500); font-size: 0.8rem; padding: 2rem 0; }
+  /* 縦型ツリー図 */
+  /* ツリーは複雑になりがち。コンテナ幅を超えてビューポートの広さを使えるよう breakout させる */
+  .tree-section {
+    background: white; border-radius: 12px; padding: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin: 1.5rem 0;
+    /* ビューポート幅までブレイクアウト（左右1rem の余白を残す） */
+    width: calc(100vw - 2rem);
+    max-width: 1600px;
+    position: relative;
+    left: 50%;
+    transform: translateX(-50%);
+    overflow-x: auto;
+  }
+  .vtree { display: flex; flex-direction: column; align-items: center; gap: 0; }
+  .vtree-node { background: var(--primary-light); border: 2px solid var(--primary); border-radius: 8px; padding: 0.35rem 0.9rem; font-size: 0.8rem; font-weight: 600; color: var(--primary); white-space: nowrap; text-align: center; min-width: 88px; }
+  .vtree-node.t-opening { background: var(--success-light); border-color: var(--success); color: var(--success); }
+  .vtree-node.t-announcement { background: #e0f2fe; border-color: #0284c7; color: #0284c7; }
+  .vtree-node.t-hearing { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
+  .vtree-node.t-subflow { background: #f3e8ff; border-color: #7c3aed; color: #7c3aed; }
+  .vtree-node.t-context_match_router, .vtree-node.t-script, .vtree-node.t-date_of_call_classifier { background: var(--warning-light); border-color: var(--warning); color: var(--warning); }
+  .vtree-node.t-call_transfer { background: #fce7f3; border-color: #db2777; color: #db2777; }
+  .vtree-node.t-termination { background: var(--danger-light); border-color: var(--danger); color: var(--danger); }
+  .vtree-arrow { color: var(--gray-300); font-size: 0.9rem; line-height: 1; text-align: center; padding: 2px 0; }
+  /* 分岐が多い場合は折り返して縦スクロールに切り替える（横スクロール回避） */
+  .vtree-branches { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; gap: 0.8rem; row-gap: 1rem; margin: 0.3rem 0; }
+  .vtree-branch { display: flex; flex-direction: column; align-items: center; gap: 0; border: 1px solid var(--gray-200); border-radius: 10px; padding: 0.5rem 0.6rem; background: var(--gray-50); min-width: 0; }
+  .vtree-branch-label { font-size: 0.7rem; font-weight: 700; color: var(--gray-500); background: white; border-radius: 4px; padding: 0.1rem 0.5rem; margin-bottom: 0.2rem; border: 1px solid var(--gray-200); }
+  .vtree-merge { text-align: center; font-size: 0.75rem; color: var(--gray-500); padding: 0.2rem 0; font-weight: 600; }
+  /* 要件別分岐（横並び折りたたみ） */
+  .vtree-branches.collapsible { gap: 0.6rem; row-gap: 0.8rem; align-items: flex-start; }
+  details.vtree-branch { padding: 0; border: 1px solid var(--gray-200); border-radius: 10px; background: var(--gray-50); overflow: hidden; flex: 0 1 auto; max-width: 100%; }
+  details.vtree-branch[open] { flex-basis: 280px; }
+  details.vtree-branch > summary { list-style: none; cursor: pointer; padding: 0.55rem 0.9rem; background: white; display: flex; align-items: center; gap: 0.45rem; font-weight: 700; font-size: 0.85rem; color: var(--gray-700); user-select: none; transition: background 0.15s; }
+  details.vtree-branch > summary:hover { background: var(--gray-100); }
+  details.vtree-branch > summary::-webkit-details-marker { display: none; }
+  details.vtree-branch > summary::before { content: '\25B6'; font-size: 0.65rem; color: var(--gray-500); transition: transform 0.25s; display: inline-block; }
+  details.vtree-branch[open] > summary::before { transform: rotate(90deg); }
+  details.vtree-branch > summary .req-badge { font-size: 0.72rem; background: var(--primary-light); color: var(--primary); padding: 0.1rem 0.5rem; border-radius: 999px; font-weight: 700; }
+  details.vtree-branch > .vtree-branch-body { padding: 0.8rem; display: flex; flex-direction: column; align-items: center; gap: 0; border-top: 1px solid var(--gray-200); background: var(--gray-50); }
+  /* 共通トランクに畳んだ分岐（vtree-branch-merged）はラベルのみ小さく表示 */
+  .vtree-branch-merged { display: inline-flex; flex-wrap: wrap; gap: 0.3rem; justify-content: center; margin: 0.2rem 0; }
+  .vtree-branch-merged .req-badge { font-size: 0.7rem; background: var(--gray-100); color: var(--gray-700); padding: 0.15rem 0.55rem; border-radius: 999px; font-weight: 600; border: 1px solid var(--gray-200); }
+  .vtree-branch-merged-note { font-size: 0.7rem; color: var(--gray-500); margin-right: 0.3rem; align-self: center; }
+  .vtree-expand-bar { display: flex; gap: 0.6rem; justify-content: flex-end; margin-bottom: 0.6rem; font-size: 0.8rem; }
+  .vtree-expand-bar button { background: white; border: 1px solid var(--gray-300); color: var(--gray-700); padding: 0.3rem 0.7rem; border-radius: 6px; cursor: pointer; font-size: 0.75rem; font-weight: 600; }
+  .vtree-expand-bar button:hover { background: var(--gray-100); }
+  /* タブレット以下: branches を縦積みに切り替えて見切れを回避 */
+  @media (max-width: 820px) {
+    .tree-section { width: calc(100vw - 1rem); padding: 1rem 0.75rem; }
+    .vtree-branches { flex-direction: column; align-items: stretch; }
+    .vtree-branch { align-items: center; }
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>シナリオ仕様書</h1>
+  <div class="meta">筑波記念病院 | 作成日: 2026年04月22日</div>
+</div>
+<div class="container">
+
+<div class="overview">
+  <div class="overview-card"><div class="num">43</div><div class="label">総ブロック数</div></div>
+  <div class="overview-card"><div class="num">2</div><div class="label">用件メニュー</div></div>
+  <div class="overview-card"><div class="num">4</div><div class="label">サブフロー</div></div>
+  <div class="overview-card"><div class="num">10</div><div class="label">分岐ブロック</div></div>
+  <div class="overview-card"><div class="num">19</div><div class="label">終話パターン</div></div>
+</div>
+
+<div class="tree-section">
+  <h3 style="margin-bottom:0.8rem;color:var(--gray-700);">通話の全体フロー（樹形図）</h3>
+  <div class="vtree-expand-bar"><button onclick="document.querySelectorAll('details.vtree-branch').forEach(d=>d.open=true)">全て展開</button><button onclick="document.querySelectorAll('details.vtree-branch').forEach(d=>d.open=false)">全て閉じる</button></div><div class="vtree"><div class="vtree-node t-opening">冒頭</div><div class="vtree-arrow">↓</div><div class="vtree-node t-announcement">冒頭_アナウンス</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約日確認</div><div class="vtree-arrow">↓</div><div class="vtree-branches collapsible"><details class="vtree-branch"><summary><span class="req-badge">はい</span></summary><div class="vtree-branch-body"><div class="vtree-node t-hearing">企業個人確認</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">企業</div><div class="vtree-node t-hearing">企業名</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">企業_担当者名</div></div><div class="vtree-branch"><div class="vtree-branch-label">個人</div><div class="vtree-node t-subflow">氏名聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">生年月日聴取</div></div></div><div class="vtree-merge">↓ 合流</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">電話番号聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">用件</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規予約</div><div class="vtree-node t-hearing">新規_希望コース</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">乳がん・子宮がん検診のみ</div><div class="vtree-node t-hearing">新規_助成確認</div></div><div class="vtree-branch"><div class="vtree-branch-merged"><span class="vtree-branch-merged-note">共通:</span><span class="req-badge">健康診断</span> <span class="req-badge">人間ドック</span> <span class="req-badge">分からない</span></div></div></div><div class="vtree-merge">↓ 合流</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">新規_人数時期</div><div class="vtree-arrow">↓</div><div class="vtree-node t-script">新規_当日判定</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">今日</div><div class="vtree-node t-termination">END_代表電話案内_当日</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-context_match_router">終話判定</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">企業</div><div class="vtree-node t-context_match_router">終話判定_企業_phone</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">mobile</div><div class="vtree-node t-context_match_router">終話判定_企業_mobile_cls</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規予約</div><div class="vtree-node t-termination">END_企業_新規_mobile</div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-termination">END_企業_変更_mobile</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約内容及び日程の確認</div><div class="vtree-node t-termination">END_企業_確認_mobile</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-merged"><span class="vtree-branch-merged-note">共通:</span><span class="req-badge">landline</span> <span class="req-badge">ip050</span></div><div class="vtree-node t-context_match_router">終話判定_企業_landline_cls</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規予約</div><div class="vtree-node t-termination">END_企業_新規_landline</div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-termination">END_企業_変更_landline</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約内容及び日程の確認</div><div class="vtree-node t-termination">END_企業_確認_landline</div></div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">個人</div><div class="vtree-node t-context_match_router">終話判定_個人_phone</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">mobile</div><div class="vtree-node t-context_match_router">終話判定_個人_mobile_cls</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規予約</div><div class="vtree-node t-termination">END_個人_新規_mobile</div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-termination">END_個人_変更_mobile</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約内容及び日程の確認</div><div class="vtree-node t-termination">END_個人_確認_mobile</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-merged"><span class="vtree-branch-merged-note">共通:</span><span class="req-badge">landline</span> <span class="req-badge">ip050</span></div><div class="vtree-node t-context_match_router">終話判定_個人_landline_cls</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規予約</div><div class="vtree-node t-termination">END_個人_新規_landline</div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-termination">END_個人_変更_landline</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約内容及び日程の確認</div><div class="vtree-node t-termination">END_個人_確認_landline</div></div></div></div></div></div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-hearing">変更キャンセル_コース確認</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">変更キャンセル_分岐</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-hearing">変更_内容</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">終話判定</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">企業</div><div class="vtree-node t-context_match_router">終話判定_企業_phone</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">mobile</div><div class="vtree-node t-context_match_router">終話判定_企業_mobile_cls</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規予約</div><div class="vtree-node t-termination">END_企業_新規_mobile</div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-termination">END_企業_変更_mobile</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約内容及び日程の確認</div><div class="vtree-node t-termination">END_企業_確認_mobile</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-merged"><span class="vtree-branch-merged-note">共通:</span><span class="req-badge">landline</span> <span class="req-badge">ip050</span></div><div class="vtree-node t-context_match_router">終話判定_企業_landline_cls</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規予約</div><div class="vtree-node t-termination">END_企業_新規_landline</div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-termination">END_企業_変更_landline</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約内容及び日程の確認</div><div class="vtree-node t-termination">END_企業_確認_landline</div></div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">個人</div><div class="vtree-node t-context_match_router">終話判定_個人_phone</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">mobile</div><div class="vtree-node t-context_match_router">終話判定_個人_mobile_cls</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規予約</div><div class="vtree-node t-termination">END_個人_新規_mobile</div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-termination">END_個人_変更_mobile</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約内容及び日程の確認</div><div class="vtree-node t-termination">END_個人_確認_mobile</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-merged"><span class="vtree-branch-merged-note">共通:</span><span class="req-badge">landline</span> <span class="req-badge">ip050</span></div><div class="vtree-node t-context_match_router">終話判定_個人_landline_cls</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規予約</div><div class="vtree-node t-termination">END_個人_新規_landline</div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-termination">END_個人_変更_landline</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約内容及び日程の確認</div><div class="vtree-node t-termination">END_個人_確認_landline</div></div></div></div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">キャンセル</div><div class="vtree-node t-hearing">キャンセル_現在予約日聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_キャンセル完了</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">キャンセル</div><div class="vtree-node t-context_match_router">キャンセル判定_分岐</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">企業</div><div class="vtree-node t-hearing">キャンセル_対象者聴取</div></div><div class="vtree-branch"><div class="vtree-branch-label">個人</div></div></div><div class="vtree-merge">↓ 合流</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">変更キャンセル_コース確認</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">変更キャンセル_分岐</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-hearing">変更_内容</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">終話判定</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">企業</div><div class="vtree-node t-context_match_router">終話判定_企業_phone</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">mobile</div><div class="vtree-node t-context_match_router">終話判定_企業_mobile_cls</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規予約</div><div class="vtree-node t-termination">END_企業_新規_mobile</div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-termination">END_企業_変更_mobile</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約内容及び日程の確認</div><div class="vtree-node t-termination">END_企業_確認_mobile</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-merged"><span class="vtree-branch-merged-note">共通:</span><span class="req-badge">landline</span> <span class="req-badge">ip050</span></div><div class="vtree-node t-context_match_router">終話判定_企業_landline_cls</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規予約</div><div class="vtree-node t-termination">END_企業_新規_landline</div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-termination">END_企業_変更_landline</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約内容及び日程の確認</div><div class="vtree-node t-termination">END_企業_確認_landline</div></div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">個人</div><div class="vtree-node t-context_match_router">終話判定_個人_phone</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">mobile</div><div class="vtree-node t-context_match_router">終話判定_個人_mobile_cls</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規予約</div><div class="vtree-node t-termination">END_個人_新規_mobile</div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-termination">END_個人_変更_mobile</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約内容及び日程の確認</div><div class="vtree-node t-termination">END_個人_確認_mobile</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-merged"><span class="vtree-branch-merged-note">共通:</span><span class="req-badge">landline</span> <span class="req-badge">ip050</span></div><div class="vtree-node t-context_match_router">終話判定_個人_landline_cls</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規予約</div><div class="vtree-node t-termination">END_個人_新規_landline</div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-termination">END_個人_変更_landline</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約内容及び日程の確認</div><div class="vtree-node t-termination">END_個人_確認_landline</div></div></div></div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">キャンセル</div><div class="vtree-node t-hearing">キャンセル_現在予約日聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-termination">END_キャンセル完了</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">予約内容及び日程の確認</div><div class="vtree-node t-context_match_router">終話判定</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">企業</div><div class="vtree-node t-context_match_router">終話判定_企業_phone</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">mobile</div><div class="vtree-node t-context_match_router">終話判定_企業_mobile_cls</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規予約</div><div class="vtree-node t-termination">END_企業_新規_mobile</div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-termination">END_企業_変更_mobile</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約内容及び日程の確認</div><div class="vtree-node t-termination">END_企業_確認_mobile</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-merged"><span class="vtree-branch-merged-note">共通:</span><span class="req-badge">landline</span> <span class="req-badge">ip050</span></div><div class="vtree-node t-context_match_router">終話判定_企業_landline_cls</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規予約</div><div class="vtree-node t-termination">END_企業_新規_landline</div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-termination">END_企業_変更_landline</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約内容及び日程の確認</div><div class="vtree-node t-termination">END_企業_確認_landline</div></div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">個人</div><div class="vtree-node t-context_match_router">終話判定_個人_phone</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">mobile</div><div class="vtree-node t-context_match_router">終話判定_個人_mobile_cls</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規予約</div><div class="vtree-node t-termination">END_個人_新規_mobile</div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-termination">END_個人_変更_mobile</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約内容及び日程の確認</div><div class="vtree-node t-termination">END_個人_確認_mobile</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-merged"><span class="vtree-branch-merged-note">共通:</span><span class="req-badge">landline</span> <span class="req-badge">ip050</span></div><div class="vtree-node t-context_match_router">終話判定_個人_landline_cls</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">新規予約</div><div class="vtree-node t-termination">END_個人_新規_landline</div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-termination">END_個人_変更_landline</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約内容及び日程の確認</div><div class="vtree-node t-termination">END_個人_確認_landline</div></div></div></div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-termination">END_問い合わせ代表案内</div></div></div></div></details><details class="vtree-branch"><summary><span class="req-badge">いいえ</span></summary><div class="vtree-branch-body"><div class="vtree-node t-termination">END_代表電話案内_3日以内</div></div></details></div></div>
+</div>
+
+<div style="background:white;border-radius:12px;padding:1rem 1.5rem;box-shadow:0 1px 3px rgba(0,0,0,0.08);margin:1.5rem 0;display:flex;flex-wrap:wrap;gap:1.5rem;align-items:center;">
+  <span style="font-weight:600;color:var(--gray-700);font-size:0.9rem;">処理方式の凡例:</span>
+  <span style="display:flex;align-items:center;gap:0.4rem;"><span class="badge badge-gray">音声認識のみ</span><span style="font-size:0.8rem;color:var(--gray-500);">患者の発話をそのまま記録</span></span>
+  <span style="display:flex;align-items:center;gap:0.4rem;"><span class="badge badge-purple">AI判定</span><span style="font-size:0.8rem;color:var(--gray-500);">AIが発話内容を分類・変換して分岐</span></span>
+</div>
+<div class="section">
+<div class="section-title">1. 着信～用件選択</div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F4DE;</span><span class="title">冒頭アナウンス</span><span class="badge badge-green">自動</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">AIが話す内容</div>お電話ありがとうございます。つくばトータルヘルスプラザ、予約専用、AI電話です。予約に関する用件以外については代表電話へおかけ直し下さい。</div>
+<div class="info-box">&#9888;&#65039; <strong>非通知の場合</strong>: お電話ありがとうございます。つくばトータルヘルスプラザの、予約専用、AI電話です。申し訳ございません。電話番号が非通知設定の場合、AI電話では受付できません。先</div>
+<div class="info-box">&#x1F553; <strong>時間外の場合</strong>: お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</div>
+</div></div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F500;</span><span class="title">予約日確認</span><span class="badge badge-orange">分岐</span><span class="badge badge-purple">AI判定</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">AIが話す内容</div>日曜・祝日を除き、本日より4日目以降に関するお問い合わせでよろしいですか？「はい」か「いいえ」でお話しください。</div>
+<table class="branch-table">
+<tr><th>選択</th><th>遷移先</th></tr>
+<tr><td><strong>1</strong> または「はい」</td><td>&rarr; 企業個人確認</td></tr>
+<tr><td><strong>2</strong> または「いいえ」</td><td>&rarr; END_代表電話案内_3日以内</td></tr>
+</table>
+<div class="error-box">&#x1F504; 聞き取れなかった場合: 最大<strong>2回</strong>再質問</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">2. はいフロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">はいフロー</span><span class="badge badge-blue">1ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">企業個人確認 <span class="processing-tag"><span class="badge badge-purple">AI判定</span></span></div></li>
+<li data-num="2"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+<div class="speech"><div class="label">企業個人確認</div>お電話いただいている方は、企業のご担当者様ですか？「はい」か「いいえ」でお話しください。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">3. いいえフロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">いいえフロー</span><span class="badge badge-blue">0ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">4. 個人情報聴取（共通サブフロー）</div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F464;</span><span class="title">聴取する項目</span><span class="badge badge-blue">3項目</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th>順序</th><th>項目</th><th>入力方法</th></tr>
+<tr><td>1</td><td><strong>氏名聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>2</td><td><strong>生年月日聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>3</td><td><strong>電話番号聴取</strong></td><td>音声 / プッシュ</td></tr>
+</table>
+<div class="info-box">&#x1F4F1; <strong>携帯電話からの着信の場合</strong>: 電話番号は着信番号を復唱確認</div>
+<div class="error-box">&#x1F504; 各項目とも聞き取れなかった場合は最大<strong>2回</strong>再質問</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">5. ブロック構成（技術仕様）</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F9E9;</span><span class="title">全ブロック一覧（43ブロック）</span><span class="badge badge-blue">43件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th style="width:5%">#</th><th style="width:25%">ブロック名</th><th style="width:15%">タイプ</th><th style="width:25%">接続先</th><th style="width:30%">詳細</th></tr>
+<tr><td>1</td><td>&#x1F3E0; <strong>冒頭</strong></td><td><span class="badge badge-green">冒頭</span></td><td style="font-size:0.8rem">冒頭_アナウンス</td><td style="font-size:0.8rem">営業時間チェックあり</td></tr>
+<tr><td>2</td><td>&#x1F50A; <strong>冒頭_アナウンス</strong></td><td><span class="badge badge-blue">発話</span></td><td style="font-size:0.8rem">予約日確認</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>3</td><td>&#x1F3A4; <strong>予約日確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">企業個人確認 / END_代表電話案内_3日以内</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>4</td><td>&#x1F3A4; <strong>企業個人確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">企業名 / 氏名聴取</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>5</td><td>&#x1F3A4; <strong>企業名</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">企業_担当者名</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>6</td><td>&#x1F517; <strong>企業_担当者名</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">電話番号聴取</td><td style="font-size:0.8rem">flow: 筑波記念病院$氏名聴取</td></tr>
+<tr><td>7</td><td>&#x1F517; <strong>氏名聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">生年月日聴取</td><td style="font-size:0.8rem">flow: 筑波記念病院$氏名聴取</td></tr>
+<tr><td>8</td><td>&#x1F517; <strong>生年月日聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">電話番号聴取</td><td style="font-size:0.8rem">flow: 筑波記念病院$生年月日聴取</td></tr>
+<tr><td>9</td><td>&#x1F517; <strong>電話番号聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">用件</td><td style="font-size:0.8rem">flow: 筑波記念病院$電話番号聴取</td></tr>
+<tr><td>10</td><td>&#x1F3A4; <strong>用件</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">新規_希望コース / 変更キャンセル_コース確認 / キャンセル判定_分岐 / 終話判定 / END_問い合わせ代表案内</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>11</td><td>&#x1F3A4; <strong>新規_希望コース</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">新規_助成確認 / 新規_人数時期 / 新規_人数時期 / 新規_人数時期</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>12</td><td>&#x1F3A4; <strong>新規_助成確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">新規_人数時期</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>13</td><td>&#x1F3A4; <strong>新規_人数時期</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">新規_当日判定</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>14</td><td>&#x2699; <strong>新規_当日判定</strong></td><td><span class="badge badge-orange">スクリプト</span></td><td style="font-size:0.8rem">END_代表電話案内_当日 / 終話判定</td><td style="font-size:0.8rem">ref: 新規_人数時期<br>template: custom</td></tr>
+<tr><td>15</td><td>&#x1F3A4; <strong>変更キャンセル_コース確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">変更キャンセル_分岐</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>16</td><td>&#x1F500; <strong>変更キャンセル_分岐</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">変更_内容 / キャンセル_現在予約日聴取</td><td style="font-size:0.8rem">ref: classification</td></tr>
+<tr><td>17</td><td>&#x1F3A4; <strong>変更_内容</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">終話判定</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>18</td><td>&#x1F500; <strong>キャンセル判定_分岐</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">キャンセル_対象者聴取 / 変更キャンセル_コース確認</td><td style="font-size:0.8rem">ref: company_check</td></tr>
+<tr><td>19</td><td>&#x1F3A4; <strong>キャンセル_対象者聴取</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">変更キャンセル_コース確認</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>20</td><td>&#x1F3A4; <strong>キャンセル_現在予約日聴取</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">END_キャンセル完了</td><td style="font-size:0.8rem">format: datetime</td></tr>
+<tr><td>21</td><td>&#x1F500; <strong>終話判定</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">終話判定_企業_phone / 終話判定_個人_phone</td><td style="font-size:0.8rem">ref: company_check</td></tr>
+<tr><td>22</td><td>&#x1F500; <strong>終話判定_企業_phone</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">終話判定_企業_mobile_cls / 終話判定_企業_landline_cls / 終話判定_企業_landline_cls</td><td style="font-size:0.8rem">ref: phone_type</td></tr>
+<tr><td>23</td><td>&#x1F500; <strong>終話判定_企業_mobile_cls</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">END_企業_新規_mobile / END_企業_変更_mobile / END_企業_確認_mobile</td><td style="font-size:0.8rem">ref: classification</td></tr>
+<tr><td>24</td><td>&#x1F500; <strong>終話判定_企業_landline_cls</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">END_企業_新規_landline / END_企業_変更_landline / END_企業_確認_landline</td><td style="font-size:0.8rem">ref: classification</td></tr>
+<tr><td>25</td><td>&#x1F500; <strong>終話判定_個人_phone</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">終話判定_個人_mobile_cls / 終話判定_個人_landline_cls / 終話判定_個人_landline_cls</td><td style="font-size:0.8rem">ref: phone_type</td></tr>
+<tr><td>26</td><td>&#x1F500; <strong>終話判定_個人_mobile_cls</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">END_個人_新規_mobile / END_個人_変更_mobile / END_個人_確認_mobile</td><td style="font-size:0.8rem">ref: classification</td></tr>
+<tr><td>27</td><td>&#x1F500; <strong>終話判定_個人_landline_cls</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">END_個人_新規_landline / END_個人_変更_landline / END_個人_確認_landline</td><td style="font-size:0.8rem">ref: classification</td></tr>
+<tr><td>28</td><td>&#x1F6D1; <strong>END_個人_新規_mobile</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_個人_新規_mobile</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>29</td><td>&#x1F6D1; <strong>END_個人_新規_landline</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_個人_新規_landline</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>30</td><td>&#x1F6D1; <strong>END_個人_変更_mobile</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_個人_変更_mobile</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>31</td><td>&#x1F6D1; <strong>END_個人_変更_landline</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_個人_変更_landline</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>32</td><td>&#x1F6D1; <strong>END_個人_確認_mobile</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_個人_確認_mobile</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>33</td><td>&#x1F6D1; <strong>END_個人_確認_landline</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_個人_確認_landline</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>34</td><td>&#x1F6D1; <strong>END_企業_新規_mobile</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_企業_新規_mobile</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>35</td><td>&#x1F6D1; <strong>END_企業_新規_landline</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_企業_新規_landline</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>36</td><td>&#x1F6D1; <strong>END_企業_変更_mobile</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_企業_変更_mobile</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>37</td><td>&#x1F6D1; <strong>END_企業_変更_landline</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_企業_変更_landline</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>38</td><td>&#x1F6D1; <strong>END_企業_確認_mobile</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_企業_確認_mobile</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>39</td><td>&#x1F6D1; <strong>END_企業_確認_landline</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_企業_確認_landline</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>40</td><td>&#x1F6D1; <strong>END_キャンセル完了</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_キャンセル完了</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>41</td><td>&#x1F6D1; <strong>END_代表電話案内_3日以内</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_代表電話案内_3日以内</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>42</td><td>&#x1F6D1; <strong>END_代表電話案内_当日</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_代表電話案内_当日</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>43</td><td>&#x1F6D1; <strong>END_問い合わせ代表案内</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_問い合わせ代表案内</td><td style="font-size:0.8rem">—</td></tr>
+</table>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">6. エラー・例外時の挙動</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x26A0;&#xFE0F;</span><span class="title">エラー時の対応一覧</span><span class="badge badge-red">重要</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th>状況</th><th>対応</th></tr>
+<tr><td>非通知着信（incoming-classifier withheld）</td><td>お電話ありがとうございます。つくばトータルヘルスプラザの、予約専用、AI電話です。申し訳ございません。電話番号が非通知設定の場合、AI電話では受付できません。先</td></tr>
+<tr><td>受付時間外</td><td>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td>リトライ上限到達</td><td>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、代表電話の0298643588におかけ直しください。お電話ありがとうございまし</td></tr>
+<tr><td>予約日確認=いいえ（3日以内の問い合わせ）</td><td>大変申し訳ございません。日曜・祝日を除き、本日より3日目以内に関するお問い合わせはAI電話では承っておりません。恐れ入りますが、この後ご案内をする代表電話にお問</td></tr>
+<tr><td>新規予約で予約希望日が着信日と同日（新規_当日判定=今日）</td><td>当日のご予約についてはAI電話ではご対応できませんので、代表電話の&lt;speak type=&quot;telephone&quot; breakc=&quot;100ms&quot;&gt;02986435</td></tr>
+<tr><td>用件で適切な値が得られない（予約以外の問い合わせ想定）</td><td>大変申し訳ございません。予約以外に関するお問い合わせはAI電話では承っておりません。恐れ入りますが、この後ご案内する代表電話におかけ直しください。番号をご案内し</td></tr>
+<tr><td>キャンセル_現在予約日聴取 完了</td><td>キャンセルを受付いたしました。必要がある場合のみ、担当者よりご連絡いたします。お電話ありがとうございました。</td></tr>
+<tr><td>company_check=個人, classification=新規予約, phone_type=mobile</td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。なお、折り返しのご連絡の際に、保険証の</td></tr>
+<tr><td>company_check=個人, classification=新規予約, phone_type=landline/ip050</td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。なお、折り返しのご連絡の際に、保険証の情報を確認いたします。お</td></tr>
+<tr><td>company_check=個人, classification=変更, phone_type=mobile</td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。なお、折り返しのご連絡の際に、保険証の</td></tr>
+<tr><td>company_check=個人, classification=変更, phone_type=landline/ip050</td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。なお、折り返しのご連絡の際に、保険証の情報を確認いたします。お</td></tr>
+<tr><td>company_check=個人, classification=予約内容及び日程の確認, phone_type=mobile</td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。なお、折り返しのご連絡の際に、保険証の</td></tr>
+<tr><td>company_check=個人, classification=予約内容及び日程の確認, phone_type=landline/ip050</td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。なお、折り返しのご連絡の際に、保険証の情報を確認いたします。お</td></tr>
+<tr><td>company_check=企業, classification=新規予約, phone_type=mobile</td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。</td></tr>
+<tr><td>company_check=企業, classification=新規予約, phone_type=landline/ip050</td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。お電話ありがとうございました。</td></tr>
+<tr><td>company_check=企業, classification=変更, phone_type=mobile</td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。</td></tr>
+<tr><td>company_check=企業, classification=変更, phone_type=landline/ip050</td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。お電話ありがとうございました。</td></tr>
+<tr><td>company_check=企業, classification=予約内容及び日程の確認, phone_type=mobile</td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。</td></tr>
+<tr><td>company_check=企業, classification=予約内容及び日程の確認, phone_type=landline/ip050</td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。お電話ありがとうございました。</td></tr>
+</table>
+<div class="speech"><div class="label">聞き取り失敗時の切断アナウンス</div>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、代表電話の0298643588におかけ直しください。お電話ありがとうございました。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">7. 終話パターン一覧</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F6AA;</span><span class="title">全終話パターンの発話テキスト</span><span class="badge badge-red">19件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">END_非通知</div>お電話ありがとうございます。つくばトータルヘルスプラザの、予約専用、AI電話です。申し訳ございません。電話番号が非通知設定の場合、AI電話では受付できません。先頭に数字の186を付けるか、通知のできる電話からおかけなおしください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_時間外</div>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_聴取失敗</div>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、代表電話の0298643588におかけ直しください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_代表電話案内_3日以内</div>大変申し訳ございません。日曜・祝日を除き、本日より3日目以内に関するお問い合わせはAI電話では承っておりません。恐れ入りますが、この後ご案内をする代表電話にお問い合わせください。番号をご案内しますのでメモをご準備下さい。&lt;break time=&quot;500ms&quot;/&gt;番号は&lt;speak type=&quot;telephone&quot; breakc=&quot;100ms&quot;&gt;0298643588&lt;/speak&gt;です。&lt;break time=&quot;500ms&quot;/&gt;番号は&lt;speak type=&quot;telephone&quot; breakc=&quot;100ms&quot;&gt;0298643588&lt;/speak&gt;です。&lt;break time=&quot;500ms&quot;/&gt;番号は&lt;speak type=&quot;telephone&quot; breakc=&quot;100ms&quot;&gt;0298643588&lt;/speak&gt;です。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_代表電話案内_当日</div>当日のご予約についてはAI電話ではご対応できませんので、代表電話の&lt;speak type=&quot;telephone&quot; breakc=&quot;100ms&quot;&gt;0298643588&lt;/speak&gt;におかけ直しください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_問い合わせ代表案内</div>大変申し訳ございません。予約以外に関するお問い合わせはAI電話では承っておりません。恐れ入りますが、この後ご案内する代表電話におかけ直しください。番号をご案内しますのでメモをご準備下さい。&lt;break time=&quot;500ms&quot;/&gt;番号は&lt;speak type=&quot;telephone&quot; breakc=&quot;100ms&quot;&gt;0298643588&lt;/speak&gt;です。&lt;break time=&quot;500ms&quot;/&gt;番号は&lt;speak type=&quot;telephone&quot; breakc=&quot;100ms&quot;&gt;0298643588&lt;/speak&gt;です。&lt;break time=&quot;500ms&quot;/&gt;番号は&lt;speak type=&quot;telephone&quot; breakc=&quot;100ms&quot;&gt;0298643588&lt;/speak&gt;です。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_キャンセル完了</div>キャンセルを受付いたしました。必要がある場合のみ、担当者よりご連絡いたします。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_個人_新規_mobile</div>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。なお、折り返しのご連絡の際に、保険証の情報を確認いたします。お手元にご用意の上、お待ちください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_個人_新規_landline</div>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。なお、折り返しのご連絡の際に、保険証の情報を確認いたします。お手元にご用意の上、お待ちください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_個人_変更_mobile</div>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。なお、折り返しのご連絡の際に、保険証の情報を確認いたします。お手元にご用意の上、お待ちください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_個人_変更_landline</div>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。なお、折り返しのご連絡の際に、保険証の情報を確認いたします。お手元にご用意の上、お待ちください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_個人_確認_mobile</div>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。なお、折り返しのご連絡の際に、保険証の情報を確認いたします。お手元にご用意の上、お待ちください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_個人_確認_landline</div>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。なお、折り返しのご連絡の際に、保険証の情報を確認いたします。お手元にご用意の上、お待ちください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_企業_新規_mobile</div>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_企業_新規_landline</div>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_企業_変更_mobile</div>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_企業_変更_landline</div>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_企業_確認_mobile</div>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_企業_確認_landline</div>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。お電話ありがとうございました。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">8. 発話テキスト全文一覧</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F4DD;</span><span class="title">全発話テキスト（31件）</span><span class="badge badge-blue">31件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th style="width:30%">ステップ名</th><th>発話テキスト</th></tr>
+<tr><td><strong>冒頭_アナウンス</strong></td><td>お電話ありがとうございます。つくばトータルヘルスプラザ、予約専用、AI電話です。予約に関する用件以外については代表電話へおかけ直し下さい。</td></tr>
+<tr><td><strong>予約日確認</strong></td><td>日曜・祝日を除き、本日より4日目以降に関するお問い合わせでよろしいですか？「はい」か「いいえ」でお話しください。</td></tr>
+<tr><td><strong>企業個人確認</strong></td><td>お電話いただいている方は、企業のご担当者様ですか？「はい」か「いいえ」でお話しください。</td></tr>
+<tr><td><strong>企業名</strong></td><td>お電話いただいた方の、企業名をお話ください</td></tr>
+<tr><td><strong>用件</strong></td><td>ご用件を、次の4つのいずれかでお話ください。「新規予約お申込の方は1を」「予約内容の変更の方は2を」「予約キャンセルの方は3を」「予約内容及び日程の確認は4を」、それではお話ください。&lt;dtmf digit=&quot;1&quot;/&gt;</td></tr>
+<tr><td><strong>新規_希望コース</strong></td><td>ご希望のコースを教えてください。「健康診断をご希望の方は1を」、「人間ドックをご希望の方は2を」、「乳がん・子宮がん検診のみをご希望の方は3を」、分からない場合は、「分からない」とお話ください。&lt;dtmf digit=&quot;1&quot;/&gt;</td></tr>
+<tr><td><strong>新規_助成確認</strong></td><td>お住いの市町村の助成制度をご利用の場合は市町村名を、企業からの予約の場合は会社名を、どちらでもない方はその他 とお話しください。</td></tr>
+<tr><td><strong>新規_人数時期</strong></td><td>受診を希望される方の人数と、予約希望時期を、お話しください。</td></tr>
+<tr><td><strong>変更キャンセル_コース確認</strong></td><td>現在ご予約されているコースを教えてください。「健康診断の方は1を」、「人間ドックの方は2を」、「乳がん・子宮がん検診のみの方は3を」、分からない場合は、「分からない」とお話ください。&lt;dtmf digit=&quot;1&quot;/&gt;</td></tr>
+<tr><td><strong>変更_内容</strong></td><td>変更や追加希望の内容について、簡潔にお話ください。</td></tr>
+<tr><td><strong>キャンセル_対象者聴取</strong></td><td>キャンセルされる方のお名前をお話しください。</td></tr>
+<tr><td><strong>キャンセル_現在予約日聴取</strong></td><td>現在の予約日を、お話ください</td></tr>
+<tr><td><strong>END_非通知</strong></td><td>お電話ありがとうございます。つくばトータルヘルスプラザの、予約専用、AI電話です。申し訳ございません。電話番号が非通知設定の場合、AI電話では受付できません。先頭に数字の186を付けるか、通知のできる電話からおかけなおしください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_時間外</strong></td><td>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_聴取失敗</strong></td><td>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、代表電話の0298643588におかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_代表電話案内_3日以内</strong></td><td>大変申し訳ございません。日曜・祝日を除き、本日より3日目以内に関するお問い合わせはAI電話では承っておりません。恐れ入りますが、この後ご案内をする代表電話にお問い合わせください。番号をご案内しますのでメモをご準備下さい。&lt;break time=&quot;500ms&quot;/&gt;番号は&lt;speak type=&quot;telephone&quot; breakc=&quot;100ms&quot;&gt;0298643588&lt;/speak&gt;です。&lt;break time=&quot;500ms&quot;/&gt;番号は&lt;speak type=&quot;telephone&quot; breakc=&quot;100ms&quot;&gt;0298643588&lt;/speak&gt;です。&lt;break time=&quot;500ms&quot;/&gt;番号は&lt;speak type=&quot;telephone&quot; breakc=&quot;100ms&quot;&gt;0298643588&lt;/speak&gt;です。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_代表電話案内_当日</strong></td><td>当日のご予約についてはAI電話ではご対応できませんので、代表電話の&lt;speak type=&quot;telephone&quot; breakc=&quot;100ms&quot;&gt;0298643588&lt;/speak&gt;におかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_問い合わせ代表案内</strong></td><td>大変申し訳ございません。予約以外に関するお問い合わせはAI電話では承っておりません。恐れ入りますが、この後ご案内する代表電話におかけ直しください。番号をご案内しますのでメモをご準備下さい。&lt;break time=&quot;500ms&quot;/&gt;番号は&lt;speak type=&quot;telephone&quot; breakc=&quot;100ms&quot;&gt;0298643588&lt;/speak&gt;です。&lt;break time=&quot;500ms&quot;/&gt;番号は&lt;speak type=&quot;telephone&quot; breakc=&quot;100ms&quot;&gt;0298643588&lt;/speak&gt;です。&lt;break time=&quot;500ms&quot;/&gt;番号は&lt;speak type=&quot;telephone&quot; breakc=&quot;100ms&quot;&gt;0298643588&lt;/speak&gt;です。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_キャンセル完了</strong></td><td>キャンセルを受付いたしました。必要がある場合のみ、担当者よりご連絡いたします。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_個人_新規_mobile</strong></td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。なお、折り返しのご連絡の際に、保険証の情報を確認いたします。お手元にご用意の上、お待ちください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_個人_新規_landline</strong></td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。なお、折り返しのご連絡の際に、保険証の情報を確認いたします。お手元にご用意の上、お待ちください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_個人_変更_mobile</strong></td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。なお、折り返しのご連絡の際に、保険証の情報を確認いたします。お手元にご用意の上、お待ちください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_個人_変更_landline</strong></td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。なお、折り返しのご連絡の際に、保険証の情報を確認いたします。お手元にご用意の上、お待ちください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_個人_確認_mobile</strong></td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。なお、折り返しのご連絡の際に、保険証の情報を確認いたします。お手元にご用意の上、お待ちください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_個人_確認_landline</strong></td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。なお、折り返しのご連絡の際に、保険証の情報を確認いたします。お手元にご用意の上、お待ちください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_企業_新規_mobile</strong></td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_企業_新規_landline</strong></td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_企業_変更_mobile</strong></td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_企業_変更_landline</strong></td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_企業_確認_mobile</strong></td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_企業_確認_landline</strong></td><td>ご用件を受付いたしました。日曜、祝日を除く3日以内に、担当者から折り返し電話にてご連絡いたします。お電話ありがとうございました。</td></tr>
+</table>
+</div></div>
+</div>
+
+</div>
+<div class="footer">自動生成: VoiceBot Flow Builder | 筑波記念病院 | 2026年04月22日</div>
+<script>
+document.querySelectorAll('.block-header').forEach(function(el){
+  el.addEventListener('click', function(){});
+});
+</script>
+</body>
+</html>

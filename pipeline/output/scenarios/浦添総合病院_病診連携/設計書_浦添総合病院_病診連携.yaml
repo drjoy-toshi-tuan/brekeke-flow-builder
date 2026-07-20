@@ -1,0 +1,909 @@
+# 設計書 -- 浦添総合病院 病診連携
+# 生成元: @director エージェント
+# 生成日: 2026/04/30
+# 元資料: commubo抽出/【010】浦添総合病院/【0010-1浦添総合病院】病診連携1_M_本番/
+# 移管元: 第1世代 Commubo シナリオ
+# 確認レポート: docs/designs/確認レポート_浦添総合病院_病診連携_2026-04-30.md
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "浦添総合病院"
+  scenario_name: "病診連携"
+  group_name: "浦添総合病院"
+  flow_name: "浦添総合病院$病診連携"
+  target_facility: "浦添総合病院 医療連携支援室『かけはし』"
+  office_id: "TODO_要確認"
+  phone_number: "098-879-0630"
+  business_hours: "祝日除く月〜金 9:00〜17:00 / 土 9:00〜12:00（年末年始 12/30〜1/4 休止）"
+  flow_type: "subflow"
+  work_type: "gen1_migration"
+  environment: "prod"
+
+  # プラットフォーム選択
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+# 個人情報聴取（氏名・生年月日）はサブフロー分割型で構成。
+# 電話番号・診察券番号は Gen1 commubo に存在しないため移管しない。
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "浦添総合病院$病診連携"
+      role: "main"
+      description: "冒頭チェーン → 紹介元医療機関名聴取 → 緊急性チェック → 用件確認(4分類) → 用件別分岐(入院転院/当日予約は即代表案内) → (情報提供のみ問い合わせ2段) → 患者氏名/生年月日 → その他問合せ → 用件別終話"
+  subflows:
+    - name: "浦添総合病院$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。reference 個人情報サブフロー.bivr の氏名聴取をコピーして使用"
+    - name: "浦添総合病院$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。reference 個人情報サブフロー.bivr の生年月日聴取（DOB Re-confirmation 復唱あり版）をコピーして使用"
+
+# --- セクション3: フローの目的 ---
+purpose: "浦添総合病院 医療連携支援室『かけはし』向けの AI 電話。地域医療機関からの紹介・予約・FAX到着確認・情報提供（資料請求）依頼を受け付け、紹介元医療機関名・患者氏名・生年月日・問い合わせ内容を聴取して折り返し受付を自動化する。当日予約・緊急・入院転院依頼は AI 受付対象外として代表電話へ案内する。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "浦添総合病院$病診連携"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → END_非通知(TTS+完了フラグ_非通知 status=7) → 切断
+            └─ 通常   → acceptance_times
+                          ├─ 時間外 → END_時間外(TTS+完了フラグ_時間外 status=6) → 切断
+                          └─ 受付可 → 冒頭_アナウンス(TTS: "お電話ありがとうございます。浦添総合病院の、地域医療連携、AI電話です。")
+                                        → 施設名聴取(hearing, output_format=text, save_to=inquiringFacility)
+                                            → 施設名_復唱(announcement: "<% inquiringFacility %>、ご連絡ありがとうございます。")
+                                                → 緊急性チェック(hearing, output_format=enum, save_to=emergencyFlag)
+                                                    ├─ 緊急 → END_代表案内(status=2)
+                                                    └─ other(=通常) → 用件確認(hearing, DTMF+音声, output_format=enum, save_to=classification)
+                                                                        ├─ 入院・転院依頼 → END_代表案内_1(status=2, 電話番号3回繰り返し)
+                                                                        ├─ 予約依頼 → 当日予約日確認(hearing, output_format=enum, save_to=sameDayReservation)
+                                                                        │                ├─ 当日希望 → END_当日予約(status=2, 電話番号3回繰り返し)
+                                                                        │                └─ other(=後日) → 氏名聴取(jump)
+                                                                        ├─ 情報提供依頼 → 問い合わせ_資料期日(hearing, output_format=text, save_to=inquiryDeadline)
+                                                                        │                  → 問い合わせ_患者種別(hearing, output_format=enum, save_to=inquiryPatientType)
+                                                                        │                      ├─ 入院中 → 氏名聴取(jump)
+                                                                        │                      └─ other(=通院中相当) → 氏名聴取(jump)
+                                                                        └─ other(=FAX到着確認) → 氏名聴取(jump)
+
+      ─── 個人情報聴取・その他問合せ合流ルート ───
+      氏名聴取(Custom Jump to Flow → 浦添総合病院$氏名聴取)
+        → 生年月日聴取(Custom Jump to Flow → 浦添総合病院$生年月日聴取)
+            → その他問合せ(hearing, output_format=text, save_to=otherInquiry, retry_failure=skip)
+                → 終話分岐_用件(context_match_router, reference_module=OpenAI_用件確認)
+                    ├─ 予約依頼 → END_受付完了_予約(status=1)
+                    ├─ 情報提供依頼 → END_受付完了_情報提供(status=1)
+                    └─ other(=FAX到着確認) → END_受付完了_FAX(status=1)
+
+      ─── 終話パターン一覧 ───
+      END_非通知(status=7, smsFlag=-1) → 切断
+      END_時間外(status=6, smsFlag=-1) → 切断
+      END_聴取失敗(status=2, smsFlag=-1) → 切断（合流: 各 hearing の retry 上限到達 → 代表案内文言）
+      END_代表案内(status=2, smsFlag=-1) → 切断（緊急合流。電話番号2回繰り返し）
+      END_代表案内_1(status=2, smsFlag=-1) → 切断（入院・転院依頼専用。電話番号3回繰り返し）
+      END_当日予約(status=2, smsFlag=-1) → 切断（当日予約・早急対応専用。電話番号3回繰り返し）
+      END_受付完了_予約(status=1, smsFlag=-1) → 切断
+      END_受付完了_情報提供(status=1, smsFlag=-1) → 切断
+      END_受付完了_FAX(status=1, smsFlag=-1) → 切断
+    notes: |
+      Gen1 commubo の 4 用件分類（予約依頼/情報提供依頼/FAX到着確認/入院・転院依頼）を維持。
+      入院・転院依頼は AI 受付対象外（即代表案内、電話番号3回読み）。
+      予約依頼の当日希望/早急対応希望者・緊急判定も AI 受付対象外（即代表案内）。
+      情報提供依頼のみ問い合わせ2段（資料期日 → 患者種別）を実施。
+      FAX到着確認は患者氏名・生年月日 → その他問合せ → 受付完了で終話。
+      用件別の最終終話 TTS は context_match_router で classification 値を見て分岐。
+      saveCompletionFlag2db の addCurrentDate=Yes は scaffold 自動付与。受付日時を読み上げる（Gen1 の <? $発話用DATE_NOW ?> 相当）。
+      全終話で smsFlag=-1（SMS 送信なし）。Gen1 commubo に SMS 送信機能なし。
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭ブロック ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 施設名聴取
+
+  # --- 紹介元医療機関名 聴取 ---
+  - step: 施設名聴取
+    type: hearing
+    output_format: text
+    save_to: inquiringFacility
+    next: 施設名_復唱
+    retry_failure: end_failure
+    notes: "紹介元医療機関名を自由発話で聴取。OpenAI で発話から医療機関名を抽出して save。"
+
+  - step: 施設名_復唱
+    type: announcement
+    next: 緊急性チェック
+
+  # --- 緊急性チェック ---
+  - step: 緊急性チェック
+    type: hearing
+    output_format: enum
+    save_to: emergencyFlag
+    conditions:
+      - match: "緊急"
+        next: END_代表案内
+      - match: "other"
+        next: 用件確認
+    retry_failure: end_failure
+    notes: "Yes/No 質問。緊急の場合は AI 受付対象外として代表案内へ即誘導。other は通常相当（用件確認に進む）。"
+
+  # --- 用件確認（4分類: DTMF+音声）---
+  - step: 用件確認
+    type: hearing
+    output_format: enum
+    save_to: classification
+    conditions:
+      - match: "入院・転院依頼"
+        next: END_代表案内_1
+      - match: "予約依頼"
+        next: 当日予約日確認
+      - match: "情報提供依頼"
+        next: 問い合わせ_資料期日
+      - match: "other"
+        next: 氏名聴取
+    retry_failure: end_failure
+    notes: "DTMF 1=予約依頼, 2=FAX到着確認, 3=情報提供依頼。発話で「入院」「転院」を含むものは入院・転院依頼。other は FAX到着確認 相当。"
+
+  # --- 当日予約日確認（予約依頼ルート専用）---
+  - step: 当日予約日確認
+    type: hearing
+    output_format: enum
+    save_to: sameDayReservation
+    conditions:
+      - match: "当日希望"
+        next: END_当日予約
+      - match: "other"
+        next: 氏名聴取
+    retry_failure: end_failure
+    notes: "Yes/No 質問。「当日予約のご希望、または早急な対応が必要ですか？」当日希望なら AI 受付対象外として代表案内へ即誘導。other は後日希望相当（通常受付フローへ進む）。"
+
+  # --- 問い合わせ2段（情報提供依頼ルート専用）---
+  - step: 問い合わせ_資料期日
+    type: hearing
+    output_format: text
+    save_to: inquiryDeadline
+    next: 問い合わせ_患者種別
+    retry_failure: end_failure
+    notes: "「資料はいつまでに必要かお答えください。」自由発話で期日を聴取。OpenAI で日付・期日表現を正規化。"
+
+  - step: 問い合わせ_患者種別
+    type: hearing
+    output_format: enum
+    save_to: inquiryPatientType
+    conditions:
+      - match: "入院中"
+        next: 氏名聴取
+      - match: "other"
+        next: 氏名聴取
+    retry_failure: end_failure
+    notes: "「入院中と通院中、どちらの患者様になりますか？」分岐先は同じ（氏名聴取に合流）だが Dr.JOY 表示用に分類値を保存。other は通院中相当。"
+
+  # --- 個人情報サブフロー ---
+  - step: 氏名聴取
+    type: subflow
+    flowname: "浦添総合病院$氏名聴取"
+    next: 生年月日聴取
+
+  - step: 生年月日聴取
+    type: subflow
+    flowname: "浦添総合病院$生年月日聴取"
+    next: その他問合せ
+
+  # --- その他問合せ（最終聴取）---
+  - step: その他問合せ
+    type: hearing
+    output_format: text
+    save_to: otherInquiry
+    next: 終話分岐_用件
+    retry_failure: skip
+    notes: "「職員へお伝えになりたいことがありましたらお話ください。ない場合には特にない、などとお話ください。」最後の聴取項目のため retry_failure=skip で終話分岐へ進める。"
+
+  # --- 用件別終話分岐 ---
+  - step: 終話分岐_用件
+    type: context_match_router
+    reference_module: "OpenAI_用件確認"
+    conditions:
+      - match: "予約依頼"
+        next: END_受付完了_予約
+      - match: "情報提供依頼"
+        next: END_受付完了_情報提供
+      - match: "other"
+        next: END_受付完了_FAX
+    notes: "classification 値で分岐。other は FAX到着確認（合流済み正常ルート）。入院・転院依頼はここに到達しない（用件確認直後に END_代表案内_1 へ遷移済み）。"
+
+  # --- 終話ブロック ---
+  - step: END_受付完了_予約
+    type: termination
+    termination_ref: "END_受付完了_予約"
+
+  - step: END_受付完了_情報提供
+    type: termination
+    termination_ref: "END_受付完了_情報提供"
+
+  - step: END_受付完了_FAX
+    type: termination
+    termination_ref: "END_受付完了_FAX"
+
+  - step: END_代表案内
+    type: termination
+    termination_ref: "END_代表案内"
+
+  - step: END_代表案内_1
+    type: termination
+    termination_ref: "END_代表案内_1"
+
+  - step: END_当日予約
+    type: termination
+    termination_ref: "END_当日予約"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "予約依頼"
+      - id: "2"
+        order: "2"
+        value: "FAX到着確認"
+      - id: "3"
+        order: "3"
+        value: "情報提供依頼"
+      - id: "4"
+        order: "4"
+        value: "入院・転院依頼"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "Gen1 commubo の用件4分類。DTMF 1/2/3 は announce 対象、入院・転院依頼は voice 認識のみ。"
+
+  - context_name: "patientName"
+    context_name_jp: "患者氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "氏名聴取サブフローで保存"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日(和暦)"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "生年月日聴取サブフローで保存（DOB Re-confirmation 復唱あり）"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+      - id: "7"
+        order: "7"
+        value: "非通知"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=未処理(受付完了で Dr.JOY 側が処理) / 2=代表案内（NG/緊急/入院転院/当日予約） / 6=時間外 / 7=非通知"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "システム自動取得"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値。displayType/itemDefault/deletable は変更不可"
+
+  # --- 施設固有フィールド ---
+  - context_name: "inquiringFacility"
+    context_name_jp: "紹介元医療機関名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "Gen1 commubo の施設名サブフローで聴取していた紹介元医療機関名"
+
+  - context_name: "emergencyFlag"
+    context_name_jp: "緊急性"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "緊急"
+      - id: "2"
+        order: "2"
+        value: "通常"
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "緊急性チェック hearing の出力。緊急なら END_代表案内 に即誘導"
+
+  - context_name: "sameDayReservation"
+    context_name_jp: "当日予約希望"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "当日希望"
+      - id: "2"
+        order: "2"
+        value: "後日"
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "予約依頼ルートのみ使用。当日希望なら END_当日予約 に即誘導"
+
+  - context_name: "inquiryDeadline"
+    context_name_jp: "資料必要期日"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "情報提供依頼ルートのみ使用。「資料はいつまでに必要か」の自由発話を保存"
+
+  - context_name: "inquiryPatientType"
+    context_name_jp: "問合せ患者種別"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "入院中"
+      - id: "2"
+        order: "2"
+        value: "通院中"
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "情報提供依頼ルートのみ使用。「入院中と通院中、どちらの患者様か」"
+
+  - context_name: "otherInquiry"
+    context_name_jp: "その他問合せ内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "全用件共通。最後の自由発話聴取で職員への伝言を保存"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "施設名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "inquiringFacility"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "紹介元医療機関名を自由発話で聴取。OpenAI で医療機関名を抽出・正規化。"
+
+  - order: 2
+    name: "緊急性チェック"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "emergencyFlag"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "緊急"
+      - "通常"
+    notes: "「本件は緊急のご連絡でしょうか？」緊急発話のみを 緊急 へ振り分ける Yes/No タイプ。"
+
+  - order: 3
+    name: "用件確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "予約依頼"
+      - "情報提供依頼"
+      - "FAX到着確認"
+      - "入院・転院依頼"
+    notes: "DTMF 1=予約依頼, 2=FAX到着確認, 3=情報提供依頼（announce 対象）。入院・転院依頼は voice 認識のみ（announce 非対象だが Gen1 entity に残置）。"
+
+  - order: 4
+    name: "当日予約日確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "sameDayReservation"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "当日希望"
+      - "後日"
+    notes: "予約依頼ルート専用。Yes/No タイプ。当日希望のみ END_当日予約 へ。"
+
+  - order: 5
+    name: "問い合わせ_資料期日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "inquiryDeadline"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "情報提供依頼ルート専用。資料必要期日を自由発話で聴取。"
+
+  - order: 6
+    name: "問い合わせ_患者種別"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "inquiryPatientType"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "入院中"
+      - "通院中"
+    notes: "情報提供依頼ルート専用。両分岐とも氏名聴取へ合流するが、Dr.JOY 表示用に分類値を保存。"
+
+  - order: 7
+    name: "その他問合せ"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "otherInquiry"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "全用件共通。職員への伝言を自由発話で聴取。「特にない」も許容。最後の聴取項目なので retry_failure=skip。"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "冒頭_アナウンス"
+    tts_announcement: "お電話ありがとうございます。浦添総合病院の、地域医療連携、AI電話です。"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "施設名聴取"
+    retry_failure: "skip"
+
+  - step_name: "施設名聴取"
+    tts_announcement: "紹介元の医療機関名をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "{医療機関名を含む発話（例: 〇〇クリニック、〇〇医院、〇〇病院、〇〇診療所）}"
+          output: "{抽出した医療機関名テキスト}"
+      no_result_condition: "発話が完全な無言、または医療機関名と判定できない場合"
+    save_to: "inquiringFacility"
+    next_step: "施設名_復唱"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "施設名_復唱"
+    tts_announcement: "<% inquiringFacility %>、ご連絡ありがとうございます。"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "緊急性チェック"
+    retry_failure: "skip"
+
+  - step_name: "緊急性チェック"
+    tts_announcement: "本件は緊急のご連絡でしょうか？「緊急です」または「いいえ、違います」とお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "緊急"
+        - "通常"
+      mapping:
+        - input: "「緊急」「急ぎ」「はい」「そうです」「あってます」「大丈夫」を含む発話"
+          output: "緊急"
+        - input: "「いいえ」「違います」「ちがう」「そうじゃない」「ない」を含む発話"
+          output: "通常"
+      no_result_condition: "上記いずれにも該当しない / 無音"
+    save_to: "emergencyFlag"
+    next_step: "用件確認"
+    retry_failure: "end_failure"
+
+  - step_name: "用件確認"
+    tts_announcement: "ご用件を、次のいずれかの番号、または内容をお話いただくか、ダイヤルプッシュでお答えください。1「予約依頼」2「ファックス到着確認」3「情報提供依頼」、それでは、お話ください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "予約依頼"
+        - "情報提供依頼"
+        - "FAX到着確認"
+        - "入院・転院依頼"
+      mapping:
+        - input: "DTMF 1 / 「予約」「予約依頼」「変更」「確認」「キャンセル」「新規予約」「定期受診」「初診」「紹介状」「診察の予約」「診療予約」「取りたい」を含む発話"
+          output: "予約依頼"
+        - input: "DTMF 2 / 「FAX」「ファックス」「到着」「到着確認」「サン」「3」「三」を含む発話"
+          output: "FAX到着確認"
+        - input: "DTMF 3 / 「情報提供依頼」「資料」「資料請求」「書類」「情報」「診療情報提供依頼」「請求」「請求書」「医療請求」「2」「二」を含む発話"
+          output: "情報提供依頼"
+        - input: "「入院」「転院」「入院依頼」「転院依頼」「入院・転院」「ヨン」「4」「四」を含む発話"
+          output: "入院・転院依頼"
+      no_result_condition: "上記いずれにも該当しない / 「予約以外」（お見舞い・処方箋・症状・書類等）/ 無音"
+    save_to: "classification"
+    next_step: "用件確認_分岐"
+    retry_failure: "end_failure"
+
+  - step_name: "当日予約日確認"
+    tts_announcement: "当日予約のご希望、または早急な対応が必要ですか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "当日希望"
+        - "後日"
+      mapping:
+        - input: "「はい」「そうです」「お願いします」「あります」「急ぎ」「当日」「本日」「今日」を含む発話"
+          output: "当日希望"
+        - input: "「いいえ」「違います」「ない」「ちがう」「後日」「あとで」「翌日以降」を含む発話"
+          output: "後日"
+      no_result_condition: "上記いずれにも該当しない / 無音"
+    save_to: "sameDayReservation"
+    next_step: "当日予約_分岐"
+    retry_failure: "end_failure"
+
+  - step_name: "問い合わせ_資料期日"
+    tts_announcement: "資料はいつまでに必要かお答えください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "「明日まで」「今週中」「○月○日まで」「来週中」「今月中」等の期日表現"
+          output: "{抽出した期日表現テキスト}"
+      no_result_condition: "発話なし / 期日と判定できない場合"
+    save_to: "inquiryDeadline"
+    next_step: "問い合わせ_患者種別"
+    retry_failure: "end_failure"
+
+  - step_name: "問い合わせ_患者種別"
+    tts_announcement: "入院中と通院中、どちらの患者様になりますか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "入院中"
+        - "通院中"
+      mapping:
+        - input: "「入院」「入院中」を含む発話"
+          output: "入院中"
+        - input: "「通院」「通院中」「外来」を含む発話"
+          output: "通院中"
+      no_result_condition: "上記いずれにも該当しない / 無音"
+    save_to: "inquiryPatientType"
+    next_step: "氏名聴取"
+    retry_failure: "end_failure"
+
+  - step_name: "その他問合せ"
+    tts_announcement: "職員へお伝えになりたいことがありましたらお話ください。ない場合には特にない、などとお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "任意の伝言発話"
+          output: "{発話テキストをそのまま保存}"
+        - input: "「特にない」「ない」「ありません」「大丈夫です」を含む発話"
+          output: "特になし"
+      no_result_condition: "発話なし"
+    save_to: "otherInquiry"
+    next_step: "終話分岐_用件"
+    retry_failure: "skip"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（必須）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "7"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外（祝日除く月〜金 9:00〜17:00 / 土 9:00〜12:00 以外、年末年始 12/30〜1/4 含む）"
+    tts_announcement: "申し訳ございません。ただいまの時間は受付時間外となっております。受付時間は、日曜祝日と年末年始を除く、月曜日から金曜日の9時から17時、土曜日は9時から12時です。恐れ入りますが、受付時間内におかけなおしください。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達（施設名 / 緊急性 / 用件 / 当日予約 / 問い合わせ系の各 hearing で end_failure）"
+    tts_announcement: "恐れ入りますが、医療連携支援室『かけはし』へおかけ直しください。電話番号が分かる方は、このままお電話をお切りください。わからない方はご案内しますので、メモをご準備ください。代表電話は、0、9、8、の、8、7、9、の、0、6、3、0、です。繰り返します。番号は0、9、8、の、8、7、9、の、0、6、3、0、です。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 案内系（status=2）---
+  - name: "END_代表案内"
+    condition: "緊急性チェック=緊急"
+    tts_announcement: "恐れ入りますが、医療連携支援室『かけはし』へおかけ直しください。電話番号が分かる方は、このままお電話をお切りください。わからない方はご案内しますので、メモをご準備ください。代表電話は、0、9、8、の、8、7、9、の、0、6、3、0、です。繰り返します。番号は0、9、8、の、8、7、9、の、0、6、3、0、です。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_代表案内"
+
+  - name: "END_代表案内_1"
+    condition: "用件=入院・転院依頼（AI 受付対象外）"
+    tts_announcement: "恐れ入りますが、入院・転院のご依頼については、医療連携支援室『かけはし』へおかけ直しください。電話番号が分かる方は、このままお電話をお切りください。わからない方はご案内しますので、メモをご準備ください。代表電話は、0、9、8、の、8、7、9、の、0、6、3、0、です。繰り返します。代表電話は、0、9、8、の、8、7、9、の、0、6、3、0、です。繰り返します。代表電話は、0、9、8、の、8、7、9、の、0、6、3、0、です。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_代表案内_入院転院"
+
+  - name: "END_当日予約"
+    condition: "予約依頼ルート＆当日予約日確認=当日希望（AI 受付対象外）"
+    tts_announcement: "恐れ入りますが、当日、または早急な対応をご希望の場合は、医療連携支援室『かけはし』へおかけ直しください。電話番号が分かる方は、このままお電話をお切りください。わからない方はご案内しますので、メモをご準備ください。電話番号は、0、9、8、の、8、7、9、の、0、6、3、0、です。繰り返します。電話番号は、0、9、8、の、8、7、9、の、0、6、3、0、です。繰り返します。電話番号は、0、9、8、の、8、7、9、の、0、6、3、0、です。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_当日予約"
+
+  # --- 受付完了系（status=1）---
+  - name: "END_受付完了_予約"
+    condition: "用件=予約依頼で全聴取完了"
+    tts_announcement: "かしこまりました。<% inquiringFacility %>の、申込みを受付けしました。外来予約時は、外来予約申込書、診療情報提供書を必ずFAXにてお送りください。確認が必要な際は、折り返しご連絡をいたします。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_受付完了_予約"
+
+  - name: "END_受付完了_情報提供"
+    condition: "用件=情報提供依頼で全聴取完了"
+    tts_announcement: "かしこまりました。<% inquiringFacility %>の、申込みを受付けしました。確認次第、折り返しご連絡をいたします。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_受付完了_情報提供"
+
+  - name: "END_受付完了_FAX"
+    condition: "用件=FAX到着確認で全聴取完了"
+    tts_announcement: "かしこまりました。<% inquiringFacility %>の、申込みを受付けました。到着が確認できない場合は翌診療日午前中までに折り返しご連絡いたします。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_受付完了_FAX"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。浦添総合病院の、地域医療連携、AI電話です。"
+
+  - module_name: "施設名聴取"
+    purpose: "紹介元医療機関名の聴取"
+    announcement: "紹介元の医療機関名をお話ください。"
+
+  - module_name: "施設名_復唱"
+    purpose: "聴取した医療機関名の復唱（謝意）"
+    announcement: "<% inquiringFacility %>、ご連絡ありがとうございます。"
+
+  - module_name: "緊急性チェック"
+    purpose: "緊急判定"
+    announcement: "本件は緊急のご連絡でしょうか？「緊急です」または「いいえ、違います」とお話ください。"
+
+  - module_name: "用件確認"
+    purpose: "用件4分類聴取（DTMF+音声）"
+    announcement: "ご用件を、次のいずれかの番号、または内容をお話いただくか、ダイヤルプッシュでお答えください。1「予約依頼」2「ファックス到着確認」3「情報提供依頼」、それでは、お話ください。"
+
+  - module_name: "当日予約日確認"
+    purpose: "当日予約・早急対応希望の判定"
+    announcement: "当日予約のご希望、または早急な対応が必要ですか？"
+
+  - module_name: "問い合わせ_資料期日"
+    purpose: "資料必要期日の聴取"
+    announcement: "資料はいつまでに必要かお答えください。"
+
+  - module_name: "問い合わせ_患者種別"
+    purpose: "問合せ患者の入院/通院判定"
+    announcement: "入院中と通院中、どちらの患者様になりますか？"
+
+  - module_name: "その他問合せ"
+    purpose: "職員への伝言聴取"
+    announcement: "職員へお伝えになりたいことがありましたらお話ください。ない場合には特にない、などとお話ください。"
+
+  - module_name: "END_非通知"
+    purpose: "非通知着信時の終話"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_時間外"
+    purpose: "受付時間外の終話"
+    announcement: "申し訳ございません。ただいまの時間は受付時間外となっております。受付時間は、日曜祝日と年末年始を除く、月曜日から金曜日の9時から17時、土曜日は9時から12時です。恐れ入りますが、受付時間内におかけなおしください。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ上限到達時の終話（代表案内文言・電話番号2回繰り返し）"
+    announcement: "恐れ入りますが、医療連携支援室『かけはし』へおかけ直しください。電話番号が分かる方は、このままお電話をお切りください。わからない方はご案内しますので、メモをご準備ください。代表電話は、0、9、8、の、8、7、9、の、0、6、3、0、です。繰り返します。番号は0、9、8、の、8、7、9、の、0、6、3、0、です。お電話ありがとうございました。"
+
+  - module_name: "END_代表案内"
+    purpose: "緊急判定の終話（電話番号2回繰り返し）"
+    announcement: "恐れ入りますが、医療連携支援室『かけはし』へおかけ直しください。電話番号が分かる方は、このままお電話をお切りください。わからない方はご案内しますので、メモをご準備ください。代表電話は、0、9、8、の、8、7、9、の、0、6、3、0、です。繰り返します。番号は0、9、8、の、8、7、9、の、0、6、3、0、です。お電話ありがとうございました。"
+
+  - module_name: "END_代表案内_1"
+    purpose: "入院・転院依頼の終話（AI受付対象外、電話番号3回繰り返し）"
+    announcement: "恐れ入りますが、入院・転院のご依頼については、医療連携支援室『かけはし』へおかけ直しください。電話番号が分かる方は、このままお電話をお切りください。わからない方はご案内しますので、メモをご準備ください。代表電話は、0、9、8、の、8、7、9、の、0、6、3、0、です。繰り返します。代表電話は、0、9、8、の、8、7、9、の、0、6、3、0、です。繰り返します。代表電話は、0、9、8、の、8、7、9、の、0、6、3、0、です。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_当日予約"
+    purpose: "当日予約・早急対応希望の終話（AI受付対象外、電話番号3回繰り返し）"
+    announcement: "恐れ入りますが、当日、または早急な対応をご希望の場合は、医療連携支援室『かけはし』へおかけ直しください。電話番号が分かる方は、このままお電話をお切りください。わからない方はご案内しますので、メモをご準備ください。電話番号は、0、9、8、の、8、7、9、の、0、6、3、0、です。繰り返します。電話番号は、0、9、8、の、8、7、9、の、0、6、3、0、です。繰り返します。電話番号は、0、9、8、の、8、7、9、の、0、6、3、0、です。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_受付完了_予約"
+    purpose: "予約依頼の正常終話"
+    announcement: "かしこまりました。<% inquiringFacility %>の、申込みを受付けしました。外来予約時は、外来予約申込書、診療情報提供書を必ずFAXにてお送りください。確認が必要な際は、折り返しご連絡をいたします。それでは失礼いたします。"
+
+  - module_name: "END_受付完了_情報提供"
+    purpose: "情報提供依頼の正常終話"
+    announcement: "かしこまりました。<% inquiringFacility %>の、申込みを受付けしました。確認次第、折り返しご連絡をいたします。それでは失礼いたします。"
+
+  - module_name: "END_受付完了_FAX"
+    purpose: "FAX到着確認の正常終話"
+    announcement: "かしこまりました。<% inquiringFacility %>の、申込みを受付けました。到着が確認できない場合は翌診療日午前中までに折り返しご連絡いたします。それでは失礼いたします。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "緊急性チェック"
+    words: |
+      緊急 きんきゅう
+      急ぎ いそぎ
+      はい はい
+      そうです そうです
+      あってます あってます
+      いいえ いいえ
+      違います ちがいます
+      ちがう ちがう
+      そうじゃない そうじゃない
+
+  - step_name: "用件確認"
+    words: |
+      予約 よやく
+      予約依頼 よやくいらい
+      変更 へんこう
+      確認 かくにん
+      キャンセル きゃんせる
+      取消 とりけし
+      新規予約 しんきよやく
+      初診 しょしん
+      紹介状 しょうかいじょう
+      診察の予約 しんさつのよやく
+      診療予約 しんりょうよやく
+      定期 ていき
+      定期受診 ていきじゅしん
+      受診予約 じゅしんよやく
+      ファックス ふぁっくす
+      FAX えふえーえっくす
+      到着 とうちゃく
+      到着確認 とうちゃくかくにん
+      情報提供 じょうほうていきょう
+      情報提供依頼 じょうほうていきょういらい
+      資料 しりょう
+      資料請求 しりょうせいきゅう
+      診療情報提供依頼 しんりょうじょうほうていきょういらい
+      請求書 せいきゅうしょ
+      書類 しょるい
+      入院 にゅういん
+      転院 てんいん
+      入院依頼 にゅういんいらい
+      転院依頼 てんいんいらい
+
+  - step_name: "当日予約日確認"
+    words: |
+      はい はい
+      そうです そうです
+      お願いします おねがいします
+      急ぎ いそぎ
+      当日 とうじつ
+      本日 ほんじつ
+      今日 きょう
+      いいえ いいえ
+      違います ちがいます
+      ない ない
+      後日 ごじつ
+
+  - step_name: "問い合わせ_患者種別"
+    words: |
+      入院 にゅういん
+      入院中 にゅういんちゅう
+      通院 つういん
+      通院中 つういんちゅう
+      外来 がいらい
+
+  - step_name: "施設名聴取"
+    words: |
+      クリニック くりにっく
+      医院 いいん
+      病院 びょういん
+      診療所 しんりょうじょ
+      内科 ないか
+      整形外科 せいけいげか
+      小児科 しょうにか
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "Gen1 commubo シナリオからの第3世代マイグレーション。元 main.yaml の 4 用件分類（予約依頼/情報提供依頼/FAX到着確認/入院・転院依頼）を維持。"
+  - "入院・転院依頼は AI 受付対象外として用件確認直後に END_代表案内_1（電話番号3回繰り返し）へ即誘導する。"
+  - "予約依頼の当日希望・早急対応希望者は AI 受付対象外として END_当日予約（電話番号3回繰り返し）へ即誘導する。緊急性チェック=緊急の場合も AI 受付対象外として END_代表案内（電話番号2回繰り返し）へ即誘導する。"
+  - "情報提供依頼ルートのみ問い合わせ2段（資料期日 → 患者種別）を実施。順序は Gen1 commubo の `問い合わせ② → 問い合わせ①` を踏襲（期日 → 患者種別）。"
+  - "受付完了 TTS は施設名復唱を含むため `<% inquiringFacility %>` プレースホルダーを使用。Brekeke + Google TTS で context 値が置換される。"
+  - "saveCompletionFlag2db の addCurrentDate=Yes は scaffold が自動付与する。受付完了時に受付日時が自動で読み上げられる（Gen1 の `<? $発話用DATE_NOW ?>` 相当）。"
+  - "全終話で smsFlag=-1（SMS 送信なし）。Gen1 commubo に SMS 送信機能なし。Dr.JOY 側で SMS 通知が必要になった場合は smsFlag を別途設定。"
+  - "営業時間: 祝日除く月〜金 9:00〜17:00 / 土 9:00〜12:00（Gen1 の 5/1 以降版を採用）。日曜・祝日・年末年始（12/30〜1/4）は時間外。具体的なスケジュールは Dr.JOY 側で設定する。"
+  - "代表電話番号: 098-879-0630（医療連携支援室『かけはし』）。各案内 TTS 内で「0、9、8、の、8、7、9、の、0、6、3、0」と読点区切りで読み上げる Gen1 流用の文言を維持（読点と数字の組み合わせは Brekeke + Google TTS で電話番号として正しく発話される実績あり）。"
+  - "Gen1 にあった「入電情報による紹介元医療機関名スキップ機能」（API_DRJOY 入電情報あり時に施設名サブフローをスキップ）は Gen3 では未実装。常に紹介元医療機関名を聴取する。Dr.JOY 側で入電情報連携が要件になった時点で別途追加する。"
+  - "Gen1 にあった `テスト用分岐 / 藤田さん用 / 下僕用` テスト箱は移管対象外。"
+  - "Gen1 にあった現在時刻判定ロジック（15時前等、`現在の時間取得 / 現在の時間判断` 箱）は acceptance_times に集約済みのため Gen3 では使用しない。"
+  - "Gen1 にあった `終話案内 / 終話案内 ～5/1 / 終話案内 5/1～` の 5/1 受付時間切替分岐は acceptance_times 側責任。最新版である 5/1 以降版（月-金 9-17、土 9-12）を採用。"
+  - "Gen1 entity 'もしもし' の特殊応答（「はい、聞こえております」等）は Gen3 では実装しない。標準のリトライフローで対応する。"
+  - "Gen1 のエンティティ正規化辞書（予約以外/予約変更/予約確認/予約キャンセル/新規予約/定期受診 等の派生）は OpenAI_用件確認 のプロンプトで 4 分類（予約依頼/情報提供依頼/FAX到着確認/入院・転院依頼）に集約させる。"
+
+# --- セクション12: 要確認事項 ---
+confirmation_items:
+  - item: "office_id（施設ID）の確認 — Dr.JOY 側で設定"
+    resolved: false
+  - item: "営業時間の Dr.JOY 側設定確認 — 祝日除く月〜金 9:00〜17:00 / 土 9:00〜12:00 / 年末年始（12/30〜1/4）休止"
+    resolved: false
+  - item: "本番電話番号（IVR 着信番号 / ARS 番号）の Brekeke 側設定 — 設計書には記載しない"
+    resolved: false
+  - item: "Gen1 にあった「入電情報による紹介元医療機関名スキップ」を Gen3 でも実装するかの判断 — 現状は常時聴取で設計"
+    resolved: false
+  - item: "紹介元医療機関名の STT 辞書追加候補（沖縄県内の主要医療機関名） — 必要に応じてセクション10に追記"
+    resolved: false
+  - item: "受付完了時の addCurrentDate（scaffold 自動付与）が顧客要件と一致するか確認 — Gen1 の `<? $発話用DATE_NOW ?>` 相当の動作"
+    resolved: false

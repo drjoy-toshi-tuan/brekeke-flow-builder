@@ -1,0 +1,520 @@
+{
+  "$comment": "VFB頻出エラーパターン。フィードバック蓄積により自動更新される。",
+  "last_updated": "2026-04-17",
+  "total_corrections_analyzed": 6,
+  "training_pairs_analyzed": 11,
+  "facilities_analyzed": [
+    "帯広第一病院",
+    "長野県立木曽病院",
+    "ユアクリニックお茶の水",
+    "入間ハート病院",
+    "帝京大学付属溝口病院",
+    "帝京大学医学部附属みぞのくち病院(pair_11)",
+    "横須賀共済病院"
+  ],
+  "common_vfb_issues": [
+    {
+      "id": "VFB-001",
+      "pattern": "ContextMatchRouterを一切生成しない",
+      "category": "logic_gap",
+      "severity": "CRITICAL",
+      "frequency": 3,
+      "description": "コンテキスト値に基づく分岐（用件分岐、個人/企業分岐、条件分岐、終話分岐等）にContextMatchRouterを使わず、Script + saveContext2DBの組み合わせで代替しようとする。",
+      "fix_template": "用件分岐・条件分岐・終話分岐にはContextMatchRouterを使用。module1Name/module2Nameに参照元モジュールを、conditionsに分岐条件を設定する。",
+      "impact": "saveContext2DBの過剰生成、フロー構造の複雑化、保守性低下",
+      "observed_in": [
+        "帯広第一病院",
+        "長野県立木曽病院",
+        "ユアクリニックお茶の水"
+      ]
+    },
+    {
+      "id": "VFB-002",
+      "pattern": "復唱ノード（Re-confirmation node data）を生成しない",
+      "category": "logic_gap",
+      "severity": "CRITICAL",
+      "frequency": 3,
+      "description": "生年月日・用件・電話番号など重要な入力項目に対する復唱確認ステップが欠落。Re-confirmation node dataモジュール、復唱用TTS/STT/OpenAI/Retryが全て未生成。",
+      "fix_template": "重要入力項目（生年月日、用件、電話番号）の後にRe-confirmation node data → STT → OpenAI(肯定否定判定) → Retry を追加。否定時は再聴取TTSに遷移。",
+      "impact": "聴取精度の低下、ユーザー体験の劣化",
+      "observed_in": [
+        "帯広第一病院",
+        "長野県立木曽病院",
+        "ユアクリニックお茶の水"
+      ]
+    },
+    {
+      "id": "VFB-003",
+      "pattern": "save2dbをTTS/STTごとに個別生成（過剰）",
+      "category": "unnecessary",
+      "severity": "WARNING",
+      "frequency": 3,
+      "description": "全TTS/STTに個別のsave2dbモジュールを配置（帯広第一病院で50個、長野県立木曽病院で54個）。人間版はsave-history等の共有パターンで大幅削減。",
+      "fix_template": "save-history_1, save-history_2, save-history_3 の3個を定義し、全TTS/STT/Retryのsubsからこれらを共有参照する。個別save2dbは削除。",
+      "impact": "モジュール数の肥大化（30〜40個以上の無駄）、保守性低下",
+      "observed_in": [
+        "帯広第一病院",
+        "長野県立木曽病院",
+        "ユアクリニックお茶の水"
+      ]
+    },
+    {
+      "id": "VFB-004",
+      "pattern": "Disconnect/saveCompletionFlagを終話パスごとに個別生成（過剰）",
+      "category": "unnecessary",
+      "severity": "WARNING",
+      "frequency": 3,
+      "description": "VFBは終話パスごとに個別のDisconnect + saveCompletionFlagを生成（帯広で7+10=17個）。人間版はContextMatchRouterで分岐し集約。",
+      "fix_template": "終話パスをContextMatchRouterで分岐し、saveCompletionFlag（status/smsFlagの組み合わせ数分）+ Disconnect（成功/非通知の2個）に集約する。",
+      "impact": "モジュール数の肥大化、終話パスの管理困難",
+      "observed_in": [
+        "帯広第一病院",
+        "長野県立木曽病院",
+        "ユアクリニックお茶の水"
+      ]
+    },
+    {
+      "id": "VFB-005",
+      "pattern": "数字入力（生年月日等）にDTMF AmiVoice STT Inputを使わない",
+      "category": "type_mismatch",
+      "severity": "WARNING",
+      "frequency": 3,
+      "description": "数字入力（生年月日・電話番号・診療科番号等）にAmiVoice Speech to Textのみを使用し、DTMF AmiVoice STT Inputを使わない（帯広:1箇所、長野:12箇所）。",
+      "fix_template": "数字入力項目（生年月日、電話番号、診察券番号、用件番号、診療科番号）にはDTMF AmiVoice STT Inputを使用する。氏名・フリーテキストにはAmiVoice Speech to Textを使用する。",
+      "impact": "ユーザー体験の劣化（プッシュ入力不可）",
+      "observed_in": [
+        "帯広第一病院",
+        "長野県立木曽病院",
+        "ユアクリニックお茶の水"
+      ]
+    },
+    {
+      "id": "VFB-006",
+      "pattern": "Retry Counterのprompt_falseが全て空欄",
+      "category": "default_missing",
+      "severity": "WARNING",
+      "frequency": 3,
+      "description": "全Retry Counterのprompt_falseが空文字。リトライ上限到達時にユーザーに状況を伝えるメッセージがない。また、必須聴取項目では同じTTSに戻す（無限リトライ）パターンが必要な場合がある。",
+      "fix_template": "標準: prompt_false に失敗時メッセージを設定。必須項目: false遷移先を同じTTSモジュールに設定し無限リトライとする。",
+      "impact": "リトライ上限時のユーザー体験悪化",
+      "observed_in": [
+        "帯広第一病院",
+        "長野県立木曽病院",
+        "ユアクリニックお茶の水"
+      ]
+    },
+    {
+      "id": "VFB-007",
+      "pattern": "Retry Counterにsave2dbが未接続",
+      "category": "default_missing",
+      "severity": "WARNING",
+      "frequency": 1,
+      "description": "全Retry Counterのsubsにsave2dbが接続されていない（SB-001違反）。TTS/STTには接続しているがRetryには漏れる。長野では接続済みのため案件依存の可能性あり。",
+      "fix_template": "全Retry Counterのsubsにsave2dbを接続する（共有save2dbパターン使用）。",
+      "impact": "音声録音の欠落",
+      "observed_in": [
+        "帯広第一病院"
+      ]
+    },
+    {
+      "id": "VFB-008",
+      "pattern": "office_idがProperty.mdに含まれない",
+      "category": "property_mismatch",
+      "severity": "CRITICAL",
+      "frequency": 1,
+      "description": "Property.mdにoffice_idキーが含まれていない（IVRP-001違反）。長野では設定済みのため案件依存の可能性あり。",
+      "fix_template": "Property.mdに office_id={施設のoffice_id} を必ず含める。値が不明な場合はプレースホルダーを設定。",
+      "impact": "Dr.JOY連携が動作しない",
+      "observed_in": [
+        "帯広第一病院"
+      ]
+    },
+    {
+      "id": "VFB-009",
+      "pattern": "TTS命名規則が不統一",
+      "category": "naming_issue",
+      "severity": "WARNING",
+      "frequency": 3,
+      "description": "VFBのTTS命名が「{内容}_聴取」「{内容}_判定」「{内容}_選択」と不統一。人間版は聴取系を「確認_{内容}」、終話系を「終話_{種別}」に統一している。",
+      "fix_template": "聴取系TTS: 確認_{内容}。終話系TTS: 終話_{種別}。冒頭: 冒頭。失敗: 終話_失敗。非通知: 終話_非通知。",
+      "impact": "Property.mdとの対応が取りづらい、保守性低下",
+      "observed_in": [
+        "帯広第一病院",
+        "長野県立木曽病院",
+        "ユアクリニックお茶の水"
+      ]
+    },
+    {
+      "id": "VFB-010",
+      "pattern": "Retry prompt_trueの文言がデフォルトと異なる",
+      "category": "prompt_quality",
+      "severity": "INFO",
+      "frequency": 3,
+      "description": "VFBは「恐れ入りますがご回答が確認できませんでした。今一度、」を使用。人間版の標準は「申し訳ございません。 うまく聞き取りが出来ませんでした。 再度、」。",
+      "fix_template": "prompt_true の標準値: {tts_g:申し訳ございません。 うまく聞き取りが出来ませんでした。 再度、}",
+      "impact": "軽微（文言の統一性）",
+      "observed_in": [
+        "帯広第一病院",
+        "長野県立木曽病院",
+        "ユアクリニックお茶の水"
+      ]
+    },
+    {
+      "id": "VFB-011",
+      "pattern": "サブフロー本体を生成しない（Jump参照のみ）",
+      "category": "subflow_design",
+      "severity": "CRITICAL",
+      "frequency": 2,
+      "description": "VFBはメインフロー内にサブフローへのJump to Flow参照を生成するが、サブフロー本体（フロー内容）を.bivrに含めない。参照先フローが存在しないため実動作不可。長野では個人情報・診療科聴取×2・RAG検索の4本が未生成。",
+      "fix_template": "Jump to Flowを生成する際は対応するサブフローの内容も.bivrに含める。個人情報サブフロー（氏名・生年月日・電話番号）はテンプレートとして固定化する。",
+      "impact": "サブフロー参照先が存在せず実動作不可（CRITICAL）",
+      "observed_in": [
+        "長野県立木曽病院",
+        "ユアクリニックお茶の水"
+      ]
+    },
+    {
+      "id": "VFB-012",
+      "pattern": "Jump to Flow の flowname が正規形式でない",
+      "category": "naming_issue",
+      "severity": "CRITICAL",
+      "frequency": 2,
+      "description": "VFBが生成するJump to FlowのflownameがBrekeke正規形式（drjoy^グループ名$フロー名）ではなく、drjoy^Jump_to_flow$フロー名_日付という独自形式になっている。またpropertiesが空欄でサブフローへのTTSプロンプト受け渡しができない（FLOW-004/005違反）。",
+      "fix_template": "flownameを drjoy^{グループ名}${フロー名} 形式に変更。TTSプロンプトはpropertiesに記述して渡す。",
+      "impact": "サブフロー呼び出し失敗、プロンプト未反映",
+      "observed_in": [
+        "長野県立木曽病院",
+        "ユアクリニックお茶の水"
+      ]
+    },
+    {
+      "id": "VFB-013",
+      "pattern": "サブフローTTSプロンプトをProperty.mdに直書き",
+      "category": "property_mismatch",
+      "severity": "WARNING",
+      "frequency": 1,
+      "description": "VFBはサブフロー内のTTSプロンプトをメインフローのProperty.mdに直接列挙する。人間版はJump to Flowのpropertiesフィールドを使ってサブフロー呼び出し時にプロンプトを渡す設計。結果としてVFB版Property.mdが大幅に肥大化する（141行 vs 人間版49行）。",
+      "fix_template": "サブフロー内のTTSプロンプトはProperty.mdではなくJump to Flowのpropertiesに記述する。",
+      "impact": "Property.mdの肥大化（保守性低下）、サブフローの独立性低下",
+      "observed_in": [
+        "長野県立木曽病院"
+      ]
+    },
+    {
+      "id": "VFB-014",
+      "pattern": "冒頭チェーンでincoming-classifierを冒頭TTSより前に配置",
+      "category": "structural_error",
+      "severity": "RESOLVED",
+      "frequency": 2,
+      "description": "【2026-04-17 解消済み】VFB v2のSKILL_JSON_rules.mdで冒頭チェーンの正式順序が「wait → saveContextModel2DB → incoming-classifier → [acceptance_times] → 冒頭アナウンス」に変更・確定された。incoming-classifierを冒頭に置くことが標準となり、このパターンは解消された。bivr-checkerのCLAUDE.mdも更新済み。",
+      "fix_template": "VFB v2標準: wait → saveContextModel2DB → incoming-classifier → [acceptance_times] → 冒頭TTS",
+      "impact": "解消済み",
+      "observed_in": [
+        "帯広第一病院（旧バージョンVFBで発生）",
+        "ユアクリニックお茶の水（旧バージョンVFBで発生）"
+      ]
+    },
+    {
+      "id": "VFB-015",
+      "pattern": "業務ロジックScript（JavaScript）を生成しない",
+      "category": "logic_gap",
+      "severity": "WARNING",
+      "frequency": 1,
+      "description": "VFBは業務ロジックを実装するScriptモジュール（JavaScript）を生成しない。人間版では時刻判定（日曜・平日・土曜の受付時間帯別）、SMS送信、電話番号変換・SSML、サブフロー内リトライ制御などをJavaScriptで実装している。VFBはacceptance_times + saveContext2DBで代替しようとするが細かいロジックは実装できない。",
+      "fix_template": "acceptance_timesで表現できない細かい業務ロジックはScriptモジュール（JavaScript）で実装する。リトライ制御はScript経由で管理する設計も有効。",
+      "impact": "業務要件に合わせた時間帯ロジック欠落、SMS通知なし",
+      "observed_in": [
+        "ユアクリニックお茶の水"
+      ]
+    },
+    {
+      "id": "VFB-016",
+      "pattern": "STTモジュールのprofile_wordsを一切生成しない",
+      "category": "recognition_quality",
+      "severity": "CRITICAL",
+      "frequency": 4,
+      "description": "VFBは全STTモジュール（drjoy^AmiVoice$Speech to Text）のprofile_wordsを空欄のまま生成する。人間版では用件・日付・診療科・検査種別・復唱確認など入力種別ごとに数十〜数百語の辞書を設定する。辞書なしでは頭落ち・誤認識リスクが大幅に上がる。",
+      "fix_template": "入力種別ごとに以下を参照して設定する: (1)用件STT → 選択肢ごとの言い回し全パターン+頭落ちパターン (2)復唱確認STT → はい/いいえの全バリエーション+頭落ち (3)希望日STT → 日付特殊読み+曜日+相対表現 (4)診療科STT → 施設の全科名+略称+類義語 (5)検査種別STT → 施設固有の検査名+一般名 (6)現在の予約日STT → 全月全日の読み方+元号。CLAUDE.md Section 9 の「入力種別別設計ガイドライン」を必ず参照。",
+      "impact": "音声認識精度の大幅低下、誤認識・聴取不可の増加",
+      "observed_in": [
+        "帯広第一病院",
+        "長野県立木曽病院",
+        "ユアクリニックお茶の水",
+        "入間ハート病院"
+      ],
+      "examples": {
+        "入力_用件": "予約/変更/キャンセル各選択肢の多数バリエーション（頭落ち: 「やく」「んこう」等）+数字読み（いち/に/さん）",
+        "入力_復唱": "はい系200語超（フィラー付き・頭落ち・語尾変形）+ いいえ系200語超（違います・ちが・がい等の頭落ち含む）",
+        "入力_希望日": "月日特殊読み（ついたち・ふつか・はつか等）+曜日+相対表現（明日・来週・最短）",
+        "入力_診療科": "施設全科名（総合内科・循環器内科…脳外科）+略称+頭落ち",
+        "入力_検査種別": "施設固有検査名（内視鏡・エコー・MRI…PSG）+一般名（胃カメラ・超音波）"
+      }
+    },
+    {
+      "id": "VFB-017",
+      "pattern": "saveContextModel2DBのfields設定が施設固有でない（汎用フィールドのみ）",
+      "category": "context_design",
+      "severity": "CRITICAL",
+      "frequency": 1,
+      "description": "VFBはsaveContextModel2DBのfieldsに汎用的なフィールドセット（classification/subClassification/patientName/patientDateOfBirth/telephoneNumber/additionalPhoneNumber/status/dateOfCall/callId）を設定する。人間版は施設固有のフィールドを追加し、rangeValuesも設定する。入間ハート病院では以下が追加・変更: (1)classification.rangeValues → 診察/検査/予防接種/送迎（VFB版は予約/変更・キャンセル/その他確認） (2)medicalCardNumber追加（登録番号）(3)clinicalDepartment.rangeValues → 全14診療科設定 (4)reason追加（キャンセル理由）(5)reservationDate追加（現在の予約日）(6)status.rangeValues → 処理中・処理済み含む全状態値 (7)diagnosis/introduction/preferredscheduleDate1-2/testtype/vaccinationtype/attendees等追加",
+      "fix_template": "PDFを参照して施設固有のコンテキストフィールドを設定する: (1)classification.rangeValuesを施設の用件分類に変更 (2)clinicalDepartment.rangeValuesに施設の全診療科を設定 (3)フローで扱う全項目（検査種別・予防接種種別・キャンセル理由等）をfieldsに追加 (4)status.rangeValuesに必要な状態値を設定",
+      "impact": "Dr.JOY管理画面で正しい分類・診療科が表示されない",
+      "observed_in": [
+        "入間ハート病院"
+      ]
+    },
+    {
+      "id": "VFB-018",
+      "pattern": "OpenAIプロンプトが施設固有化・詳細化されていない",
+      "category": "prompt_quality",
+      "severity": "WARNING",
+      "frequency": 1,
+      "description": "VFBが生成するOpenAIプロンプトは汎用的な4セクション構成（Role/Context/出力仕様/セキュリティ）にとどまる。人間版では以下が追加される: (1)DTMF優先判定ロジック（数字1文字入力時の即決） (2)STT頭落ち対応の明示（「はい」→「い」等の断片処理） (3)施設固有の選択肢リストへの明示的マッピング（診療科名・検査種別の全候補列挙） (4)エラーケースの詳細定義（NO_RESULT/分からない/聴取不可の使い分け） (5)Few-Shot例の追加 (6)プロンプトインジェクション防御の強化 (7)フィラー除去ルールの明示。特に生年月日正規化は西暦・和暦・DTMF・STT先頭欠落の全ケースを網羅した高度なロジックが必要。",
+      "fix_template": "入力種別ごとに以下を追加する: (1)復唱確認 → DTMF即決(1→肯定/2→否定)+STT断片処理+Few-Shot (2)日付系 → DTMF優先+西暦/和暦/STT欠落補完+有効範囲チェック+Few-Shot (3)用件分類 → 施設固有カテゴリ名+DTMF番号対応+詳細分類基準 (4)診療科 → 施設全科名列挙+症状のみ→NO_RESULT（トリアージ禁止）+ノイズ除去ルール (5)検査・ワクチン種別 → 施設固有リスト+一般名→専門語名寄せ",
+      "impact": "OpenAI判定精度の低下、誤分類・聴取不可の増加",
+      "observed_in": [
+        "入間ハート病院"
+      ]
+    },
+    {
+      "id": "VFB-019",
+      "pattern": "生年月日聴取サブフローにOpenAIプロンプト（正規化）が未生成",
+      "category": "logic_gap",
+      "severity": "CRITICAL",
+      "frequency": 1,
+      "description": "VFBは生年月日聴取サブフローにOpenAIプロンプト正規化モジュールを生成しない（または生成してもmodule参照が空欄）。人間版ではDTMF入力/STT入力を区別し、和暦変換・STT先頭欠落補完・バリデーションを含む専用プロンプトを設定する。module参照が空の場合はOAI-001 CRITICAL違反。",
+      "fix_template": "生年月日聴取サブフローのSTT後に generate_by_OpenAI モジュールを配置し、module=入力モジュール名を設定。プロンプトはDTMF/STT分岐・元号変換・先頭欠落補完・バリデーションを含む高度なものを使用（diff_report_v2.md の生年月日プロンプト参照）。",
+      "impact": "生年月日の正規化不可（OAI-001 CRITICAL）、Dr.JOY連携エラー",
+      "observed_in": [
+        "入間ハート病院"
+      ]
+    },
+    {
+      "id": "VFB-020",
+      "pattern": "復唱確認の否定応答時に専用TTSを生成しない",
+      "category": "logic_gap",
+      "severity": "WARNING",
+      "frequency": 1,
+      "description": "VFBは復唱確認（Re-confirmation node data）の否定応答時に専用TTSモジュールを生成しない。人間版では「復唱用件否定」「復唱種別否定」等の専用TTS（例：「承知しました。改めてご用件をお聞かせください。」）を配置し、再聴取フローに遷移させる。VFBは否定時を単純に先頭TTSに戻すか、または処理なしで終話させる。",
+      "fix_template": "各復唱確認モジュールの否定（いいえ）遷移先に専用TTS（復唱{項目名}否定）を追加し、その後に再聴取ステップへ遷移させる。専用TTSのプロンプト例: {tts_g:承知しました。改めて{項目名}をお聞かせください。}",
+      "impact": "否定応答時のユーザー体験劣化（唐突な再聴取）",
+      "observed_in": [
+        "入間ハート病院"
+      ]
+    },
+    {
+      "id": "VFB-021",
+      "pattern": "Retry Counter の prompt_false を空文字のままにする",
+      "category": "prompt_quality",
+      "severity": "WARNING",
+      "frequency": 4,
+      "description": "VFBはRetry CounterのprompT_falseを全て空文字のままにする。人間版では聴取項目の種別に応じて3パターンを使い分ける: (A)任意聴取→次へ進む: 失敗告知メッセージを設定（例: {tts_g:かしこまりました。折り返しの際に確認させていただきます。} や {tts_g: 大変申し訳ございません。 うまく聞き取ることができませんでしたので後ほど担当者にて確認いたします。}）, (B)失敗終話: 軽い失敗告知のみ（例: {tts_g: 大変申し訳ございません。 うまく聞き取ることができませんでした。}）→次のDisconnectへ, (C)必須聴取→ループ: prompt_false=\"\"かつfalse遷移先を冒頭TTSに設定。VFBはパターンCのみ（空文字）を適用し、任意項目にも一律適用するため任意聴取項目でリトライ上限時の告知が出ない。",
+      "fix_template": "PDFの「リトライ上限時の動作」を確認して3パターンを使い分ける: (A)次の質問へ進む任意項目 → prompt_false に失敗告知文を設定 + false遷移先を次のステップへ, (B)失敗で終話する項目 → prompt_false に軽い告知文 + false遷移先を終話TTSへ, (C)用件・種別など必須項目 → prompt_false=\"\" + false遷移先を冒頭TTSに戻してループ。PDFに記載がない場合はパターンAを採用。",
+      "impact": "任意聴取項目でリトライ失敗時にユーザーへの説明なしで次へ進む（UX劣化）",
+      "observed_in": [
+        "帯広第一病院",
+        "長野県立木曽病院",
+        "ユアクリニックお茶の水",
+        "入間ハート病院"
+      ],
+      "examples": {
+        "パターンA_任意聴取": "{tts_g:かしこまりました。折り返しの際に確認させていただきます。}（東京衛生）/ {tts_g: 大変申し訳ございません。 うまく聞き取ることができませんでしたので後ほど担当者にて確認いたします。}（帯広）",
+        "パターンB_失敗終話": "{tts_g: 大変申し訳ございません。 うまく聞き取ることができませんでした。}（帯広）",
+        "パターンC_必須ループ": "prompt_false=\"\" + false遷移先=冒頭TTS（入間ハート用件・種別）"
+      }
+    },
+    {
+      "id": "VFB-023",
+      "pattern": "はい/いいえ二択入力にDTMF AmiVoice STT Inputを使わない",
+      "category": "type_mismatch",
+      "severity": "WARNING",
+      "frequency": 1,
+      "description": "「前回と同じ確認」「紹介状確認」等のはい/いいえ二択入力にAmiVoice Speech to Textのみを使用し、DTMF AmiVoice STT Inputを使わない。VFB-005（数字入力のDTMF未使用）の補足として、はい/いいえの二択入力も同様にDTMF化が必要。",
+      "fix_template": "はい/いいえ二択質問には DTMF AmiVoice STT Input を使用する。timeout=\"30000\"・prompt=\"{recstart}\"・termdtmf=\"#\"・stop_play_when_speech=\"Yes\"・remove_term=\"Yes\" を設定。profile_wordsには肯定否定辞書（はい系・いいえ系・フィラー前置き・頭落ちパターン）を設定する。",
+      "impact": "プッシュ入力不可によるユーザー体験劣化",
+      "observed_in": [
+        "帝京大学付属溝口病院"
+      ]
+    },
+    {
+      "id": "VFB-024",
+      "pattern": "OpenAI_担当医のcontextNameが非標準値（Mydoctor等）になる",
+      "category": "context_design",
+      "severity": "CRITICAL",
+      "frequency": 1,
+      "description": "VFBは担当医名を保存するOpenAIモジュールのcontextNameに \"Mydoctor\" という非標準値を設定する。人間版では担当医名は contextName=\"inquiry\"（問い合わせ欄）に格納する。非標準のcontextNameはDr.JOY管理画面で正しく表示されない。",
+      "fix_template": "担当医名の保存先は contextName=\"inquiry\" を使用する。saveContextModel2DBのfieldsにも\"inquiry\"フィールドを定義すること。",
+      "impact": "Dr.JOY管理画面での担当医名が表示されない",
+      "observed_in": [
+        "帝京大学付属溝口病院"
+      ]
+    },
+    {
+      "id": "VFB-025",
+      "pattern": "完了フラグ_診察券なしのstatusが0（途中切断）になる",
+      "category": "default_missing",
+      "severity": "CRITICAL",
+      "frequency": 1,
+      "description": "VFBは診察券番号が不明な場合の完了フラグ（完了フラグ_診察券なし等）のstatusを \"0\"（途中切断）に設定する。人間版では status=\"2\"（代表案内）が正しい。診察券番号なし→代表案内TTS→終話というルートはstatus=2が適切。",
+      "fix_template": "診察券番号なし・代表案内終話のstatusは \"2\" を設定する。status=\"0\" は真の途中切断（何もせず通話が切れた）ケースのみに使用する。",
+      "impact": "Dr.JOY管理画面で「途中切断」と誤分類される",
+      "observed_in": [
+        "帝京大学付属溝口病院"
+      ]
+    },
+    {
+      "id": "VFB-026",
+      "pattern": "サブフローのstartモジュールが誤り・複数フロー分の内容が混在する",
+      "category": "structural_error",
+      "severity": "CRITICAL",
+      "frequency": 1,
+      "description": "VFBが生成する診察券番号聴取サブフローのstartが \"患者_氏名\" になっており、フロー内に氏名・生年月日・診察券番号の全モジュールが混在（41モジュール）。本来は診察券番号のみのシンプルなフロー（9モジュール）であるべき。",
+      "fix_template": "サブフローのstartモジュールは当該フローの最初のTTSモジュール名と一致させる。診察券番号聴取フローは診察券番号TTS→DTMFまたはSTT→OpenAI→Retry→（不明時）Flag+TTS+Disconnectのシンプル構成にする。",
+      "impact": "サブフロー開始時に無関係な入力ステップが実行される（CRITICAL）",
+      "observed_in": [
+        "帝京大学付属溝口病院"
+      ]
+    },
+    {
+      "id": "VFB-027",
+      "pattern": "氏名聴取サブフローにOpenAI正規化モジュールを生成する（不要）",
+      "category": "unnecessary",
+      "severity": "WARNING",
+      "frequency": 1,
+      "description": "VFBは氏名聴取サブフローにOpenAI正規化モジュール（openAI_患者_氏名正規化）を生成するが、promptが \"prompt\" というリテラル文字列・next遷移先が空のまま生成される。人間版ではこのOpenAIモジュールは削除し、STT → Retry → （サブフロー終了）のシンプル構成にする。氏名正規化はDr.JOY側で処理するため不要。",
+      "fix_template": "氏名聴取サブフローにOpenAI正規化モジュールは追加しない。STTの^.+$成功遷移先を直接空（サブフロー終了）にする。TTSプロンプトは JSON 内に直接記述する（例: {tts_g:お名前を「名前は山田太郎です」のようにお話しください。}）。",
+      "impact": "prompt=\"prompt\"リテラル・next空のOpenAIモジュールが電話切断を引き起こす可能性",
+      "observed_in": [
+        "帝京大学付属溝口病院"
+      ]
+    },
+    {
+      "id": "VFB-028",
+      "pattern": "TTSプロンプトとcontextが同一のモジュールを複数定義する（DRY原則違反）",
+      "category": "unnecessary",
+      "severity": "WARNING",
+      "frequency": 4,
+      "description": "VFBは用件・ルート別に同一内容のTTS・CompletionFlag・Disconnectを重複生成する。例: 予約終話TTS・変更終話TTS・キャンセル終話TTSが全て同じ文言・同じstatusなのに3セット生成。人間版では「TTSプロンプトが同一 かつ 保存context/statusが同一」の条件を満たすモジュール群を1つに集約し、ContextMatchRouterで前後の振り分けを行う。",
+      "fix_template": "集約の判定: (1)TTSプロンプトが完全一致 かつ (2)contextName・contextValue・statusが同一 → 1モジュールに統合。ContextMatchRouterを上流に配置して複数ルートからの流入を受け、下流では必要に応じてContextMatchRouterで再分岐させる。集約できないケース: status/smsFlagが異なる・分岐後に異なる処理が続く。",
+      "impact": "モジュール数の肥大化（20〜40個超の無駄）、保守性低下、フロー全体の見通し悪化",
+      "observed_in": [
+        "帯広第一病院",
+        "長野県立木曽病院",
+        "ユアクリニックお茶の水",
+        "入間ハート病院"
+      ],
+      "examples": {
+        "終話パス集約": "予約/変更/キャンセルで同じ終話文言+status=1 → 終話TTS×1・CompletionFlag×1・Disconnect×1 に統合",
+        "代表案内集約": "複数エラーパスが同じ代表案内TTSに遷移 → 代表転送アナウンス×1 に統合",
+        "サブフロー呼出集約": "複数用件で同じ氏名/生年月日/電話番号サブフローを呼ぶ → Jump×1 に統合"
+      }
+    },
+    {
+      "id": "VFB-022",
+      "pattern": "profile_wordsにフィラー前置きパターンと頭落ちパターンを追加しない",
+      "category": "recognition_quality",
+      "severity": "WARNING",
+      "frequency": 4,
+      "description": "VFBはprofile_wordsを生成するとしても「キーワード単語」のみを登録する（VFB-016の補足）。人間版では各キーワードに対してフィラー前置き14種（あ/あー/あの/あのー/え/えー/えっと/えーと/ん/んー/はい/ま/まー/そうですね）×語尾バリエーション20種以上と、語頭欠落（頭落ち）パターンを体系的に追加する。さらに復唱確認STTでは「はい→はあ/あい/い」「そうです→おうです/うです」「大丈夫です→いじょうぶです」等の頭落ちパターンを必ず追加する。",
+      "fix_template": "用件・月名・診療科などの主要キーワードに対して: (1)フィラー前置き10種以上を追加（あ/あー/あの/えー/えっと/ん/はい/ま/そうですね等）, (2)語尾バリエーション（です/で/になります/なんですが/ね等）を追加, (3)頭落ち形（先頭1〜2音欠落）を追加（よやく→やく/おやく, いちがつ→ちがつ等）。復唱STTでは必ずはい系・いいえ系の頭落ち形を追加。CLAUDE.md Section 9「フィラーパターン体系」を参照。",
+      "impact": "フィラーや発話の頭落ちによる認識失敗の増加、STTのTIMEOUT/NO_RESULT増加",
+      "observed_in": [
+        "帯広第一病院",
+        "長野県立木曽病院",
+        "ユアクリニックお茶の水",
+        "入間ハート病院"
+      ]
+    },
+    {
+      "id": "VFB-029",
+      "pattern": "Re-confirmation node dataをDOB復唱以外に使わない（動的日付・分類結果の読み上げ未実装）",
+      "category": "logic_gap",
+      "severity": "WARNING",
+      "frequency": 1,
+      "description": "Re-confirmation node dataはDOB復唱専用と思われがちだが、任意のモジュール出力（Script結果・OpenAI結果）を#data#に埋め込んで読み上げる汎用モジュールとして使用できる。pair_11では(1)冒頭アナウンスに3営業日後の日付を動的挿入（nodeName=script_日付取得）、(2)理由聴取時に用件分類結果（変更/キャンセル等）を読み上げ（nodeName=OpenAI_用件確認）の2箇所で活用。VFBはこの非DOB用途を実装しない。",
+      "fix_template": "日付や動的テキストをアナウンスに挿入する場合: Re-confirmation node dataのnodeNameに参照元Scriptモジュール名またはOpenAIモジュール名を設定し、Property.mdのpromptに#data#を含める（例: {tts_g:#data# 以降の〜}）。skipReadHour=\"Yes\"を設定して時刻読み上げを無効化すること。",
+      "impact": "日付の動的挿入や分類結果の読み上げが実装できない",
+      "observed_in": [
+        "帝京大学医学部附属みぞのくち病院(pair_11)"
+      ]
+    },
+    {
+      "id": "VFB-030",
+      "pattern": "業務日計算Script（3営業日計算）を生成しない",
+      "category": "logic_gap",
+      "severity": "WARNING",
+      "frequency": 1,
+      "description": "「折り返しは3診療日以内」等の業務ルールを冒頭アナウンスに動的挿入する場合、Java型（HttpClient/SimpleDateFormat/Calendar）を使って祝日APIを呼び出し、今日から3営業日後を計算するScriptが必要。VFBはこのような業務ロジックScriptを生成しない。また予約日が当日/翌日/翌々日の場合に代表案内に誘導する分岐Scriptも別途必要。",
+      "fix_template": "script_日付取得: holidays-jp.github.io APIで祝日取得 → Calendar計算 → $runner.setResult(m月d日形式)。script_3days分岐: $runner.getModuleResult(モジュール名) で日付取得 → 今日/明日/明後日と比較 → 代表案内またはsuccess。Script名はscript_プレフィックス必須。pair_11のスクリプト本体を reference/templates/ 等に保存し再利用すること。",
+      "impact": "動的日付表示・当日/翌日の予約変更時の代表案内誘導ができない",
+      "observed_in": [
+        "帝京大学医学部附属みぞのくち病院(pair_11)"
+      ]
+    },
+    {
+      "id": "VFB-031",
+      "pattern": "複数ContextMatchRouterによる同一OpenAI出力の多段分岐を生成しない",
+      "category": "logic_gap",
+      "severity": "WARNING",
+      "frequency": 1,
+      "description": "診療科が多い大病院では、同一OpenAIモジュール（openAI_診療科）の出力を複数のContextMatchRouterが参照し、フェーズ（予約/変更/キャンセル等）や条件（初診/再診等）に応じて異なる遷移先を選ぶ多段分岐が必要。pair_11では6つのCMRが同一openAI_診療科を参照。VFBはこの多段CMRパターンを生成しない。",
+      "fix_template": "同一OpenAI出力に対して複数の分岐コンテキストがある場合: CMRをフェーズごとに個別作成（診療科分岐, 診療科分岐_2, _3...）し、各CMRのmodule1Name/module2Nameに同じOpenAIモジュール名を設定する。各CMRから異なるValueセットを参照して異なる遷移先に振り分ける。",
+      "impact": "複雑な診療科別/フェーズ別分岐が実装できない",
+      "observed_in": [
+        "帝京大学医学部附属みぞのくち病院(pair_11)"
+      ]
+    },
+    {
+      "id": "VFB-032",
+      "pattern": "retry_count=2を全項目に一律設定する（任意聴取は1でよい場合がある）",
+      "category": "default_missing",
+      "severity": "INFO",
+      "frequency": 1,
+      "description": "VFBはretry_countをデフォルト2で一律設定する傾向がある。pair_11では担当医・受診歴・紹介状・注射装具・検査等の任意聴取項目はretry_count=1（1回リトライ）を使用し、用件確認・診察券確認等の重要項目のみretry_count=2を使用。施設のPDF設計書にリトライ回数の明示がなければ、必須項目=2・任意項目=1とすることが多い。",
+      "fix_template": "PDFの仕様を確認し、重要な必須聴取（用件・診察券番号等）はretry_count=2、任意聴取（担当医・理由・検査内容等）はretry_count=1を設定する。記載がない場合は全てretry_count=2（標準値）でよい。",
+      "impact": "軽微（通話時間の微増）",
+      "observed_in": [
+        "帝京大学医学部附属みぞのくち病院(pair_11)"
+      ]
+    },
+    {
+      "id": "VFB-033",
+      "pattern": "生年月日聴取にDOB Re-confirmationを使わず二段階OpenAI方式を採用する場合がある（設計バリアント）",
+      "category": "design_variant",
+      "severity": "INFO",
+      "frequency": 1,
+      "description": "pair_11の生年月日聴取サブフローでは標準の DOB Re-confirmation モジュールを使わず、(1)openAI_患者_生年月日でDTMF/STT→yyyy-MM-dd 00:00形式に正規化、(2)openAI_生年月日正規化でyyyy-MM-dd 00:00→yyyy年m月d日に変換（TTS読み上げ用）、(3)通常のRe-confirmation node dataでopenAI_生年月日正規化の出力を#data#で読み上げる三段構成を採用。",
+      "fix_template": "標準はDOB Re-confirmationを使うこと（CLAUDE.md参照）。より細かい正規化ロジックが必要な場合は二段階OpenAI方式も許容。プロンプト参照: training_data/pair_11/bivr_extracted/flows/帝京溝口_生年月日聴取.json のopenAI_患者_生年月日/openAI_生年月日正規化。",
+      "impact": "設計の複雑化（OpenAIモジュールが1→2に増加）",
+      "observed_in": [
+        "帝京大学医学部附属みぞのくち病院(pair_11)"
+      ]
+    },
+    {
+      "id": "VFB-034",
+      "pattern": "DTMF AmiVoice STT Input の termdtmf を \"*\" に誤設定する",
+      "category": "default_missing",
+      "severity": "CRITICAL",
+      "frequency": 1,
+      "description": "VFBはDTMF AmiVoice STT Inputのtermdtmfを \"*\" に設定する場合がある。正しい値は \"#\"。また同時に stop_play_when_speech を \"No\" に誤設定するパターンも確認（正しくは \"Yes\"）。この組み合わせにより (1)終端キーが誤り (2)発話時にTTSが止まらない という2つの問題が同時発生する。横須賀共済病院の生年月日聴取・診察券聴取サブフローで発生。",
+      "fix_template": "DTMF AmiVoice STT Inputの全インスタンスを確認し: (1) termdtmf=\"#\" (2) stop_play_when_speech=\"Yes\" (3) remove_term=\"Yes\" が設定されているか確認・修正する。",
+      "impact": "DTMFの終端キーが # で動作しない、音声入力時にTTSが停止しない",
+      "observed_in": [
+        "横須賀共済病院"
+      ]
+    },
+    {
+      "id": "VFB-035",
+      "pattern": "VFB v2で冒頭チェーンの順序が変更（incoming-classifier が先頭に移動）",
+      "category": "design_variant",
+      "severity": "INFO",
+      "frequency": 1,
+      "description": "VFB v2の SKILL_JSON_rules.md では冒頭チェーンの順序が更新された: wait → saveContextModel2DB → incoming-classifier → [acceptance_times] → 冒頭アナウンス。従来の人間修正ペアでは 冒頭TTS → incoming-classifier の順だったが、VFB v2では incoming-classifier を先頭に持ってきて非通知着信を早期に排除する設計になった。VFB-014（旧パターン）と方針が逆転している点に注意。",
+      "fix_template": "新規案件ではVFB v2の新しい順序（incoming-classifier first）に従うことを推奨。既存フロー修正時は現在の順序を維持する。どちらの順序でも動作するが、incoming-classifier firstの方が非通知への冒頭アナウンス再生を回避できる。",
+      "impact": "設計の不統一（新旧で順序が異なる）",
+      "observed_in": [
+        "VFB v2 SKILL_JSON_rules.md調査（2026-04-17）"
+      ]
+    }
+  ]
+}

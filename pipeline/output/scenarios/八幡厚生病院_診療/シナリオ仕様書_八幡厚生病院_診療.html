@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>シナリオ仕様書 — 八幡厚生病院</title>
+<style>
+  :root {
+    --primary: #2563eb; --primary-light: #eff6ff;
+    --success: #16a34a; --success-light: #f0fdf4;
+    --warning: #d97706; --warning-light: #fffbeb;
+    --danger: #dc2626; --danger-light: #fef2f2;
+    --gray-50: #f9fafb; --gray-100: #f3f4f6; --gray-200: #e5e7eb;
+    --gray-300: #d1d5db; --gray-500: #6b7280; --gray-700: #374151; --gray-900: #111827;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI','Hiragino Sans','Yu Gothic UI',sans-serif; background: var(--gray-50); color: var(--gray-900); line-height: 1.7; }
+  .header { background: linear-gradient(135deg, #1e40af, #3b82f6); color: white; padding: 2.5rem 2rem; text-align: center; }
+  .header h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 0.5rem; }
+  .header .meta { opacity: 0.85; font-size: 0.9rem; }
+  .container { max-width: 900px; margin: 0 auto; padding: 1.5rem; }
+  .overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+  .overview-card { background: white; border-radius: 12px; padding: 1.2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); text-align: center; }
+  .overview-card .num { font-size: 2rem; font-weight: 700; color: var(--primary); }
+  .overview-card .label { font-size: 0.85rem; color: var(--gray-500); margin-top: 0.2rem; }
+  .flow-overview { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin: 1.5rem 0; }
+  .flow-chain { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.3rem; padding: 1rem 0; }
+  .flow-node { background: var(--primary-light); border: 2px solid var(--primary); border-radius: 8px; padding: 0.5rem 1rem; font-size: 0.85rem; font-weight: 600; color: var(--primary); white-space: nowrap; }
+  .flow-node.start { background: var(--success-light); border-color: var(--success); color: var(--success); }
+  .flow-node.end { background: var(--danger-light); border-color: var(--danger); color: var(--danger); }
+  .flow-node.branch { background: var(--warning-light); border-color: var(--warning); color: var(--warning); }
+  .flow-arrow { font-size: 1.2rem; color: var(--gray-300); }
+  .section { margin: 1.5rem 0; }
+  .section-title { font-size: 1.3rem; font-weight: 700; color: var(--gray-900); padding-bottom: 0.5rem; border-bottom: 2px solid var(--primary); margin-bottom: 1rem; }
+  .block { background: white; border-radius: 12px; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); overflow: hidden; }
+  .block-header { background: var(--gray-100); padding: 0.8rem 1.2rem; cursor: pointer; display: flex; align-items: center; gap: 0.8rem; user-select: none; transition: background 0.2s; }
+  .block-header:hover { background: var(--gray-200); }
+  .block-header .icon { font-size: 1.3rem; }
+  .block-header .title { font-weight: 600; flex: 1; }
+  .block-header .badge { font-size: 0.75rem; padding: 0.15rem 0.6rem; border-radius: 999px; font-weight: 600; }
+  .badge-blue { background: var(--primary-light); color: var(--primary); }
+  .badge-green { background: var(--success-light); color: var(--success); }
+  .badge-orange { background: var(--warning-light); color: var(--warning); }
+  .badge-red { background: var(--danger-light); color: var(--danger); }
+  .badge-purple { background: #f3e8ff; color: #7c3aed; }
+  .badge-gray { background: var(--gray-100); color: var(--gray-500); }
+  .block-header .chevron { transition: transform 0.3s; font-size: 0.8rem; color: var(--gray-500); }
+  .block.open .block-header .chevron { transform: rotate(90deg); }
+  .block-body { display: none; padding: 1.2rem; }
+  .block.open .block-body { display: block; }
+  .speech { background: var(--primary-light); border-left: 4px solid var(--primary); border-radius: 0 8px 8px 0; padding: 0.8rem 1rem; margin: 0.5rem 0 0.5rem 2rem; font-size: 0.9rem; position: relative; }
+  .speech::before { content: '\1F50A'; position: absolute; left: -2rem; top: 0.7rem; font-size: 1rem; }
+  .speech .label { font-size: 0.75rem; color: var(--gray-500); font-weight: 600; margin-bottom: 0.3rem; }
+  .branch-table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; font-size: 0.9rem; }
+  .branch-table th { background: var(--gray-100); padding: 0.5rem 0.8rem; text-align: left; font-weight: 600; font-size: 0.8rem; color: var(--gray-500); }
+  .branch-table td { padding: 0.5rem 0.8rem; border-bottom: 1px solid var(--gray-200); }
+  .steps { list-style: none; padding: 0; }
+  .steps li { padding: 0.6rem 0 0.6rem 2.5rem; position: relative; border-left: 2px solid var(--gray-200); margin-left: 0.8rem; }
+  .steps li::before { content: attr(data-num); position: absolute; left: -0.85rem; top: 0.5rem; width: 1.5rem; height: 1.5rem; border-radius: 50%; background: var(--primary); color: white; font-size: 0.75rem; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+  .steps li:last-child { border-left-color: transparent; }
+  .step-title { font-weight: 600; }
+  .step-desc { font-size: 0.85rem; color: var(--gray-500); margin-top: 0.2rem; }
+  .info-box { background: var(--warning-light); border-left: 4px solid var(--warning); padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-size: 0.85rem; }
+  .error-box { background: var(--danger-light); border-left: 4px solid var(--danger); padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-size: 0.85rem; }
+  .collect-table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; }
+  .collect-table th { background: var(--gray-100); padding: 0.6rem 1rem; text-align: left; font-size: 0.85rem; }
+  .collect-table td { padding: 0.6rem 1rem; border-bottom: 1px solid var(--gray-200); font-size: 0.9rem; }
+  .footer { text-align: center; color: var(--gray-500); font-size: 0.8rem; padding: 2rem 0; }
+  /* 縦型ツリー図 */
+  .tree-section { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin: 1.5rem 0; overflow-x: auto; }
+  .vtree { display: flex; flex-direction: column; align-items: center; gap: 0; }
+  .vtree-node { background: var(--primary-light); border: 2px solid var(--primary); border-radius: 8px; padding: 0.35rem 1rem; font-size: 0.8rem; font-weight: 600; color: var(--primary); white-space: nowrap; text-align: center; min-width: 100px; }
+  .vtree-node.t-opening { background: var(--success-light); border-color: var(--success); color: var(--success); }
+  .vtree-node.t-announcement { background: #e0f2fe; border-color: #0284c7; color: #0284c7; }
+  .vtree-node.t-hearing { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
+  .vtree-node.t-subflow { background: #f3e8ff; border-color: #7c3aed; color: #7c3aed; }
+  .vtree-node.t-context_match_router, .vtree-node.t-script, .vtree-node.t-date_of_call_classifier { background: var(--warning-light); border-color: var(--warning); color: var(--warning); }
+  .vtree-node.t-call_transfer { background: #fce7f3; border-color: #db2777; color: #db2777; }
+  .vtree-node.t-termination { background: var(--danger-light); border-color: var(--danger); color: var(--danger); }
+  .vtree-arrow { color: var(--gray-300); font-size: 0.9rem; line-height: 1; text-align: center; padding: 2px 0; }
+  .vtree-branches { display: flex; justify-content: center; gap: 0.8rem; margin: 0.3rem 0; }
+  .vtree-branch { display: flex; flex-direction: column; align-items: center; gap: 0; border: 1px solid var(--gray-200); border-radius: 10px; padding: 0.5rem; background: var(--gray-50); }
+  .vtree-branch-label { font-size: 0.7rem; font-weight: 700; color: var(--gray-500); background: white; border-radius: 4px; padding: 0.1rem 0.5rem; margin-bottom: 0.2rem; border: 1px solid var(--gray-200); }
+  .vtree-merge { text-align: center; font-size: 0.75rem; color: var(--gray-500); padding: 0.2rem 0; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>シナリオ仕様書</h1>
+  <div class="meta">八幡厚生病院 | 作成日: 2026年04月17日</div>
+</div>
+<div class="container">
+
+<div class="overview">
+  <div class="overview-card"><div class="num">24</div><div class="label">総ブロック数</div></div>
+  <div class="overview-card"><div class="num">2</div><div class="label">用件メニュー</div></div>
+  <div class="overview-card"><div class="num">4</div><div class="label">サブフロー</div></div>
+  <div class="overview-card"><div class="num">4</div><div class="label">分岐ブロック</div></div>
+  <div class="overview-card"><div class="num">6</div><div class="label">終話パターン</div></div>
+</div>
+
+<div class="tree-section">
+  <h3 style="margin-bottom:0.8rem;color:var(--gray-700);">通話の全体フロー（樹形図）</h3>
+  <div class="vtree"><div class="vtree-node t-opening">冒頭</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">冒頭_分岐_電話種別</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">携帯</div><div class="vtree-node t-announcement">冒頭アナウンス_携帯</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約手段確認</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-announcement">冒頭アナウンス_固定</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">本人確認</div></div></div></div>
+</div>
+
+<div style="background:white;border-radius:12px;padding:1rem 1.5rem;box-shadow:0 1px 3px rgba(0,0,0,0.08);margin:1.5rem 0;display:flex;flex-wrap:wrap;gap:1.5rem;align-items:center;">
+  <span style="font-weight:600;color:var(--gray-700);font-size:0.9rem;">処理方式の凡例:</span>
+  <span style="display:flex;align-items:center;gap:0.4rem;"><span class="badge badge-gray">音声認識のみ</span><span style="font-size:0.8rem;color:var(--gray-500);">患者の発話をそのまま記録</span></span>
+  <span style="display:flex;align-items:center;gap:0.4rem;"><span class="badge badge-purple">AI判定</span><span style="font-size:0.8rem;color:var(--gray-500);">AIが発話内容を分類・変換して分岐</span></span>
+</div>
+<div class="section">
+<div class="section-title">1. 着信～用件選択</div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F4DE;</span><span class="title">冒頭アナウンス</span><span class="badge badge-green">自動</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">AIが話す内容</div>八幡厚生病院の、予約専用、AI電話です。まずはじめに、申し込み方法をお伺いします。</div>
+<div class="info-box">&#9888;&#65039; <strong>非通知の場合</strong>: 恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</div>
+<div class="info-box">&#x1F553; <strong>時間外の場合</strong>: お電話ありがとうございます。ただいまの時間は受付時間外です。祝日を除く、月曜日から金曜日の9時から17時の間におかけ直しください。お電話ありがとうございました。</div>
+</div></div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F500;</span><span class="title">予約手段確認</span><span class="badge badge-orange">分岐</span><span class="badge badge-purple">AI判定</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">AIが話す内容</div>ネットから申し込みを希望の方は1を、このままお電話での申し込み希望の方は2を押してください。</div>
+<table class="branch-table">
+<tr><th>選択</th><th>遷移先</th></tr>
+<tr><td><strong>1</strong> または「ネット」</td><td>&rarr; END_ネット誘導</td></tr>
+<tr><td><strong>2</strong> または「電話」</td><td>&rarr; 本人確認</td></tr>
+</table>
+<div class="error-box">&#x1F504; 聞き取れなかった場合: 最大<strong>2回</strong>再質問</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">2. ネットフロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">ネットフロー</span><span class="badge badge-blue">0ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">3. 電話フロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">電話フロー</span><span class="badge badge-blue">1ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">本人確認 <span class="processing-tag"><span class="badge badge-purple">AI判定</span></span></div></li>
+<li data-num="2"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+<div class="speech"><div class="label">本人確認</div>お電話頂いてる方は、受診を希望されるご本人様でしょうか？「はい」、「いいえ」でお答えください。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">4. 個人情報聴取（共通サブフロー）</div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F464;</span><span class="title">聴取する項目</span><span class="badge badge-blue">4項目</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th>順序</th><th>項目</th><th>入力方法</th></tr>
+<tr><td>1</td><td><strong>氏名聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>2</td><td><strong>生年月日聴取（復唱あり）</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>3</td><td><strong>電話番号聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>4</td><td><strong>診察券番号聴取</strong></td><td>音声 / プッシュ</td></tr>
+</table>
+<div class="info-box">&#x1F4F1; <strong>携帯電話からの着信の場合</strong>: 電話番号は着信番号を復唱確認</div>
+<div class="error-box">&#x1F504; 各項目とも聞き取れなかった場合は最大<strong>2回</strong>再質問</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">5. ブロック構成（技術仕様）</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F9E9;</span><span class="title">全ブロック一覧（24ブロック）</span><span class="badge badge-blue">24件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th style="width:5%">#</th><th style="width:25%">ブロック名</th><th style="width:15%">タイプ</th><th style="width:25%">接続先</th><th style="width:30%">詳細</th></tr>
+<tr><td>1</td><td>&#x1F3E0; <strong>冒頭</strong></td><td><span class="badge badge-green">冒頭</span></td><td style="font-size:0.8rem">冒頭_分岐_電話種別</td><td style="font-size:0.8rem">営業時間チェックあり</td></tr>
+<tr><td>2</td><td>&#x1F500; <strong>冒頭_分岐_電話種別</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">冒頭アナウンス_携帯 / 冒頭アナウンス_固定</td><td style="font-size:0.8rem">ref: 着信電話番号分類</td></tr>
+<tr><td>3</td><td>&#x1F50A; <strong>冒頭アナウンス_携帯</strong></td><td><span class="badge badge-blue">発話</span></td><td style="font-size:0.8rem">予約手段確認</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>4</td><td>&#x1F3A4; <strong>予約手段確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">END_ネット誘導 / 本人確認</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>5</td><td>&#x1F50A; <strong>冒頭アナウンス_固定</strong></td><td><span class="badge badge-blue">発話</span></td><td style="font-size:0.8rem">本人確認</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>6</td><td>&#x1F3A4; <strong>本人確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">jump_氏名聴取 / 電話口氏名</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>7</td><td>&#x1F3A4; <strong>電話口氏名</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">本人との関係</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>8</td><td>&#x1F3A4; <strong>本人との関係</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">jump_氏名聴取</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>9</td><td>&#x1F517; <strong>jump_氏名聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">jump_生年月日聴取</td><td style="font-size:0.8rem">flow: 八幡厚生病院$氏名聴取_20260417</td></tr>
+<tr><td>10</td><td>&#x1F517; <strong>jump_生年月日聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">jump_電話番号聴取</td><td style="font-size:0.8rem">flow: 八幡厚生病院$生年月日聴取_20260417</td></tr>
+<tr><td>11</td><td>&#x1F517; <strong>jump_電話番号聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">用件</td><td style="font-size:0.8rem">flow: 八幡厚生病院$電話番号聴取_20260417</td></tr>
+<tr><td>12</td><td>&#x1F3A4; <strong>用件</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">受診歴 / jump_診察券番号聴取 / jump_診察券番号聴取</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>13</td><td>&#x1F3A4; <strong>受診歴</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">症状 / jump_診察券番号聴取</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>14</td><td>&#x1F517; <strong>jump_診察券番号聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">診察券番号後_分岐</td><td style="font-size:0.8rem">flow: 八幡厚生病院$診察券番号聴取_20260417</td></tr>
+<tr><td>15</td><td>&#x1F500; <strong>診察券番号後_分岐</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">予約希望日 / 予約日 / 予約日</td><td style="font-size:0.8rem">ref: classification</td></tr>
+<tr><td>16</td><td>&#x1F3A4; <strong>予約日</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">予約日後_分岐</td><td style="font-size:0.8rem">format: datetime</td></tr>
+<tr><td>17</td><td>&#x1F500; <strong>予約日後_分岐</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">予約希望日 / 終話分岐_電話種別</td><td style="font-size:0.8rem">ref: classification</td></tr>
+<tr><td>18</td><td>&#x1F3A4; <strong>予約希望日</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">症状</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>19</td><td>&#x1F3A4; <strong>症状</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">終話分岐_電話種別</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>20</td><td>&#x1F500; <strong>終話分岐_電話種別</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">END_受付完了_携帯 / END_受付完了_固定</td><td style="font-size:0.8rem">ref: phonetype</td></tr>
+<tr><td>21</td><td>&#x1F6D1; <strong>END_受付完了_携帯</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_受付完了_携帯</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>22</td><td>&#x1F6D1; <strong>END_受付完了_固定</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_受付完了_固定</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>23</td><td>&#x1F6D1; <strong>END_ネット誘導</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_ネット誘導</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>24</td><td>&#x1F6D1; <strong>END_聴取失敗</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_聴取失敗</td><td style="font-size:0.8rem">—</td></tr>
+</table>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">6. エラー・例外時の挙動</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x26A0;&#xFE0F;</span><span class="title">エラー時の対応一覧</span><span class="badge badge-red">重要</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th>状況</th><th>対応</th></tr>
+<tr><td>incoming-classifier で非通知と判定</td><td>恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td>acceptance_times で時間外と判定（祝日・平日17時以降〜翌9時前・土日）</td><td>お電話ありがとうございます。ただいまの時間は受付時間外です。祝日を除く、月曜日から金曜日の9時から17時の間におかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td>いずれかの聴取ステップでリトライ上限（3回）到達</td><td>申し訳ありません。回答が確認できませんでした。恐れ入りますが、祝日を除く、月曜日から金曜日の9時から17時へおかけなおしください。電話番号が分かる場合は、そのま</td></tr>
+<tr><td>全聴取完了 かつ 電話番号サブフロー返却値=1（携帯）</td><td>かしこまりました。ご要望内容を確認し、3日以内にSMSか電話にて返答いたします。お電話ありがとうございました。それでは失礼します。</td></tr>
+<tr><td>全聴取完了 かつ 電話番号サブフロー返却値=2（その他）</td><td>かしこまりました。ご要望内容を確認し、3日以内にお電話にて返答いたします。お電話ありがとうございました。それでは失礼します。</td></tr>
+<tr><td>予約手段確認で「ネット」（DTMF 1）を選択</td><td>申込みのページを、ショートメールでお送りします。メッセージのリンクを開き、はじめに「電話番号」で本人確認をしてください。そのあと、患者さまの情報を入力してくださ</td></tr>
+</table>
+<div class="speech"><div class="label">聞き取り失敗時の切断アナウンス</div>申し訳ありません。回答が確認できませんでした。恐れ入りますが、祝日を除く、月曜日から金曜日の9時から17時へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますのでメモをご準備ください。電話番号は、0936913344です。それでは失礼します。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">7. 終話パターン一覧</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F6AA;</span><span class="title">全終話パターンの発話テキスト</span><span class="badge badge-red">6件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">END_非通知</div>恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_時間外</div>お電話ありがとうございます。ただいまの時間は受付時間外です。祝日を除く、月曜日から金曜日の9時から17時の間におかけ直しください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_聴取失敗</div>申し訳ありません。回答が確認できませんでした。恐れ入りますが、祝日を除く、月曜日から金曜日の9時から17時へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますのでメモをご準備ください。電話番号は、0936913344です。それでは失礼します。</div>
+<div class="speech"><div class="label">END_受付完了_携帯</div>かしこまりました。ご要望内容を確認し、3日以内にSMSか電話にて返答いたします。お電話ありがとうございました。それでは失礼します。</div>
+<div class="speech"><div class="label">END_受付完了_固定</div>かしこまりました。ご要望内容を確認し、3日以内にお電話にて返答いたします。お電話ありがとうございました。それでは失礼します。</div>
+<div class="speech"><div class="label">END_ネット誘導</div>申込みのページを、ショートメールでお送りします。メッセージのリンクを開き、はじめに「電話番号」で本人確認をしてください。そのあと、患者さまの情報を入力してください。お電話ありがとうございました。それでは失礼します。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">8. 発話テキスト全文一覧</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F4DD;</span><span class="title">全発話テキスト（17件）</span><span class="badge badge-blue">17件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th style="width:30%">ステップ名</th><th>発話テキスト</th></tr>
+<tr><td><strong>END_非通知</strong></td><td>恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_時間外</strong></td><td>お電話ありがとうございます。ただいまの時間は受付時間外です。祝日を除く、月曜日から金曜日の9時から17時の間におかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>冒頭アナウンス_携帯</strong></td><td>八幡厚生病院の、予約専用、AI電話です。まずはじめに、申し込み方法をお伺いします。</td></tr>
+<tr><td><strong>冒頭アナウンス_固定</strong></td><td>お電話ありがとうございます。八幡厚生病院の、予約専用、AI電話です。</td></tr>
+<tr><td><strong>予約手段確認</strong></td><td>ネットから申し込みを希望の方は1を、このままお電話での申し込み希望の方は2を押してください。</td></tr>
+<tr><td><strong>本人確認</strong></td><td>お電話頂いてる方は、受診を希望されるご本人様でしょうか？「はい」、「いいえ」でお答えください。</td></tr>
+<tr><td><strong>電話口氏名</strong></td><td>お電話されている方のお名前を伺います。「私はたなかたろうです」のようにフルネームでお話しください。</td></tr>
+<tr><td><strong>本人との関係</strong></td><td>ご本人様との関係を教えてください。</td></tr>
+<tr><td><strong>用件</strong></td><td>ご用件を、次の3つのうちの、いずれかでお話ください。1.「新規予約」、2.「予約変更」、3.「予約キャンセル」。それでは、お話ください。</td></tr>
+<tr><td><strong>受診歴</strong></td><td>当院への受診は初めてでしょうか？「はい」、または、「いいえ」でお答えください。</td></tr>
+<tr><td><strong>予約日</strong></td><td>現在予約されている日にちを「4月1日」のようにお話ください。</td></tr>
+<tr><td><strong>予約希望日</strong></td><td>予約希望時期を4月1日15時のように日付とお時間をお話ください。</td></tr>
+<tr><td><strong>症状</strong></td><td>現在の症状を教えてください。</td></tr>
+<tr><td><strong>END_受付完了_携帯</strong></td><td>かしこまりました。ご要望内容を確認し、3日以内にSMSか電話にて返答いたします。お電話ありがとうございました。それでは失礼します。</td></tr>
+<tr><td><strong>END_受付完了_固定</strong></td><td>かしこまりました。ご要望内容を確認し、3日以内にお電話にて返答いたします。お電話ありがとうございました。それでは失礼します。</td></tr>
+<tr><td><strong>END_ネット誘導</strong></td><td>申込みのページを、ショートメールでお送りします。メッセージのリンクを開き、はじめに「電話番号」で本人確認をしてください。そのあと、患者さまの情報を入力してください。お電話ありがとうございました。それでは失礼します。</td></tr>
+<tr><td><strong>END_聴取失敗</strong></td><td>申し訳ありません。回答が確認できませんでした。恐れ入りますが、祝日を除く、月曜日から金曜日の9時から17時へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますのでメモをご準備ください。電話番号は、0936913344です。それでは失礼します。</td></tr>
+</table>
+</div></div>
+</div>
+
+</div>
+<div class="footer">自動生成: VoiceBot Flow Builder | 八幡厚生病院 | 2026年04月17日</div>
+<script>
+document.querySelectorAll('.block-header').forEach(function(el){
+  el.addEventListener('click', function(){});
+});
+</script>
+</body>
+</html>

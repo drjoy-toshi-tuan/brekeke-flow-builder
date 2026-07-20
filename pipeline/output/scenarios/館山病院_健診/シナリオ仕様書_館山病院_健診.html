@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>シナリオ仕様書 — 館山病院 — 健診</title>
+<style>
+:root {
+  --primary:#2563eb; --primary-light:#eff6ff;
+  --success:#16a34a; --success-light:#f0fdf4;
+  --warning:#d97706; --warning-light:#fffbeb;
+  --danger:#dc2626;  --danger-light:#fef2f2;
+  --purple:#7c3aed;  --purple-light:#f3e8ff;
+  --gray-50:#f9fafb; --gray-100:#f3f4f6; --gray-200:#e5e7eb;
+  --gray-300:#d1d5db; --gray-500:#6b7280; --gray-700:#374151; --gray-900:#111827;
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:'Segoe UI','Hiragino Sans','Yu Gothic UI',sans-serif;
+       background:var(--gray-50); color:var(--gray-900); line-height:1.7; }
+.header { background:linear-gradient(135deg,#1e40af,#3b82f6); color:white;
+          padding:2.5rem 2rem; text-align:center; }
+.header h1 { font-size:1.8rem; font-weight:700; margin-bottom:0.4rem; }
+.header .sub { font-size:1.1rem; opacity:0.9; margin-bottom:0.5rem; }
+.header .meta { opacity:0.8; font-size:0.85rem; display:flex; flex-wrap:wrap;
+               justify-content:center; gap:1rem; }
+.header .meta span::before { content:''; margin-right:0.3rem; }
+.container { max-width:920px; margin:0 auto; padding:1.5rem; }
+.overview { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+            gap:1rem; margin:1.5rem 0; }
+.overview-card { background:white; border-radius:12px; padding:1.2rem;
+                 box-shadow:0 1px 3px rgba(0,0,0,.08); text-align:center; }
+.overview-card .num { font-size:2rem; font-weight:700; color:var(--primary); }
+.overview-card .label { font-size:0.82rem; color:var(--gray-500); margin-top:0.2rem; }
+.section { margin:1.5rem 0; }
+.section-title { font-size:1.2rem; font-weight:700; color:var(--gray-900);
+                 padding-bottom:0.5rem; border-bottom:2px solid var(--primary);
+                 margin-bottom:1rem; }
+.block { background:white; border-radius:12px; margin-bottom:0.8rem;
+         box-shadow:0 1px 3px rgba(0,0,0,.08); overflow:hidden; }
+.block-header { background:var(--gray-100); padding:0.8rem 1.2rem; cursor:pointer;
+               display:flex; align-items:center; gap:0.7rem; user-select:none;
+               transition:background 0.2s; }
+.block-header:hover { background:var(--gray-200); }
+.block-header .icon { font-size:1.2rem; }
+.block-header .title { font-weight:600; flex:1; }
+.block-header .chevron { transition:transform 0.25s; font-size:0.75rem; color:var(--gray-500); }
+.block.open .block-header .chevron { transform:rotate(90deg); }
+.block-body { display:none; padding:1.2rem; }
+.block.open .block-body { display:block; }
+.badge { font-size:0.72rem; padding:0.15rem 0.55rem; border-radius:999px; font-weight:600; }
+.badge-blue   { background:var(--primary-light); color:var(--primary); }
+.badge-green  { background:var(--success-light); color:var(--success); }
+.badge-orange { background:var(--warning-light); color:var(--warning); }
+.badge-red    { background:var(--danger-light);  color:var(--danger); }
+.badge-purple { background:var(--purple-light);  color:var(--purple); }
+.badge-gray   { background:var(--gray-100);      color:var(--gray-500); }
+.speech { background:var(--primary-light); border-left:4px solid var(--primary);
+          border-radius:0 8px 8px 0; padding:0.8rem 1rem; margin:0.5rem 0 0.5rem 2rem;
+          font-size:0.9rem; position:relative; }
+.speech::before { content:'\1F50A'; position:absolute; left:-2rem; top:0.65rem; font-size:1rem; }
+.speech .label { font-size:0.72rem; color:var(--gray-500); font-weight:600; margin-bottom:0.25rem; }
+.speech-missing { color:var(--gray-500); font-style:italic; }
+.info-box  { background:var(--warning-light); border-left:4px solid var(--warning);
+             padding:0.7rem 1rem; border-radius:0 8px 8px 0; margin:0.5rem 0; font-size:0.85rem; }
+.error-box { background:var(--danger-light);  border-left:4px solid var(--danger);
+             padding:0.7rem 1rem; border-radius:0 8px 8px 0; margin:0.5rem 0; font-size:0.85rem; }
+.purpose-box { background:white; border-radius:12px; padding:1.2rem 1.5rem;
+               box-shadow:0 1px 3px rgba(0,0,0,.08); margin:1.5rem 0;
+               font-size:0.9rem; color:var(--gray-700); line-height:1.8; }
+.purpose-box h3 { font-size:1rem; color:var(--gray-500); margin-bottom:0.5rem; }
+.diagram-box { background:#1e293b; color:#e2e8f0; border-radius:12px; padding:1.2rem;
+               margin:0.5rem 0; overflow-x:auto; }
+.diagram-box pre { font-family:'Consolas','Courier New',monospace; font-size:0.8rem;
+                   line-height:1.5; white-space:pre; }
+.htable { width:100%; border-collapse:collapse; font-size:0.88rem; margin:0.5rem 0; }
+.htable th { background:var(--gray-100); padding:0.55rem 0.9rem; text-align:left;
+             font-weight:600; font-size:0.8rem; color:var(--gray-500); }
+.htable td { padding:0.55rem 0.9rem; border-bottom:1px solid var(--gray-200); vertical-align:top; }
+.htable tr:last-child td { border-bottom:none; }
+.step-list { list-style:none; padding:0; margin:0; }
+.step-list li { padding:0.5rem 0 0.5rem 2.2rem; position:relative;
+               border-left:2px solid var(--gray-200); margin-left:0.8rem; }
+.step-list li::before { content:attr(data-n); position:absolute; left:-0.85rem; top:0.4rem;
+  width:1.5rem; height:1.5rem; border-radius:50%; background:var(--primary); color:white;
+  font-size:0.72rem; display:flex; align-items:center; justify-content:center; font-weight:700; }
+.step-list li:last-child { border-left-color:transparent; }
+.branch-chip { display:inline-block; background:var(--gray-100); border:1px solid var(--gray-200);
+               border-radius:6px; padding:0.15rem 0.5rem; font-size:0.78rem;
+               margin:0.15rem 0.15rem 0 0; }
+.meta-row { display:flex; flex-wrap:wrap; gap:0.5rem; margin-top:0.4rem; }
+.meta-chip { font-size:0.78rem; color:var(--gray-500);
+             background:var(--gray-100); border-radius:6px; padding:0.15rem 0.5rem; }
+.flow-chain { display:flex; flex-wrap:wrap; align-items:center; gap:0.3rem;
+              padding:0.8rem 0; justify-content:flex-start; }
+.flow-node { background:var(--primary-light); border:1.5px solid var(--primary);
+             border-radius:8px; padding:0.4rem 0.8rem; font-size:0.82rem;
+             font-weight:600; color:var(--primary); white-space:nowrap; }
+.flow-node.start { background:var(--success-light); border-color:var(--success); color:var(--success); }
+.flow-node.end   { background:var(--danger-light);  border-color:var(--danger);  color:var(--danger); }
+.flow-node.term  { background:var(--warning-light); border-color:var(--warning); color:var(--warning); }
+.flow-arrow { font-size:1rem; color:var(--gray-300); }
+.footer { text-align:center; color:var(--gray-500); font-size:0.78rem; padding:2rem 0; }
+</style>
+</head>
+<body>
+<div class="header"><h1>シナリオ仕様書</h1><div class="sub">館山病院 — 健診</div><div class="meta"><span>&#128197; 2026年04月10日</span><span>&#127760; demo環境</span></div></div>
+<div class="container">
+<div class="overview"><div class="overview-card"><div class="num">17</div><div class="label">聴取項目数</div></div><div class="overview-card"><div class="num">5</div><div class="label">サブフロー数</div></div><div class="overview-card"><div class="num">20</div><div class="label">コンテキスト項目数</div></div><div class="overview-card"><div class="num">2回</div><div class="label">最大リトライ回数</div></div></div>
+<div style="background:white;border-radius:12px;padding:0.9rem 1.5rem;box-shadow:0 1px 3px rgba(0,0,0,.08);margin:1rem 0;display:flex;flex-wrap:wrap;gap:1.2rem;align-items:center;font-size:0.88rem;color:var(--gray-700);"><span>&#128222; 電話番号: 0470-23-5030</span><span>&#128336; 受付時間: acceptance_times使用（具体的スケジュールはDr.JOY側設定）</span><span>&#127758; 環境: デモ環境</span></div>
+<div class="purpose-box"><h3>&#128269; シナリオの目的</h3><p>館山病院の健診予約専用AI電話。個人/企業を分岐し、予約・変更・キャンセル・問い合わせの4用件に対応する。予約ルートでは受診歴（初診/再診）・コース・予約希望日を聴取し、単独検査希望や当日予約は代表電話案内に誘導する。全用件で受診者（個人）または担当者（企業）の氏名・連絡先電話番号を聴取し、折り返し受付を自動化する。</p></div>
+<div class="section"><div class="section-title">フロー構成図</div>
+<div class="block"><div class="block-header"><span class="icon">&#128196;</span><span class="title">健診</span><span class="badge badge-blue">フロー図</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="diagram-box"><pre>======= 冒頭チェーン =======
+wait(2000ms)
+  → saveContextModel2DB
+  → incoming-classifier
+      ├── 非通知 → 完了フラグ_非通知(status=2, smsFlag=-1) → 非通知_アナウンス(TTS) → 切断
+      └── 通常/携帯/固定 → acceptance_times
+            ├── 時間外/TIMEOUT/ERROR → 完了フラグ_時間外(status=6, smsFlag=-1) → 時間外_アナウンス(TTS) → 切断
+            └── 受付可(true) → 冒頭_アナウンス(TTS)
+
+======= 個人企業確認 =======
+冒頭_アナウンス(TTS)
+  → 個人企業_確認(TTS) → 入力_個人企業確認(DTMF AmiVoice STT, max_dtmf_length=1)
+    → OpenAI_個人企業(generate_by_OpenAI)
+        ├── 個人 → 用件_確認
+        ├── 企業 → 用件_確認
+        └── NO_RESULT → リトライ_個人企業 → [Retry→個人企業_確認 / No more→用件_確認]
+
+======= 用件確認 =======
+用件_確認(TTS) → 入力_用件確認(DTMF AmiVoice STT, max_dtmf_length=1)
+  → OpenAI_用件(generate_by_OpenAI)
+      ├── 予約 → 予約ルート（予約_受診歴確認）
+      ├── 変更 → 変更ルート（変更_予約日）
+      ├── キャンセル → キャンセルルート（キャンセル_予約日）
+      ├── 問い合わせ → 問い合わせルート（問い合わせ_内容）
+      └── NO_RESULT → リトライ_用件 → [Retry→用件_確認 / No more→END_FAQ外_代表電話案内]
+
+======= 予約ルート =======
+予約_受診歴確認(TTS) → 入力_受診歴(AmiVoice STT)
+  → OpenAI_受診歴(generate_by_OpenAI)
+      ├── 初診 → 予約_コース聴取
+      ├── 再診 → 予約_前回コース確認(TTS) → 入力_前回コース(AmiVoice STT)
+      │           → OpenAI_前回コース → 予約_コース聴取
+      └── NO_RESULT → リトライ_受診歴 → [Retry / No more→予約_コース聴取]
+
+予約_コース聴取(TTS) → 入力_コース(AmiVoice STT)
+  → OpenAI_コース(generate_by_OpenAI)
+      ├── 単独検査 → END_単独検査対応不可チェーン
+      ├── {コース名} → 予約_希望日
+      └── NO_RESULT → リトライ_コース
+
+予約_希望日(TTS) → 入力_希望日(AmiVoice STT)
+  → OpenAI_予約希望日(generate_by_OpenAI)
+      ├── 当日 → END_当日予約不可_希望日チェーン
+      ├── {日付テキスト} → CMR_企業個人_予約
+      └── NO_RESULT → リトライ_予約希望日
+
+CMR_企業個人_予約(ContextMatchRouter: OpenAI_個人企業)
+  ├── 企業 → 予約_希望人数_企業(TTS) → 入力_希望人数_企業(AmiVoice STT)
+  │           → OpenAI_希望人数_企業 → 企業名_聴取(TTS) → 入力_企業名(AmiVoice STT)
+  │           → OpenAI_企業名 → ジャンプ_氏名聴取 → ジャンプ_電話番号聴取
+  └── 個人 → 予約_希望人数_個人(TTS) → 入力_希望人数_個人(AmiVoice STT)
+              → OpenAI_希望人数_個人 → ジャンプ_氏名聴取 → ジャンプ_生年月日聴取
+              → CMR_診察券_予約(ContextMatchRouter: OpenAI_受診歴)
+                    ├── 初診 → ジャンプ_電話番号聴取
+                    └── 再診/その他 → ジャンプ_診察券番号聴取 → ジャンプ_電話番号聴取
+
+[電話番号聴取サブフローから戻り]
+  → ジャンプ_RAG_終話前 → [RAG検索サブフローから戻り]
+  → ラスト_質問(TTS) → 入力_ラスト質問(AmiVoice STT)
+    → OpenAI_ラスト質問(generate_by_OpenAI)
+        ├── 単独検査 → END_単独検査対応不可チェーン
+        └── {テキスト} → END_終話チェーン(status=1, smsFlag=1)
+
+======= 変更ルート =======
+変更_予約日(TTS) → 入力_変更予約日(AmiVoice STT)
+  → OpenAI_変更予約日(generate_by_OpenAI)
+      ├── 当日 → END_当日予約不可_予約日チェーン
+      ├── {日付テキスト} → 変更_変更項目
+      └── NO_RESULT → リトライ_変更予約日
+
+変更_変更項目(TTS) → 入力_変更項目(AmiVoice STT)
+  → OpenAI_変更項目(generate_by_OpenAI)
+      ├── 変更内容 → 変更_変更内容(TTS) → 入力_変更内容(AmiVoice STT)
+      │               → OpenAI_変更内容
+      │                   ├── 単独検査 → END_単独検査対応不可チェーン
+      │                   └── {テキスト} → CMR_企業個人_変更
+      ├── 日程変更 → 変更_日程変更(TTS) → 入力_日程変更(AmiVoice STT)
+      │               → OpenAI_日程変更
+      │                   ├── 当日 → END_当日予約不可_希望日チェーン
+      │                   └── {テキスト} → CMR_企業個人_変更
+      └── NO_RESULT → リトライ_変更項目
+
+CMR_企業個人_変更(ContextMatchRouter: OpenAI_個人企業)
+  ├── 企業 → 企業名_聴取 → ジャンプ_氏名聴取 → ジャンプ_電話番号聴取
+  └── 個人 → ジャンプ_氏名聴取 → ジャンプ_生年月日聴取
+              → ジャンプ_診察券番号聴取 → ジャンプ_電話番号聴取
+→ ラスト質問 → END_終話
+
+======= キャンセルルート =======
+キャンセル_予約日(TTS) → 入力_キャンセル予約日(AmiVoice STT)
+  → OpenAI_キャンセル予約日
+      ├── 当日 → END_当日予約不可_予約日チェーン
+      ├── {日付テキスト} → キャンセル_希望日
+      └── NO_RESULT → リトライ_キャンセル予約日
+
+キャンセル_希望日(TTS) → 入力_キャンセル希望日(AmiVoice STT)
+  → OpenAI_キャンセル希望日
+      ├── 当日 → END_当日予約不可_希望日チェーン
+      ├── {日付テキスト} → CMR_企業個人_キャンセル
+      └── NO_RESULT → リトライ_キャンセル希望日
+
+CMR_企業個人_キャンセル(ContextMatchRouter: OpenAI_個人企業)
+  ├── 企業 → 企業名_聴取 → ジャンプ_氏名聴取 → ジャンプ_電話番号聴取
+  └── 個人 → ジャンプ_氏名聴取 → ジャンプ_生年月日聴取
+              → ジャンプ_診察券番号聴取 → ジャンプ_電話番号聴取
+→ ラスト質問 → END_終話
+
+======= 問い合わせルート =======
+問い合わせ_内容(TTS) → 入力_問い合わせ(AmiVoice STT)
+  → OpenAI_問い合わせ
+      ├── 単独検査 → END_単独検査対応不可チェーン
+      ├── {テキスト} → CMR_企業個人_問い合わせ
+      └── NO_RESULT → リトライ_問い合わせ
+
+CMR_企業個人_問い合わせ(ContextMatchRouter: OpenAI_個人企業)
+  ├── 企業 → 企業名_聴取 → ジャンプ_氏名聴取 → ジャンプ_電話番号聴取
+  └── 個人 → ジャンプ_氏名聴取 → ジャンプ_生年月日聴取
+              → ジャンプ_診察券番号聴取 → ジャンプ_電話番号聴取
+→ ラスト質問 → END_終話
+
+======= 終話チェーン =======
+END_終話: 完了フラグ_終話(status=1, smsFlag=1) → END_終話アナウンス(TTS) → 切断
+END_単独検査対応不可: 完了フラグ_単独検査(status=2, smsFlag=-1) → END_単独検査アナウンス(TTS) → 切断
+END_当日予約不可_予約日: 完了フラグ_当日予約日(status=2, smsFlag=-1) → END_当日予約不可_予約日アナウンス(TTS) → 切断
+END_当日予約不可_希望日: 完了フラグ_当日希望日(status=2, smsFlag=-1) → END_当日予約不可_希望日アナウンス(TTS) → 切断
+END_FAQ外_代表電話案内: 完了フラグ_FAQ外(status=2, smsFlag=-1) → END_FAQ外アナウンス(TTS) → 切断
+END_聴取失敗: 完了フラグ_聴取失敗(status=3, smsFlag=-1) → END_聴取失敗アナウンス(TTS) → 切断</pre></div>
+<div class="info-box">&#128161; 冒頭チェーン: wait → saveContextModel2DB → incoming-classifier → acceptance_times。
+企業個人分岐は複数箇所のContextMatchRouterでOpenAI_個人企業の出力を参照。
+診察券判定は予約ルートのみCMR_診察券_予約（OpenAI_受診歴参照）で初診をスキップ。
+変更/キャンセル/問い合わせの個人パスでは常に診察券聴取。</div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#128196;</span><span class="title">氏名聴取</span><span class="badge badge-blue">フロー図</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="diagram-box"><pre>docs/reference/bivr/samples/json/氏名聴取.json を完全コピー。
+フロー名プレフィックスのみ「館山病院$」に置換。構造・接続・スクリプトは一切変更不可。</pre></div>
+<div class="info-box">&#128161; CLAUDE.md Rule 9/11 準拠</div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#128196;</span><span class="title">生年月日聴取</span><span class="badge badge-blue">フロー図</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="diagram-box"><pre>docs/reference/bivr/samples/json/生年月日聴取_復唱あり.json を完全コピー。
+フロー名プレフィックスのみ「館山病院$」に置換。構造・接続・スクリプトは一切変更不可。</pre></div>
+<div class="info-box">&#128161; CLAUDE.md Rule 9/11 準拠。復唱あり</div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#128196;</span><span class="title">電話番号聴取</span><span class="badge badge-blue">フロー図</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="diagram-box"><pre>docs/reference/bivr/samples/json/電話番号聴取_復唱あり.json を完全コピー。
+フロー名プレフィックスのみ「館山病院$」に置換。構造・接続・スクリプトは一切変更不可。</pre></div>
+<div class="info-box">&#128161; CLAUDE.md Rule 9/10/11 準拠。復唱あり。termination=return</div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#128196;</span><span class="title">診察券番号聴取</span><span class="badge badge-blue">フロー図</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="diagram-box"><pre>docs/reference/bivr/samples/json/診察券番号聴取.json を完全コピー。
+フロー名プレフィックスのみ「館山病院$」に置換。構造・接続・スクリプトは一切変更不可。</pre></div>
+<div class="info-box">&#128161; CLAUDE.md Rule 9/11 準拠</div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#128196;</span><span class="title">RAG検索</span><span class="badge badge-blue">フロー図</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="diagram-box"><pre>docs/reference/bivr/samples/json/RAG検索.json を完全コピー。
+フロー名プレフィックスのみ「館山病院$」に置換。構造・接続・スクリプトは一切変更不可。</pre></div>
+<div class="info-box">&#128161; CLAUDE.md Rule 16 準拠。パターン3: 問い合わせルート内+全終話前</div>
+</div></div>
+</div>
+<div class="section"><div class="section-title">聴取ステップ詳細</div>
+<div class="block"><div class="block-header"><span class="icon">&#127908;</span><span class="title">個人企業確認</span><span class="badge badge-blue">Step 1</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="speech"><div class="label">AIが話す内容</div><span class="speech-missing">（IVRプロパティ未設定）</span></div>
+<div class="meta-row"><span class="meta-chip">STT: DTMF_AmiVoice</span><span class="meta-chip">リトライ: 1回</span></div>
+<div style="margin-top:0.5rem;">&#128204; 出力ラベル: <span class="branch-chip">個人</span> <span class="branch-chip">企業</span></div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#127908;</span><span class="title">用件確認</span><span class="badge badge-blue">Step 2</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="speech"><div class="label">AIが話す内容</div><span class="speech-missing">（IVRプロパティ未設定）</span></div>
+<div class="meta-row"><span class="meta-chip">STT: DTMF_AmiVoice</span><span class="meta-chip">リトライ: 1回</span></div>
+<div style="margin-top:0.5rem;">&#128204; 出力ラベル: <span class="branch-chip">予約</span> <span class="branch-chip">変更</span> <span class="branch-chip">キャンセル</span> <span class="branch-chip">問い合わせ</span></div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#127908;</span><span class="title">受診歴確認</span><span class="badge badge-blue">Step 3</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="speech"><div class="label">AIが話す内容</div><span class="speech-missing">（IVRプロパティ未設定）</span></div>
+<div class="meta-row"><span class="meta-chip">STT: AmiVoice_STT</span><span class="meta-chip">リトライ: 2回</span></div>
+<div style="margin-top:0.5rem;">&#128204; 出力ラベル: <span class="branch-chip">初診</span> <span class="branch-chip">再診</span></div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#127908;</span><span class="title">前回コース確認</span><span class="badge badge-blue">Step 4</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="speech"><div class="label">AIが話す内容</div><span class="speech-missing">（IVRプロパティ未設定）</span></div>
+<div class="meta-row"><span class="meta-chip">STT: AmiVoice_STT</span><span class="meta-chip">リトライ: 2回</span></div>
+<div style="margin-top:0.5rem;">&#128204; 出力ラベル: <span class="branch-chip">前回と同じ</span> <span class="branch-chip">前回と違う</span></div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#127908;</span><span class="title">コース聴取</span><span class="badge badge-blue">Step 5</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="speech"><div class="label">AIが話す内容</div><span class="speech-missing">（IVRプロパティ未設定）</span></div>
+<div class="meta-row"><span class="meta-chip">STT: AmiVoice_STT</span><span class="meta-chip">リトライ: 2回</span></div>
+<div style="margin-top:0.5rem;">&#128204; 出力ラベル: <span class="branch-chip">人間ドック</span> <span class="branch-chip">脳ドック</span> <span class="branch-chip">雇入時健診</span> <span class="branch-chip">生活習慣病健診</span> <span class="branch-chip">法定健診A_B</span> <span class="branch-chip">特定健診</span> <span class="branch-chip">協会一般健診</span> <span class="branch-chip">AI認知症予防検査</span> <span class="branch-chip">単独検査</span></div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#127908;</span><span class="title">予約希望日</span><span class="badge badge-blue">Step 6</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="speech"><div class="label">AIが話す内容</div><span class="speech-missing">（IVRプロパティ未設定）</span></div>
+<div class="meta-row"><span class="meta-chip">STT: AmiVoice_STT</span><span class="meta-chip">リトライ: 2回</span></div>
+<div style="margin-top:0.5rem;">&#128204; 出力ラベル: <span class="branch-chip">当日</span> <span class="branch-chip">日付テキスト</span></div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#127908;</span><span class="title">希望人数_個人</span><span class="badge badge-blue">Step 7</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="speech"><div class="label">AIが話す内容</div><span class="speech-missing">（IVRプロパティ未設定）</span></div>
+<div class="meta-row"><span class="meta-chip">STT: AmiVoice_STT</span><span class="meta-chip">リトライ: 2回</span></div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#127908;</span><span class="title">希望人数_企業</span><span class="badge badge-blue">Step 8</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="speech"><div class="label">AIが話す内容</div><span class="speech-missing">（IVRプロパティ未設定）</span></div>
+<div class="meta-row"><span class="meta-chip">STT: AmiVoice_STT</span><span class="meta-chip">リトライ: 2回</span></div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#127908;</span><span class="title">企業名聴取</span><span class="badge badge-blue">Step 9</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="speech"><div class="label">AIが話す内容</div><span class="speech-missing">（IVRプロパティ未設定）</span></div>
+<div class="meta-row"><span class="meta-chip">STT: AmiVoice_STT</span><span class="meta-chip">リトライ: 2回</span></div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#127908;</span><span class="title">変更_予約日</span><span class="badge badge-blue">Step 10</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="speech"><div class="label">AIが話す内容</div><span class="speech-missing">（IVRプロパティ未設定）</span></div>
+<div class="meta-row"><span class="meta-chip">STT: AmiVoice_STT</span><span class="meta-chip">リトライ: 2回</span></div>
+<div style="margin-top:0.5rem;">&#128204; 出力ラベル: <span class="branch-chip">当日</span> <span class="branch-chip">日付テキスト</span></div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#127908;</span><span class="title">変更_変更項目</span><span class="badge badge-blue">Step 11</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="speech"><div class="label">AIが話す内容</div><span class="speech-missing">（IVRプロパティ未設定）</span></div>
+<div class="meta-row"><span class="meta-chip">STT: AmiVoice_STT</span><span class="meta-chip">リトライ: 2回</span></div>
+<div style="margin-top:0.5rem;">&#128204; 出力ラベル: <span class="branch-chip">変更内容</span> <span class="branch-chip">日程変更</span></div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#127908;</span><span class="title">変更_変更内容</span><span class="badge badge-blue">Step 12</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="speech"><div class="label">AIが話す内容</div><span class="speech-missing">（IVRプロパティ未設定）</span></div>
+<div class="meta-row"><span class="meta-chip">STT: AmiVoice_STT</span><span class="meta-chip">リトライ: 2回</span></div>
+<div style="margin-top:0.5rem;">&#128204; 出力ラベル: <span class="branch-chip">単独検査</span></div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#127908;</span><span class="title">変更_日程変更</span><span class="badge badge-blue">Step 13</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="speech"><div class="label">AIが話す内容</div><span class="speech-missing">（IVRプロパティ未設定）</span></div>
+<div class="meta-row"><span class="meta-chip">STT: AmiVoice_STT</span><span class="meta-chip">リトライ: 2回</span></div>
+<div style="margin-top:0.5rem;">&#128204; 出力ラベル: <span class="branch-chip">当日</span> <span class="branch-chip">日付テキスト</span></div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#127908;</span><span class="title">キャンセル_予約日</span><span class="badge badge-blue">Step 14</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="speech"><div class="label">AIが話す内容</div><span class="speech-missing">（IVRプロパティ未設定）</span></div>
+<div class="meta-row"><span class="meta-chip">STT: AmiVoice_STT</span><span class="meta-chip">リトライ: 2回</span></div>
+<div style="margin-top:0.5rem;">&#128204; 出力ラベル: <span class="branch-chip">当日</span> <span class="branch-chip">日付テキスト</span></div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#127908;</span><span class="title">キャンセル_希望日</span><span class="badge badge-blue">Step 15</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="speech"><div class="label">AIが話す内容</div><span class="speech-missing">（IVRプロパティ未設定）</span></div>
+<div class="meta-row"><span class="meta-chip">STT: AmiVoice_STT</span><span class="meta-chip">リトライ: 2回</span></div>
+<div style="margin-top:0.5rem;">&#128204; 出力ラベル: <span class="branch-chip">当日</span> <span class="branch-chip">日付テキスト</span></div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#127908;</span><span class="title">問い合わせ内容</span><span class="badge badge-blue">Step 16</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="speech"><div class="label">AIが話す内容</div><span class="speech-missing">（IVRプロパティ未設定）</span></div>
+<div class="meta-row"><span class="meta-chip">STT: AmiVoice_STT</span><span class="meta-chip">リトライ: 2回</span></div>
+<div style="margin-top:0.5rem;">&#128204; 出力ラベル: <span class="branch-chip">単独検査</span></div>
+</div></div>
+<div class="block"><div class="block-header"><span class="icon">&#127908;</span><span class="title">ラスト質問</span><span class="badge badge-blue">Step 17</span><span class="chevron">&#9654;</span></div><div class="block-body"><div class="speech"><div class="label">AIが話す内容</div><span class="speech-missing">（IVRプロパティ未設定）</span></div>
+<div class="meta-row"><span class="meta-chip">STT: AmiVoice_STT</span><span class="meta-chip">リトライ: 2回</span></div>
+<div style="margin-top:0.5rem;">&#128204; 出力ラベル: <span class="branch-chip">単独検査</span></div>
+</div></div>
+</div>
+<div class="section"><div class="section-title">終話パターン</div>
+<div class="block"><div class="block-header"><span class="icon">&#128682;</span><span class="title">終話パターン一覧</span><span class="badge badge-red">8パターン</span><span class="chevron">&#9654;</span></div><div class="block-body"><table class="htable"><tr><th>パターン名</th><th>発生条件</th><th>アナウンス内容</th></tr><tr><td><strong>END_非通知</strong> <span class="badge badge-purple">SMS送信</span></td><td style="font-size:0.8rem;color:var(--gray-500);">非通知着信</td><td style="font-size:0.85rem;">恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</td></tr><tr><td><strong>END_時間外</strong> <span class="badge badge-purple">SMS送信</span></td><td style="font-size:0.8rem;color:var(--gray-500);">受付時間外</td><td style="font-size:0.85rem;">お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</td></tr><tr><td><strong>END_聴取失敗</strong> <span class="badge badge-purple">SMS送信</span></td><td style="font-size:0.8rem;color:var(--gray-500);">リトライ上限到達（電話番号聴取等）</td><td style="font-size:0.85rem;">申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。</td></tr><tr><td><strong>END_終話</strong> <span class="badge badge-purple">SMS送信</span></td><td style="font-size:0.8rem;color:var(--gray-500);">全聴取完了（予約/変更/キャンセル/問い合わせの全ルート共通）</td><td style="font-size:0.85rem;">かしこまりました。お申し込みを受付いたしました。内容を確認のうえ、3診療日以内に折り返しご連絡いたします。お電話ありがとうございました。それでは失礼いたします。</td></tr><tr><td><strong>END_単独検査対応不可</strong> <span class="badge badge-purple">SMS送信</span></td><td style="font-size:0.8rem;color:var(--gray-500);">コース聴取/変更内容/問い合わせ内容/ラスト質問で単独検査と判定</td><td style="font-size:0.85rem;">単独検査については、AI電話では対応できません。恐れ入りますが、代表電話「0470-23-5030」へおかけ直しください。それでは失礼いたします。</td></tr><tr><td><strong>END_当日予約不可_予約日</strong> <span class="badge badge-purple">SMS送信</span></td><td style="font-size:0.8rem;color:var(--gray-500);">変更/キャンセルの予約日が着信当日</td><td style="font-size:0.85rem;">当日のご予約についてはAI電話ではご対応できませんので、代表電話の「TODO_要確認」におかけ直しください。</td></tr><tr><td><strong>END_当日予約不可_希望日</strong> <span class="badge badge-purple">SMS送信</span></td><td style="font-size:0.8rem;color:var(--gray-500);">予約希望日/キャンセル希望日/日程変更希望日が着信当日</td><td style="font-size:0.85rem;">当日のご予約についてはAI電話ではご対応できませんので、代表電話の「0470-23-5030」におかけ直しください。</td></tr><tr><td><strong>END_FAQ外_代表電話案内</strong> <span class="badge badge-purple">SMS送信</span></td><td style="font-size:0.8rem;color:var(--gray-500);">用件確認のリトライ上限到達</td><td style="font-size:0.85rem;">ご質問いただいた内容はAI電話ではご対応できませんので、代表電話の「0470-23-5030」におかけ直しください。</td></tr></table></div></div>
+</div>
+<div class="section"><div class="section-title">Dr.JOY コンテキストフィールド</div>
+<div class="block"><div class="block-header"><span class="icon">&#128196;</span><span class="title">コンテキストフィールド一覧</span><span class="badge badge-blue">20フィールド</span><span class="chevron">&#9654;</span></div><div class="block-body"><table class="htable"><tr><th>フィールド名</th><th>表示タイプ</th><th>選択肢</th><th>編集可</th><th>備考</th></tr><tr><td><strong>区分</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">classification</code></td><td><span class="meta-chip">CLASSIFICATION</span></td><td style="font-size:0.82rem;">初診, 再診, 変更, キャンセル, 問い合わせ</td><td style="text-align:center;">&#10003;</td><td style="font-size:0.8rem;color:var(--gray-500);">用件区分。予約ルートでは受診歴確認後に初診/再診に更新</td></tr><tr><td><strong>氏名</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">patientName</code></td><td><span class="meta-chip">TEXT</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">&#10003;</td><td style="font-size:0.8rem;color:var(--gray-500);">個人=受診者名、企業=担当者名。氏名聴取サブフローで聴取</td></tr><tr><td><strong>診察券番号</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">medicalCardNumber</code></td><td><span class="meta-chip">NUMBER</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">&#10003;</td><td style="font-size:0.8rem;color:var(--gray-500);">個人パスかつ初診以外のみ聴取。8桁以内。診察券番号聴取サブフロー</td></tr><tr><td><strong>生年月日</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">patientDateOfBirth</code></td><td><span class="meta-chip">DATE_OF_BIRTH</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">&#10003;</td><td style="font-size:0.8rem;color:var(--gray-500);">個人パスのみ。生年月日聴取サブフロー（復唱あり）</td></tr><tr><td><strong>電話番号（着信）</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">telephoneNumber</code></td><td><span class="meta-chip">PHONE_NUMBER_CALL</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">&#10003;</td><td style="font-size:0.8rem;color:var(--gray-500);">着信番号自動格納</td></tr><tr><td><strong>連絡先電話番号</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">additionalPhoneNumber</code></td><td><span class="meta-chip">PHONE_NUMBER</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">&#10003;</td><td style="font-size:0.8rem;color:var(--gray-500);">電話番号聴取サブフローで聴取</td></tr><tr><td><strong>状態</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">status</code></td><td><span class="meta-chip">STATUS</span></td><td style="font-size:0.82rem;">未処理, 代表案内, 聴取失敗, 時間外</td><td style="text-align:center;">&#10003;</td><td style="font-size:0.8rem;color:var(--gray-500);">1=正常完了(未処理) 2=代表案内(単独検査/当日予約/FAQ外) 3=聴取失敗 6=時間外</td></tr><tr><td><strong>受電日時</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">dateOfCall</code></td><td><span class="meta-chip">DATE</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">&#10003;</td><td style="font-size:0.8rem;color:var(--gray-500);"></td></tr><tr><td><strong>通話ID</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">callId</code></td><td><span class="meta-chip">TEXT</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">&#10003;</td><td style="font-size:0.8rem;color:var(--gray-500);"></td></tr><tr><td><strong>個人企業区分</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">company_check</code></td><td><span class="meta-chip">TEXT</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">—</td><td style="font-size:0.8rem;color:var(--gray-500);">冒頭で聴取。個人 or 企業</td></tr><tr><td><strong>受診歴</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">Medical_history</code></td><td><span class="meta-chip">TEXT</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">—</td><td style="font-size:0.8rem;color:var(--gray-500);">予約ルートのみ。初めて or 2回目以降</td></tr><tr><td><strong>前回コース確認</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">checking_details</code></td><td><span class="meta-chip">TEXT</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">—</td><td style="font-size:0.8rem;color:var(--gray-500);">予約・再診ルートのみ。前回と同じ or 前回と違う</td></tr><tr><td><strong>受診希望コース</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">course</code></td><td><span class="meta-chip">TEXT</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">—</td><td style="font-size:0.8rem;color:var(--gray-500);">予約ルートのみ。人間ドック/脳ドック/雇入時健診/生活習慣病健診/法定健診A_B/特定健診/協会一般健診/AI認知症予防検査 等</td></tr><tr><td><strong>変更項目</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">change_item</code></td><td><span class="meta-chip">TEXT</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">—</td><td style="font-size:0.8rem;color:var(--gray-500);">変更ルートのみ。変更内容 or 日程変更</td></tr><tr><td><strong>現在の予約日</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">reservationDate</code></td><td><span class="meta-chip">DATE</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">—</td><td style="font-size:0.8rem;color:var(--gray-500);">変更/キャンセルルートのみ</td></tr><tr><td><strong>予約希望日</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">Preferred_date</code></td><td><span class="meta-chip">TEXT</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">—</td><td style="font-size:0.8rem;color:var(--gray-500);">予約ルート: 予約希望日。キャンセルルート: 次回希望日。フリーワード格納</td></tr><tr><td><strong>理由/問い合わせ内容</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">reason</code></td><td><span class="meta-chip">TEXT</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">—</td><td style="font-size:0.8rem;color:var(--gray-500);">変更ルート: 変更内容/日程変更希望日。問い合わせルート: 問い合わせ内容</td></tr><tr><td><strong>希望人数</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">reason2</code></td><td><span class="meta-chip">TEXT</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">—</td><td style="font-size:0.8rem;color:var(--gray-500);">予約ルートのみ。個人: 家族の有無。企業: 人数</td></tr><tr><td><strong>ラスト質問</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">reason3</code></td><td><span class="meta-chip">TEXT</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">—</td><td style="font-size:0.8rem;color:var(--gray-500);">全ルート共通。健診センターへのその他伝言</td></tr><tr><td><strong>企業名</strong><br><code style="font-size:0.75rem;color:var(--gray-500);">company_name</code></td><td><span class="meta-chip">TEXT</span></td><td style="font-size:0.82rem;">—</td><td style="text-align:center;">—</td><td style="font-size:0.8rem;color:var(--gray-500);">企業パスのみ</td></tr></table><p style="margin-top:0.5rem;font-size:0.78rem;color:var(--gray-500);">※ Dr.JOY 管理画面の通話詳細ページに表示される項目です。</p></div></div>
+</div>
+</div>
+<div class="footer">自動生成: VoiceBot Flow Builder &nbsp;|&nbsp; 館山病院 &nbsp;|&nbsp; 2026年04月10日</div>
+<script>
+document.querySelectorAll('.block-header').forEach(function(h) {
+  h.addEventListener('click', function() {
+    h.parentElement.classList.toggle('open');
+  });
+});
+</script>
+</body>
+</html>

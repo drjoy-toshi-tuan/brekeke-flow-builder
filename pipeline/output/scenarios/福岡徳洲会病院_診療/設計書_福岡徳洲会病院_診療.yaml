@@ -1,0 +1,1474 @@
+# 設計書 -- 福岡徳洲会病院 診療
+# 生成元: @director エージェント
+# 生成日: 2026-05-01
+# 元資料: commubo抽出/【052】福岡徳洲会病院/【0077福岡徳洲会病院】診療1_M_本番/
+# 移管ノート: docs/migration/gen1_福岡徳洲会病院_診療.md
+# 作業種別: Gen1→Gen3 移管
+# 備考: 徳洲会グループ「診療」シナリオ 4 施設目（湘南藤沢/八尾/札幌 起草済）。
+#       八尾と同じく **新規予約フローを持たない**（用件 3 分岐: 変更 / キャンセル / 確認）。
+#       新規（DTMF 4）は専用 termination「新規予約は受付できません、代表電話へ」案内。
+#       診療科聴取は厚みあり（分岐あり診療科 = 呼吸器・脳神経・産婦人科の内/外/科分岐）。
+
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "福岡徳洲会病院"
+  scenario_name: "診療"
+  group_name: "福岡徳洲会病院"
+  flow_name: "福岡徳洲会病院$診療"
+  target_facility: "福岡徳洲会病院（本院のみ）"
+  office_id: "TODO_要確認"
+  phone_number: "092-573-6622"
+  business_hours: "祝日除く、月〜金 8:00〜20:00"
+  flow_type: "subflow"
+  work_type: "gen1_migration"
+  environment: "prod"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+# CLAUDE.md Rule 9 準拠: 個人情報聴取（氏名/生年月日/電話番号/診察券番号）は静的サブフロー JSON を完全コピー。
+# フロー名プレフィックスのみ「福岡徳洲会病院$」に置換。構造・接続・スクリプトの変更は禁止。
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "福岡徳洲会病院$診療"
+      role: "main"
+      description: |
+        冒頭チェーン → 用件聴取（変更/キャンセル/確認/新規）
+          → 新規 → END_新規受付不可
+          → 変更/キャンセル/確認 → 診療科聴取（分岐あり診療科は内/外/科を再聴取）
+            → 用件別聴取（追加診療科 → 予約日 → 理由 → 変更希望日 / 確認_内容）
+              → 個人情報サブフロー連鎖（診察券→氏名→生年月日→電話番号）
+                → 用件別終話（変更/キャンセル/確認 で TTS 冒頭文言が異なる）
+
+  subflows:
+    - name: "福岡徳洲会病院$診察券番号聴取"
+      target: "診察券番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。静的JSONコピー。「わからない」分岐あり"
+
+    - name: "福岡徳洲会病院$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。静的JSONコピー。Gen1 仕様: 氏名は復唱しない"
+
+    - name: "福岡徳洲会病院$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。静的JSONコピー。和暦/西暦判定 + DOB Re-confirmation あり"
+
+    - name: "福岡徳洲会病院$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。静的JSONコピー。incoming-classifier→携帯確認/連絡先聴取→Phone Normalization→復唱確認→携帯判別→結果返却"
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  福岡徳洲会病院の予約専用 AI 電話に着信した患者から、用件（変更/キャンセル/確認）と
+  診療科・予約情報・個人情報（診察券・氏名・生年月日・連絡先）を聴取し、
+  3 診療日以内の折り返し受付を自動化する。新規予約・健康診断・歯科口腔外科・リハビリ科・
+  ペインクリニックは AI 電話受付対象外であり、各専用案内に誘導して終話する。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "福岡徳洲会病院$診療"
+    diagram: |
+      冒頭(wait 2000ms)
+        → コンテキスト設定(saveContextModel2DB)
+          → 着信電話番号分類(incoming-classifier)
+              ├─ 非通知 → END_非通知(TTS) → 完了フラグ_非通知(status=2) → 切断
+              └─ 通常   → 営業時間判定(date_of_call_classifier: 平日8〜20時 + 祝日/年末年始除外)
+                            ├─ 時間外 → END_時間外(TTS) → 完了フラグ_時間外(status=6) → 切断
+                            └─ 受付可 → 冒頭_アナウンス(TTS=「お電話ありがとうございます。福岡徳洲会病院の、予約専用、AI電話です。」)
+
+      ─── 用件聴取 ───
+      冒頭_アナウンス → 用件聴取(TTS、DTMF 1=変更/2=キャンセル/3=確認/4=新規)
+        → OpenAI_用件聴取（echo_back=true で復唱確認）
+            ├─ 変更       → 診療科聴取
+            ├─ キャンセル → 診療科聴取
+            ├─ 確認       → 診療科聴取
+            ├─ 新規       → END_新規受付不可
+            └─ NO_RESULT  → リトライ → 上限到達 → END_聴取失敗
+
+      ─── 診療科聴取（enum、no_result_default=登録なし、echo_back=true）───
+      診療科聴取 → OpenAI_診療科聴取
+        ├─ 健康診断             → END_健康診断代表案内
+        ├─ 歯科口腔外科         → END_転送案内_歯科口腔外科リハビリ
+        ├─ リハビリテーション科 → END_転送案内_歯科口腔外科リハビリ
+        ├─ ペインクリニック     → END_麻酔科代表電話案内
+        ├─ 呼吸器               → 呼吸器分岐確認（内科/外科を再聴取）
+        ├─ 脳神経               → 脳神経分岐確認（内科/外科を再聴取）
+        ├─ 産婦人科             → 産婦人科分岐確認（産科/婦人科を再聴取）
+        └─ other（通常科 30+ / 登録なし） → 追加診療科聴取
+
+      ─── 分岐確認サブステップ（呼吸器/脳神経/産婦人科）───
+      呼吸器分岐確認(TTS=「呼吸器内科と呼吸器外科の、どちらですか?」)
+        → OpenAI_呼吸器分岐確認 (echo_back=true)
+            ├─ 呼吸器内科 / 呼吸器外科 → 追加診療科聴取
+            └─ other（否定）          → 用件聴取（再開）
+      脳神経分岐確認・産婦人科分岐確認も同様（産婦人科は産科/婦人科）。
+
+      ─── 追加診療科聴取（全用件共通、フリーテキスト保存）───
+      追加診療科聴取(TTS=「他に診療科があればおっしゃってください。ない場合は、ありません、とおっしゃってください。」)
+        → OpenAI_追加診療科聴取（output_format=text、reason 系コンテキストへ保存）
+            → 用件分岐_次（ContextMatchRouter on classification）
+                ├─ 確認                → 確認_内容聴取
+                └─ other（変更/キャンセル）→ 予約日聴取
+
+      ─── 確認ルート ───
+      確認_内容聴取(TTS=「ご確認内容についてお伺いします。」, output_format=text)
+        → サブフロー連鎖（診察券→氏名→生年月日→電話番号）→ END_受付完了_確認
+
+      ─── 変更/キャンセルルート ───
+      予約日聴取(TTS=「現在の予約日を「4月1日」のように日付でお話ください。」, output_format=datetime)
+        → 用件分岐_理由（ContextMatchRouter on classification）
+            ├─ 変更       → 理由_変更(TTS=「変更の理由をおっしゃってください。」, text)
+            │                  → 変更希望日聴取(TTS=「予約希望日をおっしゃってください。」, datetime)
+            │                       → サブフロー連鎖 → END_受付完了_変更
+            └─ other（キャンセル）→ 理由_キャンセル(TTS=「キャンセルの理由をおっしゃってください。」, text)
+                                       → サブフロー連鎖 → END_受付完了_キャンセル
+
+      ─── サブフロー連鎖（変更/キャンセル/確認 共通） ───
+      jump_診察券番号聴取
+        → jump_氏名聴取
+          → jump_生年月日聴取
+            → jump_電話番号聴取
+              → 用件分岐_終話(ContextMatchRouter on classification)
+                  ├─ 変更       → END_受付完了_変更
+                  ├─ キャンセル → END_受付完了_キャンセル
+                  └─ other（確認）→ END_受付完了_確認
+
+      ─── 終話パターン（status / smsFlag）───
+      END_受付完了_変更        : status=1, smsFlag=1
+      END_受付完了_キャンセル  : status=1, smsFlag=1
+      END_受付完了_確認        : status=1, smsFlag=1
+      END_新規受付不可         : status=2, smsFlag=-1
+      END_転送案内_歯科口腔外科リハビリ : status=2, smsFlag=-1
+      END_麻酔科代表電話案内   : status=2, smsFlag=-1
+      END_健康診断代表案内     : status=2, smsFlag=-1
+      END_非通知               : status=2, smsFlag=-1
+      END_時間外               : status=6, smsFlag=-1
+      END_聴取失敗             : status=2, smsFlag=-1
+
+    notes: |
+      - 八尾徳洲会と同様に新規予約フローは持たない。新規発話は END_新規受付不可 へ流す。
+      - 用件 3 つ（変更/キャンセル/確認）の終話 TTS は冒頭文言が異なるが「3 診療日以内の折り返し」部分は完全一致。
+        携帯/固定で TTS 分岐させる方式（札幌・湘南藤沢式）は採用しない。
+      - 分岐あり診療科（呼吸器・脳神経・産婦人科）は echo_back=true で内/外/科を再聴取し、否定で用件聴取に戻す。
+      - 確認用件では予約日・理由・変更希望日をスキップし、追加診療科聴取後に確認_内容聴取（フリーテキスト）を挟む。
+      - 営業時間判定は date_of_call_classifier で「祝日除く + 12/26〜1/4 年末年始除外 + 平日 8:00〜20:00」を判定。
+        年末年始の専用 TTS は元資料に記載があるが、Gen3 では一旦 END_時間外 に集約する（NON-BLOCKER で要確認）。
+
+  - flow_name: "福岡徳洲会病院$診察券番号聴取"
+    diagram: |
+      ★★★ 完全コピー対象（CLAUDE.md Rule 9） ★★★
+      docs/reference/bivr/samples/json/診察券番号聴取.json を完全コピー。
+      フロー名プレフィックスのみ「福岡徳洲会病院$」に置換。構造・接続・スクリプトは一切変更不可。
+    notes: "「わからない」分岐あり。8 桁以内の数字 or DTMF 受付。Gen1 元資料も同等仕様"
+
+  - flow_name: "福岡徳洲会病院$氏名聴取"
+    diagram: |
+      ★★★ 完全コピー対象（CLAUDE.md Rule 9） ★★★
+      docs/reference/bivr/samples/json/氏名聴取.json を完全コピー。
+      フロー名プレフィックスのみ「福岡徳洲会病院$」に置換。構造・接続・スクリプトは一切変更不可。
+    notes: "復唱なし。Gen1 元資料も同等仕様"
+
+  - flow_name: "福岡徳洲会病院$生年月日聴取"
+    diagram: |
+      ★★★ 完全コピー対象（CLAUDE.md Rule 9） ★★★
+      docs/reference/bivr/samples/json/生年月日聴取_復唱あり.json を完全コピー。
+      フロー名プレフィックスのみ「福岡徳洲会病院$」に置換。構造・接続・スクリプトは一切変更不可。
+    notes: "和暦/西暦自動判定 + DOB Re-confirmation あり。DTMF 8 桁西暦も受付。Gen1 元資料も同等仕様"
+
+  - flow_name: "福岡徳洲会病院$電話番号聴取"
+    diagram: |
+      ★★★ 完全コピー対象（CLAUDE.md Rule 9） ★★★
+      docs/reference/bivr/samples/json/電話番号聴取_復唱あり.json を完全コピー。
+      フロー名プレフィックスのみ「福岡徳洲会病院$」に置換。構造・接続・スクリプトは一切変更不可。
+    notes: "incoming-classifier→携帯確認/連絡先聴取→Phone Normalization→復唱確認→携帯判別→結果返却"
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭（opening + 冒頭_アナウンス は 2 ブロック 1 セット必須）---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: false       # 受付時間判定は date_of_call_classifier ブロックで実施
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 営業時間判定
+
+  # --- 営業時間 + 祝日 + 年末年始判定（カレンダー Script + date_of_call_classifier 相当）---
+  # 元資料 時間判断.yaml の「祝日チェック → 年末年始(12/26〜1/4) → 平日 8〜20 時」相当を表現する。
+  # 平日 8〜20 時の判定は business_hours Script テンプレートで実装する（カレンダー必須 = director.md 準拠）。
+  - step: 営業時間判定
+    type: script
+    script_template: "business_hours"
+    template_params:
+      START_HOUR: 8
+      END_HOUR: 20
+      INCLUDE_WEEKEND: false
+      INCLUDE_HOLIDAYS: false        # 祝日は時間外扱い
+    conditions:
+      - match: "SUCCESS"             # 平日 8:00〜20:00 + 非祝日 + 非年末年始
+        next: 用件聴取
+      - match: "other"               # 時間外 / 祝日 / 年末年始
+        next: END_時間外
+    notes: |
+      平日 8:00〜20:00 + 非祝日 + 非年末年始 (12/26〜1/4) のときに SUCCESS。
+      Gen1 元資料には年末年始の専用 TTS があるが、Gen3 ではまず END_時間外 に集約する。
+      年末年始の独立終話（END_年末年始）が必要な場合は customer 確認後に追加（NON-BLOCKER）。
+
+  # --- 用件聴取（DTMF 1=変更 / 2=キャンセル / 3=確認 / 4=新規。echo_back あり）---
+  - step: 用件聴取
+    type: hearing
+    output_format: enum
+    echo_back: true
+    save_to: classification
+    conditions:
+      - match: "変更"
+        next: 診療科聴取
+      - match: "キャンセル"
+        next: 診療科聴取
+      - match: "確認"
+        next: 診療科聴取
+      - match: "新規"
+        next: END_新規受付不可
+      - match: "other"
+        next: END_聴取失敗
+
+  # --- 診療科聴取（enum、no_result_default=登録なし、echo_back=true）---
+  # 33 通常科 + 3 上位カテゴリ（呼吸器/脳神経/産婦人科） + 4 専用終話誘導科
+  # 元資料 診療科聴取.yaml のエンティティ「01_00_分岐なし診療科」+「00_00_分岐あり診療科」+「00_01_分岐あり診療科」を統合
+  - step: 診療科聴取
+    type: hearing
+    output_format: enum
+    echo_back: true
+    save_to: clinicalDepartment
+    no_result_default: "登録なし"
+    conditions:
+      - match: "健康診断"
+        next: END_健康診断代表案内
+      - match: "歯科口腔外科"
+        next: END_転送案内_歯科口腔外科リハビリ
+      - match: "リハビリテーション科"
+        next: END_転送案内_歯科口腔外科リハビリ
+      - match: "ペインクリニック"
+        next: END_麻酔科代表電話案内
+      - match: "呼吸器"
+        next: 呼吸器分岐確認
+      - match: "脳神経"
+        next: 脳神経分岐確認
+      - match: "産婦人科"
+        next: 産婦人科分岐確認
+      - match: "other"               # 通常 30+ 科 / 呼吸器内科/外科 / 脳神経内科/外科 / 産科 / 婦人科 / 登録なし
+        next: 追加診療科聴取
+
+  # --- 呼吸器分岐確認（内/外を再聴取、echo_back あり）---
+  - step: 呼吸器分岐確認
+    type: hearing
+    output_format: enum
+    echo_back: true
+    save_to: clinicalDepartment
+    conditions:
+      - match: "呼吸器内科"
+        next: 追加診療科聴取
+      - match: "呼吸器外科"
+        next: 追加診療科聴取
+      - match: "other"               # 否定 → 用件聴取に戻る
+        next: 用件聴取
+
+  - step: 脳神経分岐確認
+    type: hearing
+    output_format: enum
+    echo_back: true
+    save_to: clinicalDepartment
+    conditions:
+      - match: "脳神経内科"
+        next: 追加診療科聴取
+      - match: "脳神経外科"
+        next: 追加診療科聴取
+      - match: "other"
+        next: 用件聴取
+
+  - step: 産婦人科分岐確認
+    type: hearing
+    output_format: enum
+    echo_back: true
+    save_to: clinicalDepartment
+    conditions:
+      - match: "産科"
+        next: 追加診療科聴取
+      - match: "婦人科"
+        next: 追加診療科聴取
+      - match: "other"
+        next: 用件聴取
+
+  # --- 追加診療科聴取（フリーテキスト、全用件共通）---
+  - step: 追加診療科聴取
+    type: hearing
+    output_format: text
+    save_to: additionalDepartment
+    next: 用件分岐_次
+
+  # --- 用件分岐: 確認は内容聴取へ、変更/キャンセルは予約日聴取へ ---
+  - step: 用件分岐_次
+    type: context_match_router
+    reference_module: "OpenAI_用件聴取"
+    conditions:
+      - match: "確認"
+        next: 確認_内容聴取
+      - match: "other"               # 変更 / キャンセル
+        next: 予約日聴取
+
+  # --- 確認ルート: 内容聴取（フリーテキスト） ---
+  - step: 確認_内容聴取
+    type: hearing
+    output_format: text
+    save_to: details
+    next: jump_診察券番号聴取
+
+  # --- 変更/キャンセルルート: 予約日 → 理由（用件で TTS 異なる）→ (変更のみ)変更希望日 ---
+  - step: 予約日聴取
+    type: hearing
+    output_format: datetime
+    save_to: reservationDate
+    next: 用件分岐_理由
+
+  - step: 用件分岐_理由
+    type: context_match_router
+    reference_module: "OpenAI_用件聴取"
+    conditions:
+      - match: "変更"
+        next: 理由_変更
+      - match: "other"               # キャンセル
+        next: 理由_キャンセル
+
+  - step: 理由_変更
+    type: hearing
+    output_format: text
+    save_to: reason
+    next: 変更希望日聴取
+
+  - step: 理由_キャンセル
+    type: hearing
+    output_format: text
+    save_to: reason
+    next: jump_診察券番号聴取
+
+  - step: 変更希望日聴取
+    type: hearing
+    output_format: datetime
+    save_to: desiredDate
+    next: jump_診察券番号聴取
+
+  # --- 個人情報サブフロー連鎖（診察券→氏名→生年月日→電話番号）---
+  - step: jump_診察券番号聴取
+    type: subflow
+    flowname: "福岡徳洲会病院$診察券番号聴取"
+    next: jump_氏名聴取
+
+  - step: jump_氏名聴取
+    type: subflow
+    flowname: "福岡徳洲会病院$氏名聴取"
+    next: jump_生年月日聴取
+
+  - step: jump_生年月日聴取
+    type: subflow
+    flowname: "福岡徳洲会病院$生年月日聴取"
+    next: jump_電話番号聴取
+
+  - step: jump_電話番号聴取
+    type: subflow
+    flowname: "福岡徳洲会病院$電話番号聴取"
+    next: 用件分岐_終話
+
+  # --- 用件で終話 TTS の冒頭が異なるため classification で分岐 ---
+  - step: 用件分岐_終話
+    type: context_match_router
+    reference_module: "OpenAI_用件聴取"
+    conditions:
+      - match: "変更"
+        next: END_受付完了_変更
+      - match: "キャンセル"
+        next: END_受付完了_キャンセル
+      - match: "other"               # 確認
+        next: END_受付完了_確認
+
+  # --- 終話 ---
+  - step: END_受付完了_変更
+    type: termination
+    termination_ref: "END_受付完了_変更"
+
+  - step: END_受付完了_キャンセル
+    type: termination
+    termination_ref: "END_受付完了_キャンセル"
+
+  - step: END_受付完了_確認
+    type: termination
+    termination_ref: "END_受付完了_確認"
+
+  - step: END_新規受付不可
+    type: termination
+    termination_ref: "END_新規受付不可"
+
+  - step: END_転送案内_歯科口腔外科リハビリ
+    type: termination
+    termination_ref: "END_転送案内_歯科口腔外科リハビリ"
+
+  - step: END_麻酔科代表電話案内
+    type: termination
+    termination_ref: "END_麻酔科代表電話案内"
+
+  - step: END_健康診断代表案内
+    type: termination
+    termination_ref: "END_健康診断代表案内"
+
+  # --- 異常系終話（非通知 / 時間外 / 聴取失敗）。termination_patterns に既登録 ---
+  - step: END_非通知
+    type: termination
+    termination_ref: "END_非通知"
+
+  - step: END_時間外
+    type: termination
+    termination_ref: "END_時間外"
+
+  - step: END_聴取失敗
+    type: termination
+    termination_ref: "END_聴取失敗"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  # --- 標準フィールド（itemDefault: true）---
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "変更"
+      - id: "2"
+        order: "2"
+        value: "キャンセル"
+      - id: "3"
+        order: "3"
+        value: "確認"
+      - id: "4"
+        order: "4"
+        value: "新規"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "Gen1 用件 3 分岐 + 新規（DTMF 4 で誘導不可案内）"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "氏名聴取サブフロー経由で保存"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "診察券番号聴取サブフロー経由で保存。8 桁以内 / 「わからない」可"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "生年月日聴取サブフロー経由で保存。和暦/西暦自動判定 + 復唱確認あり"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "電話番号聴取サブフロー経由で保存"
+
+  - context_name: "reservationDate"
+    context_name_jp: "現在の予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "変更/キャンセルルートのみ。元資料 予約日.yaml 相当"
+
+  - context_name: "reason"
+    context_name_jp: "理由"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "変更/キャンセルルートのみ。用件で TTS が異なる（変更時=変更の理由 / キャンセル時=キャンセルの理由）"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=未処理(受付完了) 2=代表案内/対象外/聴取失敗 6=時間外"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "受電日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値。displayType / itemDefault / deletable は変更不可"
+
+  # --- 施設固有フィールド（itemDefault: false）---
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values:
+      - order: "1"
+        value: "内科"
+      - order: "2"
+        value: "循環器内科"
+      - order: "3"
+        value: "消化器内科"
+      - order: "4"
+        value: "呼吸器内科"
+      - order: "5"
+        value: "呼吸器外科"
+      - order: "6"
+        value: "心療内科"
+      - order: "7"
+        value: "腎臓内科"
+      - order: "8"
+        value: "肝臓内科"
+      - order: "9"
+        value: "血液内科"
+      - order: "10"
+        value: "総合診療科"
+      - order: "11"
+        value: "小児科"
+      - order: "12"
+        value: "外科"
+      - order: "13"
+        value: "心臓血管外科"
+      - order: "14"
+        value: "肝胆膵外科"
+      - order: "15"
+        value: "乳腺外科"
+      - order: "16"
+        value: "形成外科"
+      - order: "17"
+        value: "整形外科"
+      - order: "18"
+        value: "脳神経内科"
+      - order: "19"
+        value: "脳神経外科"
+      - order: "20"
+        value: "産科"
+      - order: "21"
+        value: "婦人科"
+      - order: "22"
+        value: "産婦人科"
+      - order: "23"
+        value: "眼科"
+      - order: "24"
+        value: "耳鼻科"
+      - order: "25"
+        value: "皮膚科"
+      - order: "26"
+        value: "泌尿器科"
+      - order: "27"
+        value: "精神科"
+      - order: "28"
+        value: "リウマチ科"
+      - order: "29"
+        value: "下肢静脈瘤外来"
+      - order: "30"
+        value: "脊髄脊椎外来"
+      - order: "31"
+        value: "禁煙外来"
+      - order: "32"
+        value: "リハビリテーション科"
+      - order: "33"
+        value: "歯科口腔外科"
+      - order: "34"
+        value: "ペインクリニック"
+      - order: "35"
+        value: "健康診断"
+      - order: "36"
+        value: "登録なし"
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "Gen1 元資料 診療科聴取.yaml の分岐なし診療科（33 科）+ 分岐後具体名（呼吸器内/外、脳神経内/外、産科/婦人科）+ 産婦人科上位 + 登録なし。リハビリテーション科 / 歯科口腔外科 / ペインクリニック / 健康診断 は専用終話に誘導するが値自体は保存する"
+
+  - context_name: "additionalDepartment"
+    context_name_jp: "追加診療科"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "全用件共通の追加問い合わせ。Gen1 追加問い合わせ_追加診療科.yaml 相当。「ありません」と回答した場合もそのまま保存"
+
+  - context_name: "desiredDate"
+    context_name_jp: "予約希望日"
+    display_type: "DATE"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "変更ルートのみ聴取。元資料 変更希望日.yaml 相当（変更ルートで「予約希望日をおっしゃってください」TTS）"
+
+  - context_name: "details"
+    context_name_jp: "確認内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "確認ルートのみ聴取。Gen1 変更希望日.yaml の確認 TTS『ご確認内容についてお伺いします』相当のフリーテキスト"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "用件聴取"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: true
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "変更"
+      - "キャンセル"
+      - "確認"
+      - "新規"
+    notes: "DTMF 1=変更, 2=キャンセル, 3=確認, 4=新規。新規は END_新規受付不可 へ誘導。元資料 用件.yaml 相当"
+
+  - order: 2
+    name: "診療科聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: true
+    save_to: "clinicalDepartment"
+    openai_processing: "normalize"
+    output_format: "enum"
+    no_result_default: "登録なし"
+    output_labels:
+      - "内科"
+      - "循環器内科"
+      - "消化器内科"
+      - "呼吸器内科"
+      - "呼吸器外科"
+      - "呼吸器"
+      - "心療内科"
+      - "腎臓内科"
+      - "肝臓内科"
+      - "血液内科"
+      - "総合診療科"
+      - "小児科"
+      - "外科"
+      - "心臓血管外科"
+      - "肝胆膵外科"
+      - "乳腺外科"
+      - "形成外科"
+      - "整形外科"
+      - "脳神経内科"
+      - "脳神経外科"
+      - "脳神経"
+      - "産婦人科"
+      - "眼科"
+      - "耳鼻科"
+      - "皮膚科"
+      - "泌尿器科"
+      - "精神科"
+      - "リウマチ科"
+      - "下肢静脈瘤外来"
+      - "脊髄脊椎外来"
+      - "禁煙外来"
+      - "リハビリテーション科"
+      - "歯科口腔外科"
+      - "ペインクリニック"
+      - "健康診断"
+      - "登録なし"
+    notes: |
+      Gen1 元資料 診療科聴取.yaml のエンティティ「01_00_分岐なし診療科」+「00_00_分岐あり診療科」+「00_01_分岐あり診療科」を統合。
+      ・「呼吸器」「脳神経」を発話した場合は分岐確認（内/外を再聴取）へ
+      ・「産婦人科」を発話した場合も分岐確認（産科/婦人科を再聴取）へ
+      ・「呼吸器内科/呼吸器外科/脳神経内科/脳神経外科/産科/婦人科」と具体名で発話された場合は通常進行
+      ・健康診断/歯科口腔外科/リハビリテーション科/ペインクリニックは専用終話へ
+      ・OpenAI が抽出できない場合は no_result_default="登録なし" で classification に保存して通常進行
+
+  - order: 3
+    name: "呼吸器分岐確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: true
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "呼吸器内科"
+      - "呼吸器外科"
+    notes: "Gen1 元資料 診療科聴取.yaml 分岐（呼吸器）の聞き取り相当。否定で other → 用件聴取へ戻る"
+
+  - order: 4
+    name: "脳神経分岐確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: true
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "脳神経内科"
+      - "脳神経外科"
+    notes: "Gen1 元資料 診療科聴取.yaml 分岐（脳神経）の聞き取り相当。否定で other → 用件聴取へ戻る"
+
+  - order: 5
+    name: "産婦人科分岐確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: true
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "産科"
+      - "婦人科"
+    notes: "Gen1 元資料 診療科聴取.yaml 分岐（産婦人科）の聞き取り相当。否定で other → 用件聴取へ戻る"
+
+  - order: 6
+    name: "追加診療科聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "additionalDepartment"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "Gen1 追加問い合わせ_追加診療科.yaml 相当。「ありません」もそのまま保存。output_format=text のため OpenAI 正規化なし"
+
+  - order: 7
+    name: "確認_内容聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "details"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "確認ルートのみ。Gen1 変更希望日.yaml の確認 TTS 相当。フリーテキスト"
+
+  - order: 8
+    name: "予約日聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: true
+    save_to: "reservationDate"
+    openai_processing: "convert"
+    output_format: "datetime"
+    output_labels: []
+    notes: "変更/キャンセルルートのみ。Gen1 予約日.yaml 相当。DTMF 4 桁（過去日なら +1 年で確定）も受付"
+
+  - order: 9
+    name: "理由_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "変更ルートのみ。TTS=「変更の理由をおっしゃってください。」"
+
+  - order: 10
+    name: "理由_キャンセル"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "キャンセルルートのみ。TTS=「キャンセルの理由をおっしゃってください。」"
+
+  - order: 11
+    name: "変更希望日聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: true
+    save_to: "desiredDate"
+    openai_processing: "convert"
+    output_format: "datetime"
+    output_labels: []
+    notes: "変更ルートのみ。TTS=「予約希望日をおっしゃってください。」"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "用件聴取"
+    tts_announcement: "ご用件を、次の3つのうちの、いずれかでお話ください。1、変更する。2、キャンセルする。3、確認する。それでは、お話ください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "変更"
+        - "キャンセル"
+        - "確認"
+        - "新規"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「変更」「変えたい」「変える」「日程」「日付」「取り直す」を含む"
+          output: "変更"
+        - input: "DTMF 2 または「キャンセル」「取り消し」「やめる」を含む"
+          output: "キャンセル"
+        - input: "DTMF 3 または「確認」「問い合わせ」を含む"
+          output: "確認"
+        - input: "DTMF 4 または「予約」「新規」「健診」「健康診断」「人間ドック」「就職」「進学」「雇い入れ」を含む"
+          output: "新規"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT"
+      no_result_condition: "発話/DTMF が用件 4 種に該当しない"
+    save_to: "classification"
+    next_step: "変更/キャンセル/確認 → 診療科聴取 / 新規 → END_新規受付不可 / NO_RESULT → リトライ"
+    retry_failure: "end_failure"
+
+  - step_name: "診療科聴取"
+    tts_announcement: "予約票に記載されている診療科をお伺いします。複数診療科の場合は、まず、一つ目の診療科をおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "内科"
+        - "循環器内科"
+        - "消化器内科"
+        - "呼吸器内科"
+        - "呼吸器外科"
+        - "呼吸器"
+        - "心療内科"
+        - "腎臓内科"
+        - "肝臓内科"
+        - "血液内科"
+        - "総合診療科"
+        - "小児科"
+        - "外科"
+        - "心臓血管外科"
+        - "肝胆膵外科"
+        - "乳腺外科"
+        - "形成外科"
+        - "整形外科"
+        - "脳神経内科"
+        - "脳神経外科"
+        - "脳神経"
+        - "産婦人科"
+        - "眼科"
+        - "耳鼻科"
+        - "皮膚科"
+        - "泌尿器科"
+        - "精神科"
+        - "リウマチ科"
+        - "下肢静脈瘤外来"
+        - "脊髄脊椎外来"
+        - "禁煙外来"
+        - "リハビリテーション科"
+        - "歯科口腔外科"
+        - "ペインクリニック"
+        - "健康診断"
+        - "登録なし"
+        - "NO_RESULT"
+      mapping:
+        - input: "「呼吸器」のみ（内/外指定なし）"
+          output: "呼吸器"
+        - input: "「呼吸器内科」「内科」「呼内」を含む"
+          output: "呼吸器内科"
+        - input: "「呼吸器外科」「外科」「呼外」を含む"
+          output: "呼吸器外科"
+        - input: "「脳神経」のみ"
+          output: "脳神経"
+        - input: "「脳神経内科」「神経内科」「脳内」を含む"
+          output: "脳神経内科"
+        - input: "「脳神経外科」「頭痛」「脳外」を含む"
+          output: "脳神経外科"
+        - input: "「産婦人科」「ぎね」「婦人」を含む"
+          output: "産婦人科"
+        - input: "「健康診断」「健診」「検診」「人間ドック」を含む"
+          output: "健康診断"
+        - input: "「歯科口腔外科」「歯科」「口腔外科」「歯医者」を含む"
+          output: "歯科口腔外科"
+        - input: "「リハビリ」「リハビリテーション」「訓練」を含む"
+          output: "リハビリテーション科"
+        - input: "「ペインクリニック」「ペイン」「麻酔科」「緩和」を含む"
+          output: "ペインクリニック"
+        - input: "その他通常診療科リストの同義語に一致"
+          output: "該当する正規化された科名"
+        - input: "診療科として抽出できない"
+          output: "NO_RESULT（→ no_result_default で『登録なし』を classification に保存）"
+      no_result_condition: "診療科名を抽出できない"
+    save_to: "clinicalDepartment"
+    next_step: "終話誘導科 → 専用終話 / 上位カテゴリ（呼吸器/脳神経/産婦人科） → 分岐確認 / その他/登録なし → 追加診療科聴取"
+    retry_failure: "end_failure"
+
+  - step_name: "呼吸器分岐確認"
+    tts_announcement: "呼吸器内科と呼吸器外科の、どちらですか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "呼吸器内科"
+        - "呼吸器外科"
+        - "NO_RESULT"
+      mapping:
+        - input: "「内科」「ないか」「呼内」を含む"
+          output: "呼吸器内科"
+        - input: "「外科」「呼外」を含む"
+          output: "呼吸器外科"
+        - input: "否定（「違います」「いいえ」）"
+          output: "NO_RESULT"
+      no_result_condition: "内/外を抽出できない、または否定"
+    save_to: "clinicalDepartment"
+    next_step: "呼吸器内科/外科 → 追加診療科聴取 / NO_RESULT → リトライ → 上限到達 → 用件聴取に戻る (other 経路)"
+    retry_failure: "skip"
+
+  - step_name: "脳神経分岐確認"
+    tts_announcement: "脳神経内科と脳神経外科の、どちらですか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "脳神経内科"
+        - "脳神経外科"
+        - "NO_RESULT"
+      mapping:
+        - input: "「内科」「ないか」「神経内科」「脳内」を含む"
+          output: "脳神経内科"
+        - input: "「外科」「頭痛」「脳外」を含む"
+          output: "脳神経外科"
+        - input: "否定"
+          output: "NO_RESULT"
+      no_result_condition: "内/外を抽出できない、または否定"
+    save_to: "clinicalDepartment"
+    next_step: "脳神経内科/外科 → 追加診療科聴取 / NO_RESULT → 用件聴取"
+    retry_failure: "skip"
+
+  - step_name: "産婦人科分岐確認"
+    tts_announcement: "産科と婦人科の、どちらですか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "産科"
+        - "婦人科"
+        - "NO_RESULT"
+      mapping:
+        - input: "「産科」「さんか」「参加」を含む"
+          output: "産科"
+        - input: "「婦人科」「ぎね」「婦人」「フジコ」を含む"
+          output: "婦人科"
+        - input: "否定"
+          output: "NO_RESULT"
+      no_result_condition: "産科/婦人科を抽出できない、または否定"
+    save_to: "clinicalDepartment"
+    next_step: "産科/婦人科 → 追加診療科聴取 / NO_RESULT → 用件聴取"
+    retry_failure: "skip"
+
+  - step_name: "追加診療科聴取"
+    tts_announcement: "他に診療科があればおっしゃってください。ない場合は、ありません、とおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "（フリーテキストそのまま保存）"
+      mapping:
+        - input: "「ありません」「なし」「ない」を含む"
+          output: "ありません"
+        - input: "他の診療科名を含む"
+          output: "発話テキストそのまま"
+      no_result_condition: "STT 結果が空（無音）→ 再質問 1 回 → skip"
+    save_to: "additionalDepartment"
+    next_step: "用件分岐_次（確認 → 確認_内容聴取 / 変更/キャンセル → 予約日聴取）"
+    retry_failure: "skip"
+
+  - step_name: "確認_内容聴取"
+    tts_announcement: "ご確認内容についてお伺いします。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "（フリーテキストそのまま保存）"
+      mapping: []
+      no_result_condition: "STT 結果が空 → 再質問 1 回 → skip"
+    save_to: "details"
+    next_step: "jump_診察券番号聴取"
+    retry_failure: "skip"
+
+  - step_name: "予約日聴取"
+    tts_announcement: "現在の予約日を「4月1日」のように日付でお話ください。わからない場合は「わからない」のようにおっしゃってください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "YYYY-MM-DD（過去日なら +1 年で確定）"
+        - "NO_RESULT"
+      mapping:
+        - input: "発話で「4月1日」のような日付"
+          output: "YYYY-MM-DD"
+        - input: "DTMF シャープ/アスタ + 4 桁（MMDD）"
+          output: "YYYY-MM-DD（過去日 → +1 年）"
+        - input: "「わからない」「しらない」を含む"
+          output: "NO_RESULT（空保存で次へ）"
+      no_result_condition: "日付として解釈できない"
+    save_to: "reservationDate"
+    next_step: "用件分岐_理由"
+    retry_failure: "skip"
+
+  - step_name: "理由_変更"
+    tts_announcement: "変更の理由をおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "（フリーテキストそのまま保存）"
+      mapping: []
+      no_result_condition: "STT 結果が空 → 再質問 1 回 → skip"
+    save_to: "reason"
+    next_step: "変更希望日聴取"
+    retry_failure: "skip"
+
+  - step_name: "理由_キャンセル"
+    tts_announcement: "キャンセルの理由をおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "（フリーテキストそのまま保存）"
+      mapping: []
+      no_result_condition: "STT 結果が空 → 再質問 1 回 → skip"
+    save_to: "reason"
+    next_step: "jump_診察券番号聴取"
+    retry_failure: "skip"
+
+  - step_name: "変更希望日聴取"
+    tts_announcement: "予約希望日をおっしゃってください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "YYYY-MM-DD"
+        - "NO_RESULT"
+      mapping:
+        - input: "発話で日付"
+          output: "YYYY-MM-DD"
+        - input: "DTMF シャープ/アスタ + 4 桁"
+          output: "YYYY-MM-DD（過去日 → +1 年）"
+      no_result_condition: "日付として解釈できない"
+    save_to: "desiredDate"
+    next_step: "jump_診察券番号聴取"
+    retry_failure: "skip"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須・削除禁止）---
+  - name: "END_非通知"
+    condition: "incoming-classifier で非通知と判定"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "祝日 / 年末年始 (12/26〜1/4) / 平日 8 時前 or 20 時以降"
+    tts_announcement: "申し訳ございませんが、ただいまの時間は受付時間外となっております。受付時間は、祝日を除く、月曜日から金曜日の8時から20時となっております。恐れ入りますが、受付時間内におかけなおしください。ペインクリニックは専用の直通番号に平日の午前中にお問い合わせください。電話番号は092-514-6137です。再度申し上げます。ペインクリニックの直通電話番号は092-514-6137です。お電話ありがとうございました。失礼いたします。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "用件聴取/診療科聴取のリトライ上限到達"
+    tts_announcement: "申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、代表電話へおかけ直しください。受付時間は、土日、祝日を除く、月曜日から金曜日の13時から16時となっております。電話番号は092-573-6622です。繰り返します。電話番号は、092-573-6622です。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系（用件で TTS 冒頭が異なる）---
+  - name: "END_受付完了_変更"
+    condition: "全聴取完了 かつ classification=変更"
+    tts_announcement: "予約変更の申し込みを受付いたしました。3診療日以内の、担当者からの折り返し電話、もしくは、SMSにて受付完了となります。折り返しは、当院代表番号、092-573-6622よりおかけいたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了_変更"
+
+  - name: "END_受付完了_キャンセル"
+    condition: "全聴取完了 かつ classification=キャンセル"
+    tts_announcement: "予約キャンセルの申し込みを受付いたしました。3診療日以内の、担当者からの折り返し電話、もしくは、SMSにて受付完了となります。折り返しは、当院代表番号、092-573-6622よりおかけいたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了_キャンセル"
+
+  - name: "END_受付完了_確認"
+    condition: "全聴取完了 かつ classification=確認"
+    tts_announcement: "ご予約に関するお問い合わせを受付いたしました。3診療日以内の、担当者からの折り返し電話、もしくは、SMSにて受付完了となります。折り返しは、当院代表番号、092-573-6622よりおかけいたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了_確認"
+
+  # --- 用件特殊終話 ---
+  - name: "END_新規受付不可"
+    condition: "用件聴取で classification=新規（DTMF 4 / 健診・新規予約相当の発話）"
+    tts_announcement: "新規予約に関するお問い合わせは、このお電話では受付できません。恐れ入りますが、代表電話へおかけ直しください。電話番号は092-573-6622です。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_新規受付不可"
+
+  # --- 診療科特殊終話 ---
+  - name: "END_転送案内_歯科口腔外科リハビリ"
+    condition: "診療科聴取で歯科口腔外科 or リハビリテーション科 と判定"
+    tts_announcement: "申し訳ございません。歯科口腔外科およびリハビリ科の予約は、こちらのAI電話ではお受けできません。代表電話へおかけ直しください。電話番号は092-573-6622です。繰り返します。電話番号は、092-573-6622です。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_転送案内_歯科口腔外科リハビリ"
+    notes: "Gen1 元資料では END 名のみで TTS 本文未定義。director 判断で代表電話案内として作成。要確認"
+
+  - name: "END_麻酔科代表電話案内"
+    condition: "診療科聴取でペインクリニック と判定"
+    tts_announcement: "申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、代表電話へおかけ直しください。受付時間は、土日、祝日を除く、月曜日から金曜日の9時から12時となっております。電話番号は092-573-6622です。繰り返します。電話番号は、092-573-6622です。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_麻酔科代表電話案内"
+    notes: "Gen1 元資料の麻酔科代表電話案内 TTS をそのまま転記。元資料では電話番号は 092-573-6622（病院代表）。移管ノートには 092-514-6137（ペインクリニック直通）の記載があるが、元資料優先で 092-573-6622 を採用。NON-BLOCKER で要確認"
+
+  - name: "END_健康診断代表案内"
+    condition: "診療科聴取で健康診断 と判定"
+    tts_announcement: "健康診断は、AI電話では受付できません。恐れ入りますが、代表電話番号へおかけ直しください。受付時間は月曜日から金曜日までは10時から16時までとなっております。土曜日は10時から12時までとなっております。電話番号は092-573-6622です。繰り返します。電話番号は、092-573-6622です。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_健康診断代表案内"
+
+# smsFlag分岐設計（複数パターンがある場合）
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+  # 用件別の終話 TTS 出し分けは ContextMatchRouter(classification) で実装。
+  # smsFlag は変更/キャンセル/確認すべて "1" に統一。Dr.JOY 側で SMS 文面を分け管理する想定。
+
+# --- セクション8b: RAG/FAQ 検索サブフロー ---
+# Gen1 元資料に FAQ・RAG 相当の機能なし。Gen1→Gen3 移管デフォルトはパターン 2 だが、
+# 本フローは Gen1 オリジナルに「最後の質問」相当の構造を持たないため pattern=none を採用する。
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "通話開始時の冒頭施設案内"
+    announcement: "お電話ありがとうございます。福岡徳洲会病院の、予約専用、AI電話です。"
+
+  - module_name: "用件聴取"
+    purpose: "用件聴取（変更/キャンセル/確認/新規）"
+    announcement: "ご用件を、次の3つのうちの、いずれかでお話ください。1、変更する。2、キャンセルする。3、確認する。それでは、お話ください。"
+
+  - module_name: "診療科聴取"
+    purpose: "診療科聴取（複数診療科の場合は一つ目）"
+    announcement: "予約票に記載されている診療科をお伺いします。複数診療科の場合は、まず、一つ目の診療科をおっしゃってください。"
+
+  - module_name: "呼吸器分岐確認"
+    purpose: "呼吸器内科/外科の再聴取"
+    announcement: "呼吸器内科と呼吸器外科の、どちらですか？"
+
+  - module_name: "脳神経分岐確認"
+    purpose: "脳神経内科/外科の再聴取"
+    announcement: "脳神経内科と脳神経外科の、どちらですか？"
+
+  - module_name: "産婦人科分岐確認"
+    purpose: "産科/婦人科の再聴取"
+    announcement: "産科と婦人科の、どちらですか？"
+
+  - module_name: "追加診療科聴取"
+    purpose: "追加診療科または『ありません』の聴取"
+    announcement: "他に診療科があればおっしゃってください。ない場合は、ありません、とおっしゃってください。"
+
+  - module_name: "確認_内容聴取"
+    purpose: "確認用件の内容聴取"
+    announcement: "ご確認内容についてお伺いします。"
+
+  - module_name: "予約日聴取"
+    purpose: "現在の予約日聴取（変更/キャンセル）"
+    announcement: "現在の予約日を「4月1日」のように日付でお話ください。わからない場合は「わからない」のようにおっしゃってください。"
+
+  - module_name: "理由_変更"
+    purpose: "変更ルートの理由聴取"
+    announcement: "変更の理由をおっしゃってください。"
+
+  - module_name: "理由_キャンセル"
+    purpose: "キャンセルルートの理由聴取"
+    announcement: "キャンセルの理由をおっしゃってください。"
+
+  - module_name: "変更希望日聴取"
+    purpose: "変更希望日聴取（変更ルート）"
+    announcement: "予約希望日をおっしゃってください。"
+
+  # --- 終話 TTS ---
+  - module_name: "END_非通知"
+    purpose: "非通知着信時の案内"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_時間外"
+    purpose: "時間外着信時の案内（ペインクリニック直通の案内含む）"
+    announcement: "申し訳ございませんが、ただいまの時間は受付時間外となっております。受付時間は、祝日を除く、月曜日から金曜日の8時から20時となっております。恐れ入りますが、受付時間内におかけなおしください。ペインクリニックは専用の直通番号に平日の午前中にお問い合わせください。電話番号は092-514-6137です。再度申し上げます。ペインクリニックの直通電話番号は092-514-6137です。お電話ありがとうございました。失礼いたします。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "聴取失敗時の代表電話案内"
+    announcement: "申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、代表電話へおかけ直しください。受付時間は、土日、祝日を除く、月曜日から金曜日の13時から16時となっております。電話番号は092-573-6622です。繰り返します。電話番号は、092-573-6622です。"
+
+  - module_name: "END_受付完了_変更"
+    purpose: "予約変更受付完了"
+    announcement: "予約変更の申し込みを受付いたしました。3診療日以内の、担当者からの折り返し電話、もしくは、SMSにて受付完了となります。折り返しは、当院代表番号、092-573-6622よりおかけいたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_受付完了_キャンセル"
+    purpose: "予約キャンセル受付完了"
+    announcement: "予約キャンセルの申し込みを受付いたしました。3診療日以内の、担当者からの折り返し電話、もしくは、SMSにて受付完了となります。折り返しは、当院代表番号、092-573-6622よりおかけいたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_受付完了_確認"
+    purpose: "予約確認問い合わせ受付完了"
+    announcement: "ご予約に関するお問い合わせを受付いたしました。3診療日以内の、担当者からの折り返し電話、もしくは、SMSにて受付完了となります。折り返しは、当院代表番号、092-573-6622よりおかけいたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_新規受付不可"
+    purpose: "新規予約 AI 電話受付不可案内"
+    announcement: "新規予約に関するお問い合わせは、このお電話では受付できません。恐れ入りますが、代表電話へおかけ直しください。電話番号は092-573-6622です。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_転送案内_歯科口腔外科リハビリ"
+    purpose: "歯科口腔外科/リハビリ科 AI 電話受付不可案内（director 判断）"
+    announcement: "申し訳ございません。歯科口腔外科およびリハビリ科の予約は、こちらのAI電話ではお受けできません。代表電話へおかけ直しください。電話番号は092-573-6622です。繰り返します。電話番号は、092-573-6622です。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_麻酔科代表電話案内"
+    purpose: "ペインクリニック AI 電話受付不可案内（元資料 麻酔科代表電話案内 相当）"
+    announcement: "申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、代表電話へおかけ直しください。受付時間は、土日、祝日を除く、月曜日から金曜日の9時から12時となっております。電話番号は092-573-6622です。繰り返します。電話番号は、092-573-6622です。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_健康診断代表案内"
+    purpose: "健康診断 AI 電話受付不可案内"
+    announcement: "健康診断は、AI電話では受付できません。恐れ入りますが、代表電話番号へおかけ直しください。受付時間は月曜日から金曜日までは10時から16時までとなっております。土曜日は10時から12時までとなっております。電話番号は092-573-6622です。繰り返します。電話番号は、092-573-6622です。お電話ありがとうございました。それでは失礼いたします。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "用件聴取"
+    words: |
+      変更 へんこう
+      キャンセル きゃんせる
+      確認 かくにん
+      新規 しんき
+      予約 よやく
+      取り消し とりけし
+      取消 とりけし
+      問い合わせ といあわせ
+      変えたい かえたい
+      取り直し とりなおし
+      日程 にってい
+      日付 ひづけ
+      もしもし もしもし
+      もう一度 もういちど
+      もう一回 もういっかい
+
+  - step_name: "診療科聴取"
+    words: |
+      内科 ないか
+      循環器内科 じゅんかんきないか
+      消化器内科 しょうかきないか
+      呼吸器内科 こきゅうきないか
+      呼吸器外科 こきゅうきげか
+      呼吸器 こきゅうき
+      心療内科 しんりょうないか
+      腎臓内科 じんぞうないか
+      肝臓内科 かんぞうないか
+      血液内科 けつえきないか
+      総合診療科 そうごうしんりょうか
+      小児科 しょうにか
+      外科 げか
+      心臓血管外科 しんぞうけっかんげか
+      肝胆膵外科 かんたんすいげか
+      乳腺外科 にゅうせんげか
+      形成外科 けいせいげか
+      整形外科 せいけいげか
+      脳神経内科 のうしんけいないか
+      脳神経外科 のうしんけいげか
+      脳神経 のうしんけい
+      産科 さんか
+      婦人科 ふじんか
+      産婦人科 さんふじんか
+      眼科 がんか
+      耳鼻科 じびか
+      耳鼻咽喉科 じびいんこうか
+      皮膚科 ひふか
+      泌尿器科 ひにょうきか
+      精神科 せいしんか
+      リウマチ科 りうまちか
+      下肢静脈瘤外来 かしじょうみゃくりゅうがいらい
+      脊髄脊椎外来 せきずいせきついがいらい
+      禁煙外来 きんえんがいらい
+      リハビリテーション科 りはびりてーしょんか
+      リハビリ りはびり
+      歯科口腔外科 しかこうくうげか
+      歯科 しか
+      口腔外科 こうくうげか
+      ペインクリニック ぺいんくりにっく
+      ペイン ぺいん
+      麻酔科 ますいか
+      緩和ペインクリニック かんわぺいんくりにっく
+      緩和 かんわ
+      健康診断 けんこうしんだん
+      健診 けんしん
+      検診 けんしん
+      人間ドック にんげんどっく
+      ドック どっく
+
+  - step_name: "呼吸器分岐確認"
+    words: |
+      呼吸器内科 こきゅうきないか
+      内科 ないか
+      呼内 こない
+      呼吸器外科 こきゅうきげか
+      外科 げか
+      呼外 こがい
+
+  - step_name: "脳神経分岐確認"
+    words: |
+      脳神経内科 のうしんけいないか
+      神経内科 しんけいないか
+      脳内 のうない
+      脳神経外科 のうしんけいげか
+      脳外 のうがい
+      頭痛 ずつう
+
+  - step_name: "産婦人科分岐確認"
+    words: |
+      産科 さんか
+      婦人科 ふじんか
+      ぎね ぎね
+      フジコ ふじこ
+
+  - step_name: "予約日聴取"
+    words: |
+      わからない わからない
+      しらない しらない
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "【新規予約フロー無し】八尾徳洲会と同様。用件は『変更/キャンセル/確認』の 3 分岐で運用。DTMF 4=新規 は END_新規受付不可 へ誘導し、健診/人間ドック/就職/進学等の発話も同経路に流す。"
+  - "【受付時間】祝日除く、月〜金 8:00〜20:00。徳洲会内で最も長い（湘南藤沢 9-16/9-14・八尾 8-16/8-11・札幌 9-17 と異なる）。"
+  - "【代表電話 092-573-6622】病院代表。聴取失敗・対象外診療科・新規予約案内・健康診断代表案内すべて同番号。"
+  - "【ペインクリニック直通 092-514-6137】平日午前専用。Gen1 元資料では時間外案内 TTS で 2 回繰り返し読み上げる仕様（END_時間外 に組み込み済）。麻酔科代表電話案内 の電話番号は元資料準拠で 092-573-6622 を採用したが、移管ノートでは 092-514-6137 と記載されており差分あり（NON-BLOCKER で要確認）。"
+  - "【4 種類の異なる受付時間案内 TTS】(1) END_時間外 = 月〜金 8-20 時, (2) END_聴取失敗（代表電話案内）= 月〜金 13-16 時, (3) END_麻酔科代表電話案内 = 月〜金 9-12 時, (4) END_健康診断代表案内 = 月〜金 10-16 時/土 10-12 時。混同しないよう注意。"
+  - "【分岐あり診療科 3 系統】呼吸器（内/外）/ 脳神経（内/外）/ 産婦人科（産科/婦人科）。同義語に「ないか」「外科」「形が」「経過」「結果」等の音響的曖昧語が大量。echo_back=true で内/外を再聴取し、否定で用件聴取に戻る。"
+  - "【追加診療科は全用件共通】Gen1 追加問い合わせ_追加診療科.yaml は用件分岐の振り分け箱があるが、TTS は『他に診療科があればおっしゃってください...』で全用件共通。Gen3 では 1 hearing ステップに集約。"
+  - "【理由聴取の TTS】変更時=変更の理由 / キャンセル時=キャンセルの理由 と TTS 本文が用件で異なる。Gen3 では 2 つの hearing ステップ（理由_変更 / 理由_キャンセル）を用意し ContextMatchRouter で分岐。"
+  - "【変更希望日】変更ルートのみ聴取。確認ルートでは『確認_内容聴取（フリーテキスト）』を別ステップとして実装し、変更希望日聴取は経由しない。"
+  - "【予約日 DTMF 4 桁】予約日聴取で DTMF シャープ/アスタ + 4 桁数字を受付（過去日なら +1 年で確定）。Brekeke STT の dtmf_max_length=4 + termdtmf=#/* で表現する。"
+  - "【3 つの『予約 ◯◯ の流れ』終話 TTS】後半（折り返し受付完了の文言）は完全一致だが、冒頭文言は「予約変更の申し込み」「予約キャンセルの申し込み」「ご予約に関するお問い合わせ」で異なる。携帯/固定で TTS 分岐させる札幌・湘南藤沢方式は採用しない。"
+  - "【「もしもし」「もう一度」フォールバック】Gen1 用件 yaml で「もしもし」発話 → 1 回目「はい、聞こえております」/ 2 回目以上「はい、もしもしと聞こえております」と回数別 TTS の仕組みあり。Gen3 では Brekeke STT のリトライ機構と OpenAI 同義語処理に吸収するため独立ブロック化しない。"
+  - "【入電番号取得分岐は無し】八尾の『終話電話番号確認』や湘南藤沢の『WEBか電話か』のような入電番号取得有無で分岐する仕組みは持たない。"
+  - "【リハビリ確認内容サブフロー（訓練/診察）は実装しない】Gen1 元資料 リハビリ確認内容.yaml はリハビリ科ルート専用だが、main.yaml では next が `分からない分岐` で終わっており訓練/診察の判定値は後段で参照されない（情報収集のみ）。Gen3 ではリハビリ科は END_転送案内_歯科口腔外科リハビリ で終話するため、リハビリ確認内容サブフローは作成しない。"
+  - "【セットした用件の分岐 健診予約バグ相当】Gen1 用件.yaml の `セットした用件の分岐` で「健診予約」判定の next が空欄でループ未定義（元資料のバグ相当）。Gen3 では「新規予約 / 健診予約」共通の END_新規受付不可 termination に集約して解消する。"
+  - "【年末年始 TTS】Gen1 元資料 時間判断.yaml には『年末年始』専用 TTS（『大変申し訳ございませんが、本ダイヤルは年末年始のため、お休みをいただいております。受付の再開は1月5日8時より、通常通り対応させていただきます。』）があるが、Gen3 ではまず END_時間外 に集約する。年末年始独立終話が必要か顧客確認（NON-BLOCKER）。"
+  - "【サブフロー命名】個人情報サブフロー連鎖は CLAUDE.md Rule 9 準拠で静的 JSON コピー。フロー名プレフィックスのみ「福岡徳洲会病院$」に置換。group_name の URL エンコード後文字数は 36 文字、最長サブフロー名「診察券番号聴取」と合算しても URL 長制限 (255 chars) に収まる。"
+  - "【Gen1 `<? $... ?>` 構文】TTS 内の Gen1 構文（例: `<? $診療科の読み ?>`）は Gen3 では `<% var %>` に変換するが、本フローでは echo_back=true による Re-confirmation node が #data# 復唱を担うため、TTS 内に直接埋め込むことはしない。設計書の TTS には Gen1 構文を含めない。"
+
+# --- セクション12: 要確認事項 ---
+confirmation_items:
+  - item: "office_id（施設 ID）— Dr.JOY 管理画面から取得"
+    status: "TODO"
+    assignee: "人間"
+    resolved: false
+
+  - item: "営業時間スケジュール詳細 — Dr.JOY 側で『祝日除く、月〜金 8:00〜20:00』を設定する必要あり。Brekeke 側ではモジュール配置のみ実施"
+    status: "TODO"
+    assignee: "Dr.JOY 管理画面 / 施設"
+    resolved: false
+
+  - item: "麻酔科代表電話案内の電話番号 — 元資料 main.yaml では 092-573-6622（病院代表）と記載されているが、移管ノートでは 092-514-6137（ペインクリニック直通）と記載されており差分あり。元資料優先で 092-573-6622 を採用したが、施設の意図を確認"
+    status: "TODO"
+    assignee: "施設監修"
+    resolved: false
+
+  - item: "END_転送案内_歯科口腔外科リハビリ の TTS 文言 — Gen1 元資料では END 名のみで TTS 本文未定義。director 判断で代表電話案内文言を作成。施設の意図を確認"
+    status: "TODO"
+    assignee: "施設監修"
+    resolved: false
+
+  - item: "年末年始終話 — Gen1 元資料には『年末年始のため、1月5日8時より通常通り対応』の専用 TTS あり。Gen3 では一旦 END_時間外 に集約したが、独立した END_年末年始 が必要かを確認"
+    status: "TODO"
+    assignee: "施設監修"
+    resolved: false
+
+  - item: "サブフロー retry_count（標準 2 回）が施設仕様と一致するか — Gen1 元資料には個別の再質問回数が記載されているが、Gen3 では標準サブフロー JSON を完全コピーするため、retry_count は標準のまま使用する。問題があれば施設監修後に IVR プロパティで上書き"
+    status: "TODO"
+    assignee: "施設監修"
+    resolved: false
+
+  - item: "smsFlag — 全用件（変更/キャンセル/確認）で smsFlag=1 に統一。SMS 文面の用件別出し分けは Dr.JOY 側で管理する想定。SMS 文面の確認は Dr.JOY 管理画面側"
+    status: "TODO"
+    assignee: "Dr.JOY 管理画面 / 施設"
+    resolved: false
+
+  - item: "RAG/FAQ サブフロー — Gen1 元資料に FAQ 相当の機能なし。pattern=none で起草。施設が将来的に FAQ 自動応答を希望する場合はパターン 2 への切り替えを検討"
+    status: "TODO"
+    assignee: "施設監修"
+    resolved: false
+
+  - item: "対象環境 — prod を仮設定。デモ環境を先行運用する場合は environment=demo に変更"
+    status: "TODO"
+    assignee: "PM/浜口"
+    resolved: false

@@ -1,0 +1,529 @@
+{
+  "layout": {},
+  "resultValue": "",
+  "postCallAction": "",
+  "name": "中部徳洲会病院$生年月日聴取_20260520",
+  "start": "患者_生年月日",
+  "modules": {
+    "患者_生年月日": {
+      "layout": {
+        "x": -9220,
+        "y": -4840
+      },
+      "next": [
+        {
+          "condition": "^.*$",
+          "label": "Next Module",
+          "nextModuleName": "入力_患者_生年月日"
+        }
+      ],
+      "subs": [
+        {
+          "moduleName": "save-patientDateOfBirth",
+          "label": "save-patientDateOfBirth"
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        }
+      ],
+      "name": "患者_生年月日",
+      "description": "",
+      "matchingmethod": 1,
+      "type": "drjoy^Text To Speech$Text to speech",
+      "params": {
+        "stop_by_dtmf": "No",
+        "category_words": "",
+        "prompt": ""
+      }
+    },
+    "復唱_患者_生年月日": {
+      "layout": {
+        "x": -9020,
+        "y": -4570
+      },
+      "next": [
+        {
+          "condition": "^TIMEOUT$",
+          "label": "timeout",
+          "nextModuleName": "リトライ_患者_生年月日"
+        },
+        {
+          "condition": "^ERROR$",
+          "label": "error",
+          "nextModuleName": "リトライ_患者_生年月日"
+        },
+        {
+          "condition": "^INVALID$",
+          "label": "invalid",
+          "nextModuleName": "リトライ_患者_生年月日"
+        },
+        {
+          "condition": "^.*$",
+          "label": "success",
+          "nextModuleName": "入力_復唱_患者生年月日"
+        }
+      ],
+      "subs": [
+        {
+          "moduleName": "",
+          "label": ""
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        }
+      ],
+      "name": "復唱_患者_生年月日",
+      "description": "",
+      "matchingmethod": 1,
+      "type": "drjoy^TS Custom Module$DOB Re-confirmation",
+      "params": {
+        "openAI_prompt": "# Role\nあなたは「生年月日」を正規化するフォーマットエンジンです。\n入力には以下の2種類が混在します。\n1. DTMF入力（電話の数字入力）\n2. 音声認識結果（STT）\n\nSTTは誤変換・語句欠落・元号誤認識が発生する可能性があります。\nユーザーの入力から生年月日を特定し、以下の形式に正規化してください。\n\n# Output Rules（厳守）\n出力は以下のいずれか1行のみ。説明文・JSON・余計な改行・余計な空白は絶対に出力しない。\n1. 和暦形式: gggg年M月d日　（元号が検出された場合）\n2. 西暦形式: yyyy-MM-dd 00:00　（それ以外）\n3. エラー: INVALID\n\n# Processing Logic（処理優先順位）\n\n## 0. 前処理\n- 入力文字列の前後の空白と改行を除去する\n- 全角数字は半角数字に変換する\n\n## 1. DTMF入力（最優先）\n前処理後の入力が8桁の半角数字のみの場合、yyyyMMdd とみなして処理する。\n8桁数字の場合は即座に変換して処理終了。STT解析・元号変換・STT先頭欠落補完は行わない。\n\n例\n入力: 19840110 → 1984-01-10 00:00\n入力: 20000101 → 2000-01-01 00:00\n入力: ２００００１０１（全角）→ 2000-01-01 00:00\n\n## 2. 元号・類似語の検出\n入力テキストに以下のキーワードが含まれる場合、対応する元号として扱い和暦形式（gggg年M月d日）で出力する。\n元号が検出された場合はステップ3・4をスキップする。\n\n- 令和（2019〜）: 令和、れいわ、レイワ、例は、冷和\n- 平成（1989〜）: 平成、へいせい、ヘイセイ、平静、閉成、平清\n- 昭和（1926〜）: 昭和、しょうわ、ショウワ、唱和、社長は、少和、名所、正和\n- 大正（1912〜）: 大正、たいしょう、タイショウ、対象、大将\n- 明治（1868〜）: 明治、めいじ、メイジ、命じ、明示\n\n元号開始年からの計算: 西暦 = 元号開始年 + 年数 - 1\n「元年」は「1年」として処理する。\n\n例\n入力: 昭和60年12月1日 → 昭和60年12月1日\n入力: 社長は45年の4月1日 → 昭和45年4月1日\n入力: 平成元年5月3日 → 平成1年5月3日\n\n## 3. 西暦4桁の抽出\nテキスト中に4桁の年（19XX / 20XX）が含まれる場合、そのまま西暦として使用し西暦形式（yyyy-MM-dd 00:00）で出力する。\n\n例\n入力: 1985年12月1日 → 1985-12-01 00:00\n入力: 1985-12-01 00:00 → 1985-12-01 00:00\n\n## 4. STT先頭欠落補完（3桁の年）\n音声認識では西暦の先頭桁が欠落することがある（例: 980年、005年）。\n3桁の年に対して候補を2つ生成して選択する。\n\n補完ルール:\n- XXXが100以上の場合: 1000+XXX と 2000+XXX\n- XXXが100未満の場合: 1900+XXX と 2000+XXX\n\n選択基準（すべて満たす候補を有効とする）:\n1. 1900年以上\n2. 現在年以下\n3. 人間の生年月日として現実的（1900〜現在）\n\n有効候補が2つある場合は現在年に近い（若い）方を選択。\n両方無効の場合は INVALID。\n\n例\n入力: 980年1月1日 → 1980-01-01 00:00\n入力: 005年5月3日 → 2005-05-03 00:00\n入力: 015年2月3日 → 2015-02-03 00:00\n\n## 5. 月日の補完\n- 月のみ存在: 日を1日で補完\n- 月・日が欠ける: 1月1日で補完\n\n## 6. バリデーション\n以下の場合は INVALID:\n- 存在しない日付（2月30日、13月等）\n- 未来の日付\n- 1900年未満\n- 生年月日に無関係な発話\n",
+        "saveDOB2db": "Yes",
+        "prompt": "{tts_g: <speak> #data# <break time = \"300ms\"/> でよろしいでしょうか。 </speak> }",
+        "module": "入力_患者_生年月日",
+        "dateReadingMode": "自動"
+      }
+    },
+    "入力_患者_生年月日": {
+      "layout": {
+        "x": -9220,
+        "y": -4700
+      },
+      "next": [
+        {
+          "condition": "^TIMEOUT$",
+          "label": "timeout",
+          "nextModuleName": "リトライ_患者_生年月日"
+        },
+        {
+          "condition": "^ERROR$",
+          "label": "error",
+          "nextModuleName": "リトライ_患者_生年月日"
+        },
+        {
+          "condition": "^NO_RESULT$",
+          "label": "no_result",
+          "nextModuleName": "リトライ_患者_生年月日"
+        },
+        {
+          "condition": "^.+$",
+          "label": "success",
+          "nextModuleName": "復唱_患者_生年月日"
+        },
+        {
+          "condition": "",
+          "label": "jump1",
+          "nextModuleName": ""
+        },
+        {
+          "condition": "",
+          "label": "jump2",
+          "nextModuleName": ""
+        },
+        {
+          "condition": "",
+          "label": "jump3",
+          "nextModuleName": ""
+        },
+        {
+          "condition": "",
+          "label": "jump4",
+          "nextModuleName": ""
+        },
+        {
+          "condition": "",
+          "label": "jump5",
+          "nextModuleName": ""
+        },
+        {
+          "condition": "",
+          "label": "jump6",
+          "nextModuleName": ""
+        },
+        {
+          "condition": "",
+          "label": "jump7",
+          "nextModuleName": ""
+        }
+      ],
+      "subs": [
+        {
+          "moduleName": "save-patientDateOfBirth",
+          "label": "save-patientDateOfBirth"
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        }
+      ],
+      "name": "入力_患者_生年月日",
+      "description": "",
+      "matchingmethod": 1,
+      "type": "drjoy^External Integration$DTMF AmiVoice STT Input",
+      "params": {
+        "termdtmf": "*",
+        "max_dtmf_length": "8",
+        "detection_flag": "デフォルト",
+        "stop_play_when_speech": "No",
+        "keep_filter_token": "Yes",
+        "probability": "",
+        "remove_term": "Yes",
+        "language": "デフォルト",
+        "type": "テキスト",
+        "silent_detection_ms": "",
+        "uri": "",
+        "profile_words": "",
+        "timeout": "30000",
+        "condition": "",
+        "engine": "デフォルト",
+        "save_log": "No",
+        "prompt_retry": "",
+        "timeout_ms": "",
+        "prompt": "{recstart}",
+        "retry": "0"
+      }
+    },
+    "save-patientDateOfBirth": {
+      "layout": {
+        "x": -9720,
+        "y": -4510
+      },
+      "next": [],
+      "subs": [
+        {
+          "moduleName": "",
+          "label": ""
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        }
+      ],
+      "name": "save-patientDateOfBirth",
+      "description": "",
+      "matchingmethod": 1,
+      "type": "drjoy^Persistence$save2db",
+      "params": {
+        "contextName": "patientDateOfBirth",
+        "contextDisplayType": "DATE_OF_BIRTH"
+      }
+    },
+    "入力_復唱_患者生年月日": {
+      "layout": {
+        "x": -8920,
+        "y": -4240
+      },
+      "next": [
+        {
+          "condition": "^TIMEOUT$",
+          "label": "timeout",
+          "nextModuleName": "リトライ_復唱_患者生年月日"
+        },
+        {
+          "condition": "^ERROR$",
+          "label": "error",
+          "nextModuleName": "リトライ_復唱_患者生年月日"
+        },
+        {
+          "condition": "^NO_RESULT$",
+          "label": "no_result",
+          "nextModuleName": "リトライ_復唱_患者生年月日"
+        },
+        {
+          "condition": "^.+$",
+          "label": "success",
+          "nextModuleName": "openAI_復唱_患者生年月日"
+        },
+        {
+          "condition": "",
+          "label": "jump1",
+          "nextModuleName": ""
+        },
+        {
+          "condition": "",
+          "label": "jump2",
+          "nextModuleName": ""
+        },
+        {
+          "condition": "",
+          "label": "jump3",
+          "nextModuleName": ""
+        },
+        {
+          "condition": "",
+          "label": "jump4",
+          "nextModuleName": ""
+        },
+        {
+          "condition": "",
+          "label": "jump5",
+          "nextModuleName": ""
+        },
+        {
+          "condition": "",
+          "label": "jump6",
+          "nextModuleName": ""
+        },
+        {
+          "condition": "",
+          "label": "jump7",
+          "nextModuleName": ""
+        }
+      ],
+      "subs": [
+        {
+          "moduleName": "save-生年月日復唱",
+          "label": "save-生年月日復唱"
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        }
+      ],
+      "name": "入力_復唱_患者生年月日",
+      "description": "",
+      "matchingmethod": 1,
+      "type": "drjoy^External Integration$DTMF AmiVoice STT Input",
+      "params": {
+        "termdtmf": "*",
+        "max_dtmf_length": "1",
+        "detection_flag": "デフォルト",
+        "stop_play_when_speech": "No",
+        "keep_filter_token": "Yes",
+        "probability": "",
+        "remove_term": "Yes",
+        "language": "デフォルト",
+        "type": "テキスト",
+        "silent_detection_ms": "",
+        "uri": "",
+        "profile_words": "はい はい\nいいえ いいえ\nはいそうです ないそうです",
+        "timeout": "30000",
+        "condition": "",
+        "engine": "デフォルト",
+        "save_log": "No",
+        "prompt_retry": "",
+        "timeout_ms": "",
+        "prompt": "{recstart}",
+        "retry": "0"
+      }
+    },
+    "リトライ_患者_生年月日": {
+      "layout": {
+        "x": -9520,
+        "y": -4260
+      },
+      "next": [
+        {
+          "condition": "true",
+          "label": "Retry",
+          "nextModuleName": "患者_生年月日"
+        },
+        {
+          "condition": "false",
+          "label": "No more",
+          "nextModuleName": ""
+        }
+      ],
+      "subs": [
+        {
+          "moduleName": "save-patientDateOfBirth",
+          "label": "save-patientDateOfBirth"
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        }
+      ],
+      "name": "リトライ_患者_生年月日",
+      "description": "",
+      "matchingmethod": 0,
+      "type": "drjoy^Text To Speech$Speech Retry Counter",
+      "params": {
+        "prompt_false": "",
+        "prompt_true": "{tts_g:申し訳ございません。 うまく聞き取りが出来ませんでした。 再度、}",
+        "retry_count": "2"
+      }
+    },
+    "openAI_復唱_患者生年月日": {
+      "layout": {
+        "x": -8550,
+        "y": -4070
+      },
+      "next": [
+        {
+          "condition": "^TIMEOUT$",
+          "label": "timeout",
+          "nextModuleName": "リトライ_復唱_患者生年月日"
+        },
+        {
+          "condition": "^ERROR$",
+          "label": "error",
+          "nextModuleName": "リトライ_復唱_患者生年月日"
+        },
+        {
+          "condition": "^NO_RESULT$",
+          "label": "no_result",
+          "nextModuleName": "リトライ_復唱_患者生年月日"
+        },
+        {
+          "condition": "^肯定$",
+          "label": "肯定",
+          "nextModuleName": ""
+        },
+        {
+          "condition": "^否定$",
+          "label": "否定",
+          "nextModuleName": "患者_生年月日"
+        },
+        {
+          "condition": "",
+          "label": "jump2",
+          "nextModuleName": ""
+        },
+        {
+          "condition": "",
+          "label": "jump3",
+          "nextModuleName": ""
+        },
+        {
+          "condition": "",
+          "label": "jump4",
+          "nextModuleName": ""
+        },
+        {
+          "condition": "",
+          "label": "jump5",
+          "nextModuleName": ""
+        },
+        {
+          "condition": "",
+          "label": "jump6",
+          "nextModuleName": ""
+        }
+      ],
+      "subs": [
+        {
+          "moduleName": "",
+          "label": ""
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        }
+      ],
+      "name": "openAI_復唱_患者生年月日",
+      "description": "",
+      "matchingmethod": 1,
+      "type": "drjoy^External Integration$generate_by_OpenAI",
+      "params": {
+        "contextName": "",
+        "contextDisplayType": "TEXT",
+        "promptTTS": "",
+        "module": "入力_復唱_患者生年月日",
+        "functionCall": "{\n  \"name\": \"classify_confirmation\",\n  \"description\": \"ユーザーの返答を『肯定』『否定』『NO_RESULT』の3つに分類。DTMF(1:肯定 2:否定)を最優先し、STTの断片からも意図を汲み取ります。\",\n  \"parameters\": {\n    \"type\": \"object\",\n    \"properties\": {\n      \"intent\": {\n        \"type\": \"string\",\n        \"enum\": [\n          \"肯定\",\n          \"否定\",\n          \"NO_RESULT\"\n        ],\n        \"description\": \"分類結果。1や『はい』の断片は『肯定』、2や『いいえ/ちがう』の断片は『否定』。\"\n      }\n    },\n    \"required\": [\"intent\"]\n  }\n}",
+        "prompt": "## 役割\nあなたは電話自動応答システムにおいて、ユーザーの回答を「肯定（Yes）」「否定（No）」に分類する専門AIです。\nSTT（音声認識）の特性上、「はい」「いいえ」が正しく認識されないケースを考慮し、文脈や断片から意図を最大限汲み取ってください。\n\n## 判定ルールとカテゴリー\n### 1. 肯定 (YES) 【DTMF: 1】\n- **明示的な表現**: 「はい」「そうです」「お願いします」「あっています」「OK」「いいですよ」。\n- **消極的・文脈的肯定**: 「大丈夫です」「問題ありません」「それでいいです」。\n- **STT欠落・誤認識への対応**: \n    - 「あー」「いー」「はいー」など、「はい」の語尾や母音だけが残ったような短い発話。\n    - 「おねがい……」「……ます」などの語尾。\n- **番号入力**: 「1」、「1番」、「一」\n\n### 2. 否定 (NO) 【DTMF: 2】\n- **明示的な表現**: 「いいえ」「違います」「違います」「ダメです」「嫌です」「よろしくない」「ノー」。\n- **別の案・訂正**: 「別の」「……じゃなくて」「違うやつ」。\n- **STT欠落・誤認識への対応**:\n    - 「いえ」「いえー」「ちが……」などの断片。\n    - 首を振るような強い拒絶感のある短い感嘆詞。\n- **番号入力**: 「2」、「2番」、「二」\n\n### 3. NO_RESULT\n- **判定不能**: 「えーと」「もしもし」のみ、または全く関係のない雑音・世間話。\n- **無発話**: 入力が空の場合。\n\n## 処理の指針\n- **NO_RESULTの最小化**: ユーザーが何らかの返答をしている場合、可能な限り「肯定」か「否定」のどちらかに分類してください。迷う場合は、その前後の音の響きがどちらに近いかで判断してください（例：「あー」は肯定寄り、「……ない」は否定寄り）。\n- **DTMF優先**: 数字の「1」または「2」が入力された場合は、内容に関わらずそのカテゴリーに確定してください。"
+      }
+    },
+    "リトライ_復唱_患者生年月日": {
+      "layout": {
+        "x": -9190,
+        "y": -3840
+      },
+      "next": [
+        {
+          "condition": "true",
+          "label": "Retry",
+          "nextModuleName": "復唱_患者_生年月日"
+        },
+        {
+          "condition": "false",
+          "label": "No more",
+          "nextModuleName": ""
+        }
+      ],
+      "subs": [
+        {
+          "moduleName": "save-生年月日復唱",
+          "label": "save-生年月日復唱"
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        }
+      ],
+      "name": "リトライ_復唱_患者生年月日",
+      "description": "",
+      "matchingmethod": 0,
+      "type": "drjoy^Text To Speech$Speech Retry Counter",
+      "params": {
+        "prompt_false": "",
+        "prompt_true": "{tts_g:申し訳ございません。 うまく聞き取りが出来ませんでした。 再度、}",
+        "retry_count": "2"
+      }
+    },
+    "save-生年月日復唱": {
+      "layout": {
+        "x": -9300,
+        "y": -4090
+      },
+      "next": [],
+      "subs": [
+        {
+          "moduleName": "",
+          "label": ""
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        },
+        {
+          "moduleName": "",
+          "label": ""
+        }
+      ],
+      "name": "save-生年月日復唱",
+      "description": "",
+      "matchingmethod": 1,
+      "type": "drjoy^Persistence$save2db",
+      "params": {
+        "contextName": "",
+        "contextDisplayType": "TEXT"
+      }
+    }
+  },
+  "desc": ""
+}

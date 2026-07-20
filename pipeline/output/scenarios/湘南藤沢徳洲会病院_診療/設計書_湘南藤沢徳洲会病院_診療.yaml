@@ -1,0 +1,2342 @@
+# 設計書 — 湘南藤沢徳洲会病院 診療
+# 生成元: @director エージェント
+# 生成日: 2026-05-01
+# 確認レポート: output/scenarios/湘南藤沢徳洲会病院_診療/確認レポート_湘南藤沢徳洲会病院_診療_20260501.md
+# 作業種別: Gen1→Gen3 移管
+version: "1.0"
+
+# =====================================================
+# セクション1: 基本情報
+# =====================================================
+basic_info:
+  facility_name: "湘南藤沢徳洲会病院"
+  scenario_name: "診療"
+  group_name: "湘南藤沢徳洲会病院"
+  flow_name: "湘南藤沢徳洲会病院$診療"
+  target_facility: "本院のみ"
+  office_id: "TODO_要確認"
+  phone_number: "0466-35-1177"
+  business_hours: "祝日除く 月〜金 9:00〜16:00 / 土 9:00〜14:00（日祝 終日 時間外）"
+  flow_type: "subflow"
+  work_type: "gen1_migration"
+  environment: "prod"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# =====================================================
+# セクション2: フロー構成
+# =====================================================
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "湘南藤沢徳洲会病院$診療"
+      role: "main"
+      description: "湘南藤沢徳洲会病院の診療予約受付フロー。用件 5 分類（初診予約/再診予約/予約変更/予約キャンセル/予約確認）+ 用件 echo_back、診療科 × 用件マトリクス（産科/小児科小児外科/眼科の初診代表案内、側弯症/人間ドックの直通電話案内、耳鼻咽喉科/泌尿器科の直接来院案内、循環器科の紹介状あり時直接来院、対象外診療科の代表電話/予約センター案内）、整形外科の脊椎疾患→側弯症 cascade、紹介状あり初診の医師指定→紹介元医療機関→医師名追加聴取、変更/キャンセルの予約日+理由聴取、キャンセルの再予約希望確認、最終的に classification × phonetype の終話 8 分岐を実装する。"
+  subflows:
+    - name: "湘南藤沢徳洲会病院$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "サブフロー標準コピー。patientName を返却。"
+    - name: "湘南藤沢徳洲会病院$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "サブフロー標準コピー（DOB Re-confirmation 復唱あり）。patientDateOfBirth を返却。"
+    - name: "湘南藤沢徳洲会病院$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "サブフロー標準コピー（incoming-classifier + Phone Normalization + 復唱あり）。additionalPhoneNumber と phonetype（1=携帯/ip050、2=その他/landline/withheld）を返却。"
+    - name: "湘南藤沢徳洲会病院$診察券番号聴取"
+      target: "診察券番号聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "サブフロー標準コピー。medicalCardNumber を返却。初診（用件＝初診予約）はスキップする。"
+
+# =====================================================
+# セクション3: フローの目的
+# =====================================================
+purpose: >
+  湘南藤沢徳洲会病院の外来予約に関する電話を受け、初診予約・再診予約・予約変更・予約キャンセル・予約確認の 5 用件を分類し、
+  紹介状有無・診療科・予約日・理由・患者個人情報を聴取する。
+  診療科ごとの受付可否マトリクス（初診不可診療科/直通電話案内/予約制ではない直接来院/対象外代表電話/対象外予約センター）に従って終話誘導し、
+  受付可な場合は classification × phonetype（携帯/固定）の 2 段分岐で 8 パターンの終話 TTS を出し分ける。
+
+# =====================================================
+# セクション4: シナリオフロー図
+# =====================================================
+flow_diagrams:
+  - flow_name: "湘南藤沢徳洲会病院$診療"
+    diagram: |
+      冒頭(wait)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → 非通知_アナウンス → 完了フラグ_非通知 → 切断
+            └─ 通常 → 営業時間チェック(acceptance_times)
+                          ├─ 時間外 → 時間外_アナウンス → 完了フラグ_時間外 → 切断
+                          └─ 受付可 → 冒頭_アナウンス
+                                        → 用件聴取 (enum + echo_back: 初診予約/再診予約/予約変更/予約キャンセル/予約確認)
+                                           ├─ 初診予約 → 紹介状有無聴取
+                                           │            ├─ あり → 紹介状医師指定確認
+                                           │            │       ├─ あり → 紹介元医療機関聴取 → 医師名聴取 → 診療科_初診
+                                           │            │       └─ なし/不明 → 診療科_初診
+                                           │            └─ なし/不明 → 診療科_初診
+                                           ├─ 再診予約 → 診療科_再診
+                                           ├─ 予約変更 → 診療科_変更 → 予約日_変更 → 理由_変更 → jump_氏名聴取
+                                           ├─ 予約キャンセル → 診療科_キャンセル → 予約日_キャンセル → 理由_キャンセル → 再予約希望確認
+                                           │                  ├─ 希望する → 予約希望時期聴取 → jump_氏名聴取
+                                           │                  └─ 希望しない → jump_氏名聴取
+                                           └─ 予約確認 → 確認内容聴取 → 診療科_確認 → jump_氏名聴取
+
+                                        診療科_初診 特殊分岐:
+                                           ├─ 産科 → END_産科代表
+                                           ├─ 小児科小児外科 → END_小児科代表
+                                           ├─ 眼科 → END_眼科代表
+                                           ├─ 側弯症 → END_側弯症直通
+                                           ├─ 整形外科 → 脊椎疾患確認(yes/no)
+                                           │              ├─ yes → 側弯症確認(yes/no)
+                                           │              │         ├─ yes → END_側弯症直通
+                                           │              │         └─ no → jump_氏名聴取（股関節外来扱い）
+                                           │              └─ no → jump_氏名聴取（通常整形外科初診）
+                                           ├─ 人間ドック検診センター → END_人間ドック直通
+                                           ├─ 耳鼻咽喉科 → 味覚嗅覚外来確認(yes/no)
+                                           │                ├─ yes → jump_氏名聴取
+                                           │                └─ no → END_耳鼻咽喉科直接来院
+                                           ├─ 泌尿器科 → END_泌尿器科直接来院
+                                           ├─ 循環器科 → 紹介状チェック(あり→END_循環器科直接来院 / 他→jump_氏名聴取)
+                                           ├─ リハビリテーション科 → END_対象外代表
+                                           ├─ 救急総合診療部 → END_救急総合代表
+                                           ├─ 内視鏡 → END_対象外代表
+                                           ├─ 集中治療科/病理診断科/放射線診断科 → END_対象外予約センター
+                                           └─ default → jump_氏名聴取
+
+                                        診療科_再診 特殊分岐: 人間ドック→直通 / リハ・内視鏡→対象外代表 / 救急総合→救急総合代表 / 集中治療・病理・放射線→対象外予約センター / default→jump_氏名聴取
+                                        診療科_変更/キャンセル/確認: 全診療科 default → 通常ルート（対象外でも通常ルート許可）
+
+                                        共通個人情報聴取(jump_氏名 → jump_生年月日 → 診察券要否CMR → [初診以外] jump_診察券番号 → jump_電話番号)
+                                          → 終話分岐_用件 (classification)
+                                              ├─ 初診予約/再診予約 → 終話分岐_診療予約_電話種別 → END_診療予約_携帯/固定
+                                              ├─ 予約変更 → 終話分岐_予約変更_電話種別 → END_予約変更_携帯/固定
+                                              ├─ 予約キャンセル → 終話分岐_予約キャンセル_電話種別 → END_予約キャンセル_携帯/固定
+                                              └─ 予約確認 → 終話分岐_予約確認_電話種別 → END_予約確認_携帯/固定
+    notes: "診療科特殊分岐は Pattern A（hearing.conditions で直接 END_* に飛ばす）。循環器科のみ紹介状有無で 2 context 必要なため後段 CMR で referralLetter を参照（Pattern B）。終話は classification × phonetype の 2 段 ContextMatchRouter（Pattern B）。"
+
+# =====================================================
+# セクション4b: シナリオフロー定義（ブロック構成）
+# =====================================================
+scenario_flow:
+  # ---------- 冒頭 ----------
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 用件聴取
+
+  # ---------- 用件聴取（Pattern A + echo_back） ----------
+  - step: 用件聴取
+    type: hearing
+    output_format: enum
+    retry_failure: end_failure
+    conditions:
+      - match: "初診予約"
+        next: 紹介状有無聴取
+      - match: "再診予約"
+        next: 診療科_再診
+      - match: "予約変更"
+        next: 診療科_変更
+      - match: "予約キャンセル"
+        next: 診療科_キャンセル
+      - match: "予約確認"
+        next: 確認内容聴取
+      - match: "other"
+        next: END_聴取失敗
+
+  # =====================================================
+  # 初診ルート（紹介状確認 → 医師指定 → 紹介元医療機関 → 医師名 → 診療科）
+  # =====================================================
+  - step: 紹介状有無聴取
+    type: hearing
+    output_format: enum
+    retry_failure: skip
+    conditions:
+      - match: "あり"
+        next: 紹介状医師指定確認
+      - match: "なし"
+        next: 診療科_初診
+      - match: "不明"
+        next: 診療科_初診
+      - match: "other"
+        next: 診療科_初診
+
+  - step: 紹介状医師指定確認
+    type: hearing
+    output_format: enum
+    retry_failure: skip
+    conditions:
+      - match: "あり"
+        next: 紹介元医療機関聴取
+      - match: "なし"
+        next: 診療科_初診
+      - match: "不明"
+        next: 診療科_初診
+      - match: "other"
+        next: 診療科_初診
+
+  - step: 紹介元医療機関聴取
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 医師名聴取
+
+  - step: 医師名聴取
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 診療科_初診
+
+  - step: 診療科_初診
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    retry_failure: skip
+    conditions:
+      - match: "産科"
+        next: END_産科代表
+      - match: "小児科小児外科"
+        next: END_小児科代表
+      - match: "眼科"
+        next: END_眼科代表
+      - match: "脊椎側弯症外科"
+        next: END_側弯症直通
+      - match: "整形外科"
+        next: 脊椎疾患確認
+      - match: "人間ドック検診センター"
+        next: END_人間ドック直通
+      - match: "耳鼻咽喉科"
+        next: 味覚嗅覚外来確認
+      - match: "泌尿器科"
+        next: END_泌尿器科直接来院
+      - match: "循環器科"
+        next: 循環器科紹介状チェック
+      - match: "リハビリテーション科"
+        next: END_対象外代表
+      - match: "救急総合診療部"
+        next: END_救急総合代表
+      - match: "内視鏡"
+        next: END_対象外代表
+      - match: "集中治療科"
+        next: END_対象外予約センター
+      - match: "病理診断科"
+        next: END_対象外予約センター
+      - match: "放射線診断科"
+        next: END_対象外予約センター
+      - match: "other"
+        next: jump_氏名聴取
+
+  # 整形外科 cascade: 脊椎疾患→側弯症
+  - step: 脊椎疾患確認
+    type: hearing
+    output_format: enum
+    retry_failure: skip
+    conditions:
+      - match: "はい"
+        next: 側弯症確認
+      - match: "いいえ"
+        next: jump_氏名聴取
+      - match: "other"
+        next: jump_氏名聴取
+
+  - step: 側弯症確認
+    type: hearing
+    output_format: enum
+    retry_failure: skip
+    conditions:
+      - match: "はい"
+        next: END_側弯症直通
+      - match: "いいえ"
+        next: jump_氏名聴取
+      - match: "other"
+        next: jump_氏名聴取
+
+  - step: 味覚嗅覚外来確認
+    type: hearing
+    output_format: enum
+    retry_failure: skip
+    conditions:
+      - match: "はい"
+        next: jump_氏名聴取
+      - match: "いいえ"
+        next: END_耳鼻咽喉科直接来院
+      - match: "other"
+        next: END_耳鼻咽喉科直接来院
+
+  - step: 循環器科紹介状チェック
+    type: context_match_router
+    reference_module: "OpenAI_紹介状有無聴取"
+    conditions:
+      - match: "あり"
+        next: END_循環器科直接来院
+      - match: "other"
+        next: jump_氏名聴取
+
+  # =====================================================
+  # 再診ルート
+  # =====================================================
+  - step: 診療科_再診
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    retry_failure: skip
+    conditions:
+      - match: "人間ドック検診センター"
+        next: END_人間ドック直通
+      - match: "リハビリテーション科"
+        next: END_対象外代表
+      - match: "救急総合診療部"
+        next: END_救急総合代表
+      - match: "内視鏡"
+        next: END_対象外代表
+      - match: "集中治療科"
+        next: END_対象外予約センター
+      - match: "病理診断科"
+        next: END_対象外予約センター
+      - match: "放射線診断科"
+        next: END_対象外予約センター
+      - match: "other"
+        next: jump_氏名聴取
+
+  # =====================================================
+  # 予約変更ルート
+  # =====================================================
+  - step: 診療科_変更
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    retry_failure: skip
+    conditions:
+      - match: "other"
+        next: 予約日_変更
+
+  - step: 予約日_変更
+    type: hearing
+    output_format: datetime
+    retry_failure: skip
+    next: 理由_変更
+
+  - step: 理由_変更
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: jump_氏名聴取
+
+  # =====================================================
+  # 予約キャンセルルート
+  # =====================================================
+  - step: 診療科_キャンセル
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    retry_failure: skip
+    conditions:
+      - match: "other"
+        next: 予約日_キャンセル
+
+  - step: 予約日_キャンセル
+    type: hearing
+    output_format: datetime
+    retry_failure: skip
+    next: 理由_キャンセル
+
+  - step: 理由_キャンセル
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 再予約希望確認
+
+  - step: 再予約希望確認
+    type: hearing
+    output_format: enum
+    retry_failure: skip
+    conditions:
+      - match: "希望する"
+        next: 予約希望時期聴取
+      - match: "希望しない"
+        next: jump_氏名聴取
+      - match: "other"
+        next: jump_氏名聴取
+
+  - step: 予約希望時期聴取
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: jump_氏名聴取
+
+  # =====================================================
+  # 予約確認ルート
+  # =====================================================
+  - step: 確認内容聴取
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 診療科_確認
+
+  - step: 診療科_確認
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    retry_failure: skip
+    conditions:
+      - match: "other"
+        next: jump_氏名聴取
+
+  # =====================================================
+  # 共通: 個人情報聴取
+  # =====================================================
+  - step: jump_氏名聴取
+    type: subflow
+    flowname: "湘南藤沢徳洲会病院$氏名聴取"
+    next: jump_生年月日聴取
+
+  - step: jump_生年月日聴取
+    type: subflow
+    flowname: "湘南藤沢徳洲会病院$生年月日聴取"
+    next: 診察券要否CMR
+
+  - step: 診察券要否CMR
+    type: context_match_router
+    reference_module: "OpenAI_用件聴取"
+    conditions:
+      - match: "初診予約"
+        next: jump_電話番号聴取
+      - match: "other"
+        next: jump_診察券番号聴取
+
+  - step: jump_診察券番号聴取
+    type: subflow
+    flowname: "湘南藤沢徳洲会病院$診察券番号聴取"
+    next: jump_電話番号聴取
+
+  - step: jump_電話番号聴取
+    type: subflow
+    flowname: "湘南藤沢徳洲会病院$電話番号聴取"
+    next: 終話分岐_用件
+
+  # =====================================================
+  # 終話分岐（Pattern B: classification × phonetype 2 段）
+  # =====================================================
+  - step: 終話分岐_用件
+    type: context_match_router
+    reference_module: "OpenAI_用件聴取"
+    conditions:
+      - match: "初診予約"
+        next: 終話分岐_診療予約_電話種別
+      - match: "再診予約"
+        next: 終話分岐_診療予約_電話種別
+      - match: "予約変更"
+        next: 終話分岐_予約変更_電話種別
+      - match: "予約キャンセル"
+        next: 終話分岐_予約キャンセル_電話種別
+      - match: "予約確認"
+        next: 終話分岐_予約確認_電話種別
+      - match: "other"
+        next: END_聴取失敗
+
+  - step: 終話分岐_診療予約_電話種別
+    type: context_match_router
+    reference_module: "電話番号聴取"
+    conditions:
+      - match: "1"
+        next: END_診療予約_携帯
+      - match: "other"
+        next: END_診療予約_固定
+
+  - step: 終話分岐_予約変更_電話種別
+    type: context_match_router
+    reference_module: "電話番号聴取"
+    conditions:
+      - match: "1"
+        next: END_予約変更_携帯
+      - match: "other"
+        next: END_予約変更_固定
+
+  - step: 終話分岐_予約キャンセル_電話種別
+    type: context_match_router
+    reference_module: "電話番号聴取"
+    conditions:
+      - match: "1"
+        next: END_予約キャンセル_携帯
+      - match: "other"
+        next: END_予約キャンセル_固定
+
+  - step: 終話分岐_予約確認_電話種別
+    type: context_match_router
+    reference_module: "電話番号聴取"
+    conditions:
+      - match: "1"
+        next: END_予約確認_携帯
+      - match: "other"
+        next: END_予約確認_固定
+
+  # =====================================================
+  # 終話ブロック
+  # =====================================================
+  - step: END_産科代表
+    type: termination
+    termination_ref: "END_産科代表"
+
+  - step: END_小児科代表
+    type: termination
+    termination_ref: "END_小児科代表"
+
+  - step: END_眼科代表
+    type: termination
+    termination_ref: "END_眼科代表"
+
+  - step: END_側弯症直通
+    type: termination
+    termination_ref: "END_側弯症直通"
+
+  - step: END_人間ドック直通
+    type: termination
+    termination_ref: "END_人間ドック直通"
+
+  - step: END_耳鼻咽喉科直接来院
+    type: termination
+    termination_ref: "END_耳鼻咽喉科直接来院"
+
+  - step: END_泌尿器科直接来院
+    type: termination
+    termination_ref: "END_泌尿器科直接来院"
+
+  - step: END_循環器科直接来院
+    type: termination
+    termination_ref: "END_循環器科直接来院"
+
+  - step: END_対象外代表
+    type: termination
+    termination_ref: "END_対象外代表"
+
+  - step: END_救急総合代表
+    type: termination
+    termination_ref: "END_救急総合代表"
+
+  - step: END_対象外予約センター
+    type: termination
+    termination_ref: "END_対象外予約センター"
+
+  - step: END_診療予約_携帯
+    type: termination
+    termination_ref: "END_診療予約_携帯"
+
+  - step: END_診療予約_固定
+    type: termination
+    termination_ref: "END_診療予約_固定"
+
+  - step: END_予約変更_携帯
+    type: termination
+    termination_ref: "END_予約変更_携帯"
+
+  - step: END_予約変更_固定
+    type: termination
+    termination_ref: "END_予約変更_固定"
+
+  - step: END_予約キャンセル_携帯
+    type: termination
+    termination_ref: "END_予約キャンセル_携帯"
+
+  - step: END_予約キャンセル_固定
+    type: termination
+    termination_ref: "END_予約キャンセル_固定"
+
+  - step: END_予約確認_携帯
+    type: termination
+    termination_ref: "END_予約確認_携帯"
+
+  - step: END_予約確認_固定
+    type: termination
+    termination_ref: "END_予約確認_固定"
+
+  - step: END_聴取失敗
+    type: termination
+    termination_ref: "END_聴取失敗"
+
+# =====================================================
+# セクション5: コンテキストフィールド一覧
+# =====================================================
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - { id: "1", order: "1", value: "初診予約" }
+      - { id: "2", order: "2", value: "再診予約" }
+      - { id: "3", order: "3", value: "予約変更" }
+      - { id: "4", order: "4", value: "予約キャンセル" }
+      - { id: "5", order: "5", value: "予約確認" }
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "Gen1 用件.yaml 「用件の確認」5 値。"
+
+  - context_name: "patientName"
+    context_name_jp: "患者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "氏名聴取サブフローで取得。"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "診察券番号聴取サブフローで取得。初診予約はスキップ。"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日(和暦)"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "生年月日聴取サブフロー（DOB Re-confirmation 復唱あり）で取得。"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values:
+      - { order: "1",  value: "産科" }
+      - { order: "2",  value: "婦人科" }
+      - { order: "3",  value: "産婦人科" }
+      - { order: "4",  value: "小児科小児外科" }
+      - { order: "5",  value: "眼科" }
+      - { order: "6",  value: "整形外科" }
+      - { order: "7",  value: "脊椎側弯症外科" }
+      - { order: "8",  value: "股関節外来" }
+      - { order: "9",  value: "脳神経内科" }
+      - { order: "10", value: "脳神経外科" }
+      - { order: "11", value: "内科" }
+      - { order: "12", value: "外科" }
+      - { order: "13", value: "内分泌糖尿病内科" }
+      - { order: "14", value: "肝胆膵消化器病センター" }
+      - { order: "15", value: "腎臓内科" }
+      - { order: "16", value: "呼吸器内科" }
+      - { order: "17", value: "心臓血管外科" }
+      - { order: "18", value: "形成外科" }
+      - { order: "19", value: "皮膚科" }
+      - { order: "20", value: "乳腺外科" }
+      - { order: "21", value: "放射線科" }
+      - { order: "22", value: "リウマチ科" }
+      - { order: "23", value: "ペースメーカー外来" }
+      - { order: "24", value: "メモリークリニック" }
+      - { order: "25", value: "CPAP外来" }
+      - { order: "26", value: "睡眠時無呼吸外来" }
+      - { order: "27", value: "下肢創傷外来" }
+      - { order: "28", value: "痛みセンター" }
+      - { order: "29", value: "高精密度放射線治療センター" }
+      - { order: "30", value: "機能的神経疾患センター" }
+      - { order: "31", value: "二次健診外来" }
+      - { order: "32", value: "味覚嗅覚外来" }
+      - { order: "33", value: "循環器科" }
+      - { order: "34", value: "耳鼻咽喉科" }
+      - { order: "35", value: "泌尿器科" }
+      - { order: "36", value: "リハビリテーション科" }
+      - { order: "37", value: "救急総合診療部" }
+      - { order: "38", value: "内視鏡" }
+      - { order: "39", value: "集中治療科" }
+      - { order: "40", value: "病理診断科" }
+      - { order: "41", value: "放射線診断科" }
+      - { order: "42", value: "人間ドック検診センター" }
+      - { order: "43", value: "登録なし" }
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "Gen1 診療科.yaml の全カテゴリ（00/01/02/03/04/05/06）+ 整形外科 + 分岐後の確定診療科（脊椎側弯症外科 / 股関節外来 / 味覚嗅覚外来）。no_result 時は『登録なし』を格納。"
+
+  - context_name: "referralLetter"
+    context_name_jp: "紹介状有無"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "用件＝初診予約のみ聴取。あり/なし/不明。循環器科の直接来院判定にも参照。"
+
+  - context_name: "physicianSpecified"
+    context_name_jp: "紹介状の医師指定有無"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "用件＝初診予約 + 紹介状あり時のみ聴取。あり/なし/不明。あり時のみ紹介元医療機関 + 医師名を追加聴取。"
+
+  - context_name: "referralOrgName"
+    context_name_jp: "紹介元医療機関名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "初診 + 紹介状あり + 医師指定ありのみ聴取。フリーテキスト。"
+
+  - context_name: "physicianName"
+    context_name_jp: "担当医名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "初診 + 紹介状あり + 医師指定ありのみ聴取。フリーテキスト。"
+
+  - context_name: "spinalCheck"
+    context_name_jp: "脊椎疾患確認"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "初診 + 整形外科のみ聴取。はい/いいえ。Yes→側弯症確認、No→通常整形外科初診（Dr.JOY 側で股関節外来 vs 通常整形外科を判定する補助情報）。"
+
+  - context_name: "scoliosisCheck"
+    context_name_jp: "側弯症確認"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "初診 + 整形外科 + 脊椎疾患Yes時のみ聴取。はい/いいえ。Yes→END_側弯症直通（脊椎側弯症外科扱い）、No→jump_氏名聴取（股関節外来扱い）。"
+
+  - context_name: "otorhinoSpecial"
+    context_name_jp: "味覚嗅覚外来確認"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "初診 + 耳鼻咽喉科のみ聴取。はい/いいえ。Yes→通常ルート（味覚嗅覚外来扱い）、No→END_耳鼻咽喉科直接来院。"
+
+  - context_name: "reservationDate"
+    context_name_jp: "予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "予約変更/予約キャンセルのみ聴取。YYYY-MM-DD 形式。"
+
+  - context_name: "reason"
+    context_name_jp: "理由"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "予約変更/予約キャンセルのみ聴取。フリーテキスト。"
+
+  - context_name: "inquiryContent"
+    context_name_jp: "確認内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約確認のみ聴取。「次回予約日時を教えて欲しい」等のフリーテキスト。"
+
+  - context_name: "rescheduleDesired"
+    context_name_jp: "再予約希望"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約キャンセル後のみ聴取。希望する/希望しない。希望する時のみ予約希望時期を追加聴取。"
+
+  - context_name: "desiredTime"
+    context_name_jp: "予約希望時期"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "再予約希望Yes時のみ聴取。「来週」「今月下旬」等のフリーテキスト。"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納。"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "電話番号聴取サブフローで取得。"
+
+  - context_name: "phonetype"
+    context_name_jp: "電話種別"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "電話番号聴取サブフローが 1=携帯/ip050、2=その他/landline/withheld を設定。終話分岐で使用。"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - { id: "1", order: "1", value: "未処理" }
+      - { id: "2", order: "2", value: "代表案内" }
+      - { id: "3", order: "3", value: "聴取失敗" }
+      - { id: "6", order: "6", value: "時間外" }
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=受付完了 / 2=代表案内・誘導 / 3=聴取失敗 / 6=時間外。Gen1 status=0 / 5 は使用禁止のため 2 に置換。"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: ""
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値。"
+
+# =====================================================
+# セクション6: 聴取項目一覧
+# =====================================================
+hearing_items:
+  - order: 1
+    name: "用件聴取"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: true
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "初診予約"
+      - "再診予約"
+      - "予約変更"
+      - "予約キャンセル"
+      - "予約確認"
+    notes: "Gen1 用件.yaml 5 値。DTMF 1=診察予約(初診/再診の振り分けは OpenAI 自動)、2=変更、3=キャンセル、4=確認。echo_back: true で各用件を復唱確認（『初診予約 でよろしいですか?』等、prompter で自然な文言にチューニング推奨）。3回連続失敗→END_聴取失敗（status=3, 予約センター案内3回繰り返し）。"
+
+  - order: 2
+    name: "紹介状有無聴取"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "referralLetter"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "あり"
+      - "なし"
+      - "不明"
+    notes: "用件＝初診予約のみ。DTMF 1=あり、2=なし。NO_RESULT は不明扱い。「持っています/もらいました/受け取りました」→あり、「持っていません/もらってない」→なし、「分からない/覚えてない」→不明。あり→紹介状医師指定確認、なし/不明/other→診療科_初診（紹介状無くても通常初診ルートに進める。循環器科のみ後段で referralLetter=あり チェック）。"
+
+  - order: 3
+    name: "紹介状医師指定確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "physicianSpecified"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "あり"
+      - "なし"
+      - "不明"
+    notes: "用件＝初診予約 + 紹介状あり時のみ。DTMF 1=あり、2=なし。「書かれている/記載あり」→あり、「書かれていない」→なし、「わからない」→不明。あり→紹介元医療機関聴取、なし/不明/other→診療科_初診（医師名は聴取しない）。"
+
+  - order: 4
+    name: "紹介元医療機関聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "referralOrgName"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "Gen1 紹介元医療機関聞き取り.yaml 準拠。フリーテキスト。「分からない」も許容（そのまま格納）。"
+
+  - order: 5
+    name: "医師名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "physicianName"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "Gen1 医師名聴取.yaml 準拠。担当医名フリーテキスト。「分からない」も許容。Gen1 では用件で TTS 切替（初診=「何先生と書かれていますか?」/ 再診=「担当の先生のお名前をお話ください」）あったが、Gen3 では初診ルートのみ呼ばれるため初診版 TTS で統一。"
+
+  - order: 6
+    name: "診療科_初診"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "産科"
+      - "婦人科"
+      - "産婦人科"
+      - "小児科小児外科"
+      - "眼科"
+      - "整形外科"
+      - "脊椎側弯症外科"
+      - "人間ドック検診センター"
+      - "耳鼻咽喉科"
+      - "泌尿器科"
+      - "循環器科"
+      - "リハビリテーション科"
+      - "救急総合診療部"
+      - "内視鏡"
+      - "集中治療科"
+      - "病理診断科"
+      - "放射線診断科"
+      - "脳神経内科"
+      - "脳神経外科"
+      - "内科"
+      - "外科"
+      - "内分泌糖尿病内科"
+      - "肝胆膵消化器病センター"
+      - "腎臓内科"
+      - "呼吸器内科"
+      - "心臓血管外科"
+      - "形成外科"
+      - "皮膚科"
+      - "乳腺外科"
+      - "放射線科"
+      - "リウマチ科"
+      - "ペースメーカー外来"
+      - "メモリークリニック"
+      - "CPAP外来"
+      - "睡眠時無呼吸外来"
+      - "下肢創傷外来"
+      - "痛みセンター"
+      - "高精密度放射線治療センター"
+      - "機能的神経疾患センター"
+      - "二次健診外来"
+      - "味覚嗅覚外来"
+    notes: "Gen1 診療科.yaml 準拠。産科/小児科小児外科/眼科→END_*代表、脊椎側弯症外科→END_側弯症直通、整形外科→脊椎疾患確認 cascade、人間ドック→END_人間ドック直通、耳鼻咽喉科→味覚嗅覚外来確認、泌尿器科→END_泌尿器科直接来院、循環器科→循環器科紹介状チェック（紹介状ありのみ END_循環器科直接来院、なしは jump_氏名聴取）、リハ/救急総合/内視鏡→END_対象外代表 (救急総合のみ別 TTS)、集中治療/病理/放射線診断→END_対象外予約センター、default→jump_氏名聴取。no_result→『登録なし』。**内視鏡内科は OpenAI prompt で『肝胆膵・消化器病センター』に正規化する**（Gen1 内視鏡内科 + 初診/再診のセット変換ロジック）。"
+
+  - order: 7
+    name: "脊椎疾患確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 1
+    echo_back: false
+    save_to: "spinalCheck"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "整形外科 + 初診時のみ。DTMF 1=はい、2=いいえ。「はい/そうです/脊椎」→はい、「いいえ/違います」→いいえ。Yes→側弯症確認、No/other→jump_氏名聴取（通常整形外科初診）。"
+
+  - order: 8
+    name: "側弯症確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 1
+    echo_back: false
+    save_to: "scoliosisCheck"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "脊椎疾患Yes時のみ。DTMF 1=はい、2=いいえ。「はい/側弯症/側彎症」→はい、「いいえ/違います/股関節」→いいえ。Yes→END_側弯症直通、No/other→jump_氏名聴取（股関節外来扱い）。"
+
+  - order: 9
+    name: "味覚嗅覚外来確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 1
+    echo_back: false
+    save_to: "otorhinoSpecial"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "耳鼻咽喉科 + 初診時のみ。DTMF 1=はい、2=いいえ。「はい/味覚/嗅覚/嗅覚外来/味覚嗅覚」→はい、「いいえ/違います」→いいえ。Yes→jump_氏名聴取（通常ルート、味覚嗅覚外来扱い）、No/other→END_耳鼻咽喉科直接来院。"
+
+  - order: 10
+    name: "診療科_再診"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "人間ドック検診センター"
+      - "リハビリテーション科"
+      - "救急総合診療部"
+      - "内視鏡"
+      - "集中治療科"
+      - "病理診断科"
+      - "放射線診断科"
+      - "産科"
+      - "婦人科"
+      - "産婦人科"
+      - "小児科小児外科"
+      - "眼科"
+      - "整形外科"
+      - "脊椎側弯症外科"
+      - "耳鼻咽喉科"
+      - "泌尿器科"
+      - "循環器科"
+      - "脳神経内科"
+      - "脳神経外科"
+      - "内科"
+      - "外科"
+      - "内分泌糖尿病内科"
+      - "肝胆膵消化器病センター"
+      - "腎臓内科"
+      - "呼吸器内科"
+      - "心臓血管外科"
+      - "形成外科"
+      - "皮膚科"
+      - "乳腺外科"
+      - "放射線科"
+      - "リウマチ科"
+      - "ペースメーカー外来"
+      - "メモリークリニック"
+      - "CPAP外来"
+      - "睡眠時無呼吸外来"
+      - "下肢創傷外来"
+      - "痛みセンター"
+      - "高精密度放射線治療センター"
+      - "機能的神経疾患センター"
+      - "二次健診外来"
+      - "味覚嗅覚外来"
+    notes: "再診ルート。Gen1 診療科.yaml の対象外診療科分岐を踏襲。人間ドック検診センター→直通、リハ/救急総合/内視鏡→対象外代表、集中治療/病理/放射線診断→対象外予約センター、default→jump_氏名聴取（通常再診ルート）。耳鼻咽喉科/泌尿器科/循環器科は再診なら通常ルート可（Gen1 仕様: 直接来院案内は予約取得時のみ）。**内視鏡内科は OpenAI prompt で肝胆膵・消化器病センターに正規化**。"
+
+  - order: 11
+    name: "診療科_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "産科"
+      - "小児科小児外科"
+      - "眼科"
+      - "整形外科"
+      - "脊椎側弯症外科"
+      - "人間ドック検診センター"
+      - "耳鼻咽喉科"
+      - "泌尿器科"
+      - "循環器科"
+      - "リハビリテーション科"
+      - "救急総合診療部"
+      - "内視鏡"
+      - "集中治療科"
+      - "病理診断科"
+      - "放射線診断科"
+      - "脳神経内科"
+      - "脳神経外科"
+      - "内科"
+      - "外科"
+      - "内分泌糖尿病内科"
+      - "肝胆膵消化器病センター"
+      - "腎臓内科"
+      - "呼吸器内科"
+      - "心臓血管外科"
+      - "形成外科"
+      - "皮膚科"
+      - "乳腺外科"
+      - "放射線科"
+      - "リウマチ科"
+      - "婦人科"
+      - "産婦人科"
+      - "ペースメーカー外来"
+      - "メモリークリニック"
+      - "CPAP外来"
+      - "睡眠時無呼吸外来"
+      - "下肢創傷外来"
+      - "痛みセンター"
+      - "高精密度放射線治療センター"
+      - "機能的神経疾患センター"
+      - "二次健診外来"
+      - "味覚嗅覚外来"
+    notes: "予約変更ルート。Gen1 仕様: 対象外診療科でも変更/キャンセルは通常ルートに進む（『対象外診療科：用件分岐』参照）。default→予約日_変更。"
+
+  - order: 12
+    name: "予約日_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: "Gen1 予約日の聞き取り.yaml 準拠（DTMF 4 桁・過去日→+1 年は Phase 2、初期は voice のみ）。YYYY-MM-DD 形式。「7月15日」→2026-07-15 等。"
+
+  - order: 13
+    name: "理由_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "Gen1 理由、内容聞き取り.yaml 準拠（変更理由）。フリーテキスト。"
+
+  - order: 14
+    name: "診療科_キャンセル"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "産科"
+      - "小児科小児外科"
+      - "眼科"
+      - "整形外科"
+      - "脊椎側弯症外科"
+      - "人間ドック検診センター"
+      - "耳鼻咽喉科"
+      - "泌尿器科"
+      - "循環器科"
+      - "リハビリテーション科"
+      - "救急総合診療部"
+      - "内視鏡"
+      - "集中治療科"
+      - "病理診断科"
+      - "放射線診断科"
+      - "脳神経内科"
+      - "脳神経外科"
+      - "内科"
+      - "外科"
+      - "内分泌糖尿病内科"
+      - "肝胆膵消化器病センター"
+      - "腎臓内科"
+      - "呼吸器内科"
+      - "心臓血管外科"
+      - "形成外科"
+      - "皮膚科"
+      - "乳腺外科"
+      - "放射線科"
+      - "リウマチ科"
+      - "婦人科"
+      - "産婦人科"
+      - "ペースメーカー外来"
+      - "メモリークリニック"
+      - "CPAP外来"
+      - "睡眠時無呼吸外来"
+      - "下肢創傷外来"
+      - "痛みセンター"
+      - "高精密度放射線治療センター"
+      - "機能的神経疾患センター"
+      - "二次健診外来"
+      - "味覚嗅覚外来"
+    notes: "予約キャンセルルート。診療科_変更 と同じ対応。default→予約日_キャンセル。"
+
+  - order: 15
+    name: "予約日_キャンセル"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: "予約日_変更 と同ロジック。"
+
+  - order: 16
+    name: "理由_キャンセル"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "Gen1 理由、内容聞き取り.yaml 準拠（キャンセル理由）。フリーテキスト。"
+
+  - order: 17
+    name: "再予約希望確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 1
+    echo_back: false
+    save_to: "rescheduleDesired"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "希望する"
+      - "希望しない"
+    notes: "予約キャンセル後のみ。DTMF 1=希望する、2=希望しない。Yes→予約希望時期聴取、No/other→jump_氏名聴取。Gen1 仕様: Yes 時は用件を『予約変更』に書き換えていたが、Gen3 では classification はキャンセルのまま、desiredTime に希望時期を保存して Dr.JOY 側で担当者判断（NON-BLOCKER N-9）。"
+
+  - order: 18
+    name: "予約希望時期聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "desiredTime"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "Gen1 予約希望時期.yaml 準拠。「来週」「今月下旬」等のフリーテキスト。"
+
+  - order: 19
+    name: "確認内容聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "inquiryContent"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "Gen1 理由、内容聞き取り.yaml 準拠（予約確認）。「次回の予約日時を教えて欲しい」等のフリーテキスト。"
+
+  - order: 20
+    name: "診療科_確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "産科"
+      - "小児科小児外科"
+      - "眼科"
+      - "整形外科"
+      - "脊椎側弯症外科"
+      - "人間ドック検診センター"
+      - "耳鼻咽喉科"
+      - "泌尿器科"
+      - "循環器科"
+      - "リハビリテーション科"
+      - "救急総合診療部"
+      - "内視鏡"
+      - "集中治療科"
+      - "病理診断科"
+      - "放射線診断科"
+      - "脳神経内科"
+      - "脳神経外科"
+      - "内科"
+      - "外科"
+      - "内分泌糖尿病内科"
+      - "肝胆膵消化器病センター"
+      - "腎臓内科"
+      - "呼吸器内科"
+      - "心臓血管外科"
+      - "形成外科"
+      - "皮膚科"
+      - "乳腺外科"
+      - "放射線科"
+      - "リウマチ科"
+      - "婦人科"
+      - "産婦人科"
+      - "ペースメーカー外来"
+      - "メモリークリニック"
+      - "CPAP外来"
+      - "睡眠時無呼吸外来"
+      - "下肢創傷外来"
+      - "痛みセンター"
+      - "高精密度放射線治療センター"
+      - "機能的神経疾患センター"
+      - "二次健診外来"
+      - "味覚嗅覚外来"
+    notes: "予約確認ルート。特殊分岐なし、全 default → jump_氏名聴取。"
+
+# =====================================================
+# セクション7: ステップ詳細
+# =====================================================
+step_details:
+  - step_name: "用件聴取"
+    tts_announcement: "ご用件を、次の4つのうちのいずれかでお話ください。「予約を取るは、1」、「変更は、2」、「キャンセルは、3」、「確認は、4」、それでは、お願いします。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["初診予約", "再診予約", "予約変更", "予約キャンセル", "予約確認"]
+      mapping:
+        - { input: "DTMF 1 / 予約 / 取る / 新規 / 初めて / 初診 / しょしん / 新患", output: "初診予約" }
+        - { input: "再診 / さいしん / 二回目 / 定期受診", output: "再診予約" }
+        - { input: "DTMF 2 / 変更 / へんこう / 延期 / 日程変更 / 別の日", output: "予約変更" }
+        - { input: "DTMF 3 / キャンセル / きゃんせる / 取り消し / やめる", output: "予約キャンセル" }
+        - { input: "DTMF 4 / 確認 / かくにん / いつ / 教えて / 予約日時", output: "予約確認" }
+        - { input: "DTMF 1 + 受診歴あり相当（再診を強く示唆する『以前来た』『前回』等）", output: "再診予約" }
+      no_result_condition: "上記いずれにも該当しない発話 → 3 回目で END_聴取失敗"
+    save_to: "classification"
+    next_step: "初診予約→紹介状有無聴取 / 再診予約→診療科_再診 / 予約変更→診療科_変更 / 予約キャンセル→診療科_キャンセル / 予約確認→確認内容聴取 / NO_RESULT→END_聴取失敗"
+    retry_failure: "end_failure"
+    retry_failure_announcement: "申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、祝日を除く、月曜から金曜の9時から16時、土曜の、9時から14時に、予約センターへおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-35-1350、です。繰り返します。お電話番号は、0466-35-1350、です。繰り返します。お電話番号は、0466-35-1350、です。それでは、失礼いたします。"
+
+  - step_name: "紹介状有無聴取"
+    tts_announcement: "他の医療機関からの紹介状はお持ちですか? お持ちの場合は1、お持ちでない場合は2を押してください。ダイヤルプッシュでも操作可能です。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["あり", "なし", "不明"]
+      mapping:
+        - { input: "DTMF 1 / はい / 持っています / もらいました / 受け取りました / あります", output: "あり" }
+        - { input: "DTMF 2 / いいえ / 持っていません / もらってない / ありません", output: "なし" }
+        - { input: "わからない / 覚えてない / 知らない / 聞いていない / 忘れた", output: "不明" }
+      no_result_condition: "上記いずれにも該当しない発話"
+    save_to: "referralLetter"
+    next_step: "あり→紹介状医師指定確認 / なし→診療科_初診 / 不明→診療科_初診 / NO_RESULT→診療科_初診"
+    retry_failure: "skip"
+
+  - step_name: "紹介状医師指定確認"
+    tts_announcement: "紹介状の封筒の表面に、先生のお名前が書かれていますか? 書かれている場合は1、書かれていない場合は2を押してください。わからない場合は、「わからない」とおっしゃってください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["あり", "なし", "不明"]
+      mapping:
+        - { input: "DTMF 1 / はい / 書かれている / 書いてある / 記載あり / あります", output: "あり" }
+        - { input: "DTMF 2 / いいえ / 書かれていない / 書いてない / ありません", output: "なし" }
+        - { input: "わからない / わかりません / 分からない", output: "不明" }
+      no_result_condition: "上記いずれにも該当しない発話"
+    save_to: "physicianSpecified"
+    next_step: "あり→紹介元医療機関聴取 / なし/不明→診療科_初診 / NO_RESULT→診療科_初診"
+    retry_failure: "skip"
+
+  - step_name: "紹介元医療機関聴取"
+    tts_announcement: "紹介元の医療機関名をおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "referralOrgName"
+    next_step: "医師名聴取"
+    retry_failure: "skip"
+
+  - step_name: "医師名聴取"
+    tts_announcement: "何先生と書かれていますか? わからない場合は「わからない」とお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "physicianName"
+    next_step: "診療科_初診"
+    retry_failure: "skip"
+
+  - step_name: "診療科_初診"
+    tts_announcement: "受診を希望される診療科をおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "産科"
+        - "婦人科"
+        - "産婦人科"
+        - "小児科小児外科"
+        - "眼科"
+        - "整形外科"
+        - "脊椎側弯症外科"
+        - "人間ドック検診センター"
+        - "耳鼻咽喉科"
+        - "泌尿器科"
+        - "循環器科"
+        - "リハビリテーション科"
+        - "救急総合診療部"
+        - "内視鏡"
+        - "集中治療科"
+        - "病理診断科"
+        - "放射線診断科"
+        - "脳神経内科"
+        - "脳神経外科"
+        - "内科"
+        - "外科"
+        - "内分泌糖尿病内科"
+        - "肝胆膵消化器病センター"
+        - "腎臓内科"
+        - "呼吸器内科"
+        - "心臓血管外科"
+        - "形成外科"
+        - "皮膚科"
+        - "乳腺外科"
+        - "放射線科"
+        - "リウマチ科"
+        - "ペースメーカー外来"
+        - "メモリークリニック"
+        - "CPAP外来"
+        - "睡眠時無呼吸外来"
+        - "下肢創傷外来"
+        - "痛みセンター"
+        - "高精密度放射線治療センター"
+        - "機能的神経疾患センター"
+        - "二次健診外来"
+        - "味覚嗅覚外来"
+      mapping:
+        - { input: "診療科キーワード（セクション10 辞書参照）", output: "該当診療科" }
+        - { input: "内視鏡内科 / ないしきょうないか", output: "肝胆膵消化器病センター" }
+        - { input: "脊椎 / そくわんしょう / 脊柱側彎症 / 側弯症 / 脊椎側弯症外科 等", output: "脊椎側弯症外科" }
+        - { input: "産科 / お産 / マタニティ / 周産期", output: "産科" }
+        - { input: "婦人科 / ギネ / レディス / 女性外来", output: "婦人科" }
+        - { input: "産婦人科 / 三九人か（音声誤認）", output: "産婦人科" }
+        - { input: "脳外 / のうげ / 脳神経外科", output: "脳神経外科" }
+        - { input: "脳内 / 脳神経内科 / メモリー / メモリークリニック", output: "脳神経内科" }
+        - { input: "整形 / TH / TK / 経由か", output: "整形外科" }
+      no_result_condition: "辞書いずれにも該当しない発話 → no_result_default『登録なし』"
+    save_to: "clinicalDepartment"
+    next_step: "産科→END_産科代表 / 小児科小児外科→END_小児科代表 / 眼科→END_眼科代表 / 脊椎側弯症外科→END_側弯症直通 / 整形外科→脊椎疾患確認 / 人間ドック検診センター→END_人間ドック直通 / 耳鼻咽喉科→味覚嗅覚外来確認 / 泌尿器科→END_泌尿器科直接来院 / 循環器科→循環器科紹介状チェック / リハビリテーション科→END_対象外代表 / 救急総合診療部→END_救急総合代表 / 内視鏡→END_対象外代表 / 集中治療科/病理診断科/放射線診断科→END_対象外予約センター / default→jump_氏名聴取"
+    retry_failure: "skip"
+
+  - step_name: "脊椎疾患確認"
+    tts_announcement: "脊椎疾患についてですか? はい、そうです、や、いいえ、違います、のように、お答えください。はいの場合は1、いいえの場合は2を押すこともできます。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["はい", "いいえ"]
+      mapping:
+        - { input: "DTMF 1 / はい / そうです / 大丈夫 / 脊椎", output: "はい" }
+        - { input: "DTMF 2 / いいえ / 違います / 別の / 違う", output: "いいえ" }
+      no_result_condition: "上記いずれにも該当しない発話 → 通常整形外科初診扱い"
+    save_to: "spinalCheck"
+    next_step: "はい→側弯症確認 / いいえ→jump_氏名聴取 / NO_RESULT→jump_氏名聴取"
+    retry_failure: "skip"
+
+  - step_name: "側弯症確認"
+    tts_announcement: "側弯症ですか? はい、そうです、や、いいえ、違います、のように、お答えください。はいの場合は1、いいえの場合は2を押すこともできます。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["はい", "いいえ"]
+      mapping:
+        - { input: "DTMF 1 / はい / そうです / 側弯症 / 側彎症 / 脊柱側彎症", output: "はい" }
+        - { input: "DTMF 2 / いいえ / 違います / 股関節 / 関節", output: "いいえ" }
+      no_result_condition: "上記いずれにも該当しない発話"
+    save_to: "scoliosisCheck"
+    next_step: "はい→END_側弯症直通 / いいえ→jump_氏名聴取（股関節外来扱い）/ NO_RESULT→jump_氏名聴取"
+    retry_failure: "skip"
+
+  - step_name: "味覚嗅覚外来確認"
+    tts_announcement: "味覚嗅覚外来の診察をご希望ですか? はい、そうです、や、いいえ、違います、のように、お答えください。はいの場合は1、いいえの場合は2を押すこともできます。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["はい", "いいえ"]
+      mapping:
+        - { input: "DTMF 1 / はい / そうです / 味覚 / 嗅覚 / 味覚嗅覚外来 / 嗅覚外来", output: "はい" }
+        - { input: "DTMF 2 / いいえ / 違います / 別の", output: "いいえ" }
+      no_result_condition: "上記いずれにも該当しない発話 → 直接来院案内（安全側）"
+    save_to: "otorhinoSpecial"
+    next_step: "はい→jump_氏名聴取（通常ルート）/ いいえ→END_耳鼻咽喉科直接来院 / NO_RESULT→END_耳鼻咽喉科直接来院"
+    retry_failure: "skip"
+
+  - step_name: "診療科_再診"
+    tts_announcement: "予約票に記載されている診療科をおっしゃってください。複数診療科の記載がある場合は、まず、1つ目の診療科をおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "人間ドック検診センター"
+        - "リハビリテーション科"
+        - "救急総合診療部"
+        - "内視鏡"
+        - "集中治療科"
+        - "病理診断科"
+        - "放射線診断科"
+        - "産科"
+        - "婦人科"
+        - "産婦人科"
+        - "小児科小児外科"
+        - "眼科"
+        - "整形外科"
+        - "脊椎側弯症外科"
+        - "耳鼻咽喉科"
+        - "泌尿器科"
+        - "循環器科"
+        - "脳神経内科"
+        - "脳神経外科"
+        - "内科"
+        - "外科"
+        - "内分泌糖尿病内科"
+        - "肝胆膵消化器病センター"
+        - "腎臓内科"
+        - "呼吸器内科"
+        - "心臓血管外科"
+        - "形成外科"
+        - "皮膚科"
+        - "乳腺外科"
+        - "放射線科"
+        - "リウマチ科"
+        - "ペースメーカー外来"
+        - "メモリークリニック"
+        - "CPAP外来"
+        - "睡眠時無呼吸外来"
+        - "下肢創傷外来"
+        - "痛みセンター"
+        - "高精密度放射線治療センター"
+        - "機能的神経疾患センター"
+        - "二次健診外来"
+        - "味覚嗅覚外来"
+      mapping:
+        - { input: "診療科キーワード", output: "該当診療科" }
+        - { input: "内視鏡内科 (再診時)", output: "肝胆膵消化器病センター" }
+      no_result_condition: "辞書いずれにも該当しない発話 → 『登録なし』"
+    save_to: "clinicalDepartment"
+    next_step: "人間ドック検診センター→END_人間ドック直通 / リハ/救急総合/内視鏡→END_対象外代表（救急総合は別TTS）/ 集中治療/病理/放射線診断→END_対象外予約センター / default→jump_氏名聴取"
+    retry_failure: "skip"
+
+  - step_name: "診療科_変更"
+    tts_announcement: "予約票に記載されている診療科をおっしゃってください。複数診療科の記載がある場合は、まず、1つ目の診療科をおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "産科"
+        - "小児科小児外科"
+        - "眼科"
+        - "整形外科"
+        - "脊椎側弯症外科"
+        - "人間ドック検診センター"
+        - "耳鼻咽喉科"
+        - "泌尿器科"
+        - "循環器科"
+        - "リハビリテーション科"
+        - "救急総合診療部"
+        - "内視鏡"
+        - "集中治療科"
+        - "病理診断科"
+        - "放射線診断科"
+        - "脳神経内科"
+        - "脳神経外科"
+        - "内科"
+        - "外科"
+        - "内分泌糖尿病内科"
+        - "肝胆膵消化器病センター"
+        - "腎臓内科"
+        - "呼吸器内科"
+        - "心臓血管外科"
+        - "形成外科"
+        - "皮膚科"
+        - "乳腺外科"
+        - "放射線科"
+        - "リウマチ科"
+        - "婦人科"
+        - "産婦人科"
+        - "ペースメーカー外来"
+        - "メモリークリニック"
+        - "CPAP外来"
+        - "睡眠時無呼吸外来"
+        - "下肢創傷外来"
+        - "痛みセンター"
+        - "高精密度放射線治療センター"
+        - "機能的神経疾患センター"
+        - "二次健診外来"
+        - "味覚嗅覚外来"
+      mapping:
+        - { input: "診療科キーワード", output: "該当診療科" }
+      no_result_condition: "辞書いずれにも該当しない発話 → 『登録なし』"
+    save_to: "clinicalDepartment"
+    next_step: "予約日_変更（対象外でも通常ルート）"
+    retry_failure: "skip"
+
+  - step_name: "予約日_変更"
+    tts_announcement: "予約票に記載されている予約日を「7月15日」のように日付でおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["YYYY-MM-DD"]
+      mapping:
+        - { input: "7月15日 / 7/15 / 来月15日 等", output: "2026-07-15（例）" }
+      no_result_condition: "日付として特定できない"
+    save_to: "reservationDate"
+    next_step: "理由_変更"
+    retry_failure: "skip"
+
+  - step_name: "理由_変更"
+    tts_announcement: "変更理由をおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "reason"
+    next_step: "jump_氏名聴取"
+    retry_failure: "skip"
+
+  - step_name: "診療科_キャンセル"
+    tts_announcement: "予約票に記載されている診療科をおっしゃってください。複数診療科の記載がある場合は、まず、1つ目の診療科をおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "産科"
+        - "小児科小児外科"
+        - "眼科"
+        - "整形外科"
+        - "脊椎側弯症外科"
+        - "人間ドック検診センター"
+        - "耳鼻咽喉科"
+        - "泌尿器科"
+        - "循環器科"
+        - "リハビリテーション科"
+        - "救急総合診療部"
+        - "内視鏡"
+        - "集中治療科"
+        - "病理診断科"
+        - "放射線診断科"
+        - "脳神経内科"
+        - "脳神経外科"
+        - "内科"
+        - "外科"
+        - "内分泌糖尿病内科"
+        - "肝胆膵消化器病センター"
+        - "腎臓内科"
+        - "呼吸器内科"
+        - "心臓血管外科"
+        - "形成外科"
+        - "皮膚科"
+        - "乳腺外科"
+        - "放射線科"
+        - "リウマチ科"
+        - "婦人科"
+        - "産婦人科"
+        - "ペースメーカー外来"
+        - "メモリークリニック"
+        - "CPAP外来"
+        - "睡眠時無呼吸外来"
+        - "下肢創傷外来"
+        - "痛みセンター"
+        - "高精密度放射線治療センター"
+        - "機能的神経疾患センター"
+        - "二次健診外来"
+        - "味覚嗅覚外来"
+      mapping:
+        - { input: "診療科キーワード", output: "該当診療科" }
+      no_result_condition: "辞書いずれにも該当しない発話 → 『登録なし』"
+    save_to: "clinicalDepartment"
+    next_step: "予約日_キャンセル"
+    retry_failure: "skip"
+
+  - step_name: "予約日_キャンセル"
+    tts_announcement: "予約票に記載されている予約日を「7月15日」のように日付でおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["YYYY-MM-DD"]
+      mapping:
+        - { input: "7月15日 / 7/15 等", output: "該当日付" }
+      no_result_condition: "日付として特定できない"
+    save_to: "reservationDate"
+    next_step: "理由_キャンセル"
+    retry_failure: "skip"
+
+  - step_name: "理由_キャンセル"
+    tts_announcement: "キャンセル理由をおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "reason"
+    next_step: "再予約希望確認"
+    retry_failure: "skip"
+
+  - step_name: "再予約希望確認"
+    tts_announcement: "再度、予約を希望されますか? 希望する場合は1、希望しない場合は2を押してください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["希望する", "希望しない"]
+      mapping:
+        - { input: "DTMF 1 / はい / 希望します / お願いします", output: "希望する" }
+        - { input: "DTMF 2 / いいえ / 希望しません / 結構です", output: "希望しない" }
+      no_result_condition: "上記いずれにも該当しない発話 → 希望しない扱い"
+    save_to: "rescheduleDesired"
+    next_step: "希望する→予約希望時期聴取 / 希望しない→jump_氏名聴取 / NO_RESULT→jump_氏名聴取"
+    retry_failure: "skip"
+
+  - step_name: "予約希望時期聴取"
+    tts_announcement: "予約希望時期を「来週」、や、「今月下旬」、のようにおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "desiredTime"
+    next_step: "jump_氏名聴取"
+    retry_failure: "skip"
+
+  - step_name: "確認内容聴取"
+    tts_announcement: "ご確認内容についてお伺いします。「次回の予約日時を教えて欲しい」など、内容を簡潔におっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "inquiryContent"
+    next_step: "診療科_確認"
+    retry_failure: "skip"
+
+  - step_name: "診療科_確認"
+    tts_announcement: "予約票に記載されている診療科をおっしゃってください。複数診療科の記載がある場合は、まず、1つ目の診療科をおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "産科"
+        - "小児科小児外科"
+        - "眼科"
+        - "整形外科"
+        - "脊椎側弯症外科"
+        - "人間ドック検診センター"
+        - "耳鼻咽喉科"
+        - "泌尿器科"
+        - "循環器科"
+        - "リハビリテーション科"
+        - "救急総合診療部"
+        - "内視鏡"
+        - "集中治療科"
+        - "病理診断科"
+        - "放射線診断科"
+        - "脳神経内科"
+        - "脳神経外科"
+        - "内科"
+        - "外科"
+        - "内分泌糖尿病内科"
+        - "肝胆膵消化器病センター"
+        - "腎臓内科"
+        - "呼吸器内科"
+        - "心臓血管外科"
+        - "形成外科"
+        - "皮膚科"
+        - "乳腺外科"
+        - "放射線科"
+        - "リウマチ科"
+        - "婦人科"
+        - "産婦人科"
+        - "ペースメーカー外来"
+        - "メモリークリニック"
+        - "CPAP外来"
+        - "睡眠時無呼吸外来"
+        - "下肢創傷外来"
+        - "痛みセンター"
+        - "高精密度放射線治療センター"
+        - "機能的神経疾患センター"
+        - "二次健診外来"
+        - "味覚嗅覚外来"
+      mapping:
+        - { input: "診療科キーワード", output: "該当診療科" }
+      no_result_condition: "辞書いずれにも該当しない発話 → 『登録なし』"
+    save_to: "clinicalDepartment"
+    next_step: "jump_氏名聴取"
+    retry_failure: "skip"
+
+# =====================================================
+# セクション8: 終話パターン
+# =====================================================
+termination_patterns:
+  # --- 異常系（デフォルト必須） ---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "申し訳ございません。電話番号が非通知設定の場合、AI電話では受付できません。先頭に数字の1、8、6、を付けるか、通知が可能な番号でおかけ直しください。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外（祝日除く 月〜金 9-16 / 土 9-14 / 日祝 終日）"
+    tts_announcement: "申し訳ございませんが、ただいまの時間は受付時間外となっております。受付時間は、祝日を除く、月曜から金曜の9時から16時、土曜の、9時から14時、となっております。恐れ入りますが、受付時間内におかけなおしください。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "用件聴取で 3 回連続失敗（予約センター案内 3 回繰り返し）"
+    tts_announcement: "申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、祝日を除く、月曜から金曜の9時から16時、土曜の、9時から14時に、予約センターへおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-35-1350、です。繰り返します。お電話番号は、0466-35-1350、です。繰り返します。お電話番号は、0466-35-1350、です。それでは、失礼いたします。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 業務誘導系（status=2） ---
+  - name: "END_産科代表"
+    condition: "用件＝初診予約 + 診療科＝産科"
+    tts_announcement: "産科の新規予約については、産科受付で承ります。恐れ入りますが、祝日を除く、月曜から金曜の14時から16時に、代表電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。それでは、失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_産科代表"
+
+  - name: "END_小児科代表"
+    condition: "用件＝初診予約 + 診療科＝小児科小児外科"
+    tts_announcement: "小児科・小児外科については、小児科受付で承ります。恐れ入りますが、祝日を除く、月曜から金曜の14時30分から16時30分に、代表電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。それでは、失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_小児科代表"
+
+  - name: "END_眼科代表"
+    condition: "用件＝初診予約 + 診療科＝眼科"
+    tts_announcement: "眼科については、眼科受付で承ります。恐れ入りますが、祝日を除く、月曜から金曜の15時から16時30分に、代表電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。それでは、失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_眼科代表"
+
+  - name: "END_側弯症直通"
+    condition: "用件＝初診予約 + 診療科＝脊椎側弯症外科 OR (整形外科 + 脊椎疾患Yes + 側弯症Yes)"
+    tts_announcement: "側弯症については、脊椎側弯症外科で承ります。恐れ入りますが、祝日を除く、月曜から木曜の9時から16時30分に、脊椎側弯症外科へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-53-7731、です。繰り返します。お電話番号は、0466-53-7731、です。繰り返します。お電話番号は、0466-53-7731、です。それでは、失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_側弯症直通"
+
+  - name: "END_人間ドック直通"
+    condition: "診療科＝人間ドック検診センター（用件問わず）"
+    tts_announcement: "人間ドックについては、恐れ入りますが、祝日を除く、月曜から土曜の、14時から17時に、人間ドック直通電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-35-1360、です。繰り返します。お電話番号は、0466-35-1360、です。繰り返します。お電話番号は、0466-35-1360、です。それでは、失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_人間ドック直通"
+
+  - name: "END_耳鼻咽喉科直接来院"
+    condition: "用件＝初診予約 + 診療科＝耳鼻咽喉科 + 味覚嗅覚外来=No"
+    tts_announcement: "耳鼻咽喉科については、恐れ入りますが、祝日を除く、月曜、火曜、水曜、木曜、土曜の、8時から10時30分、水曜の13時30分から15時に直接ご来院ください。なお、金曜日は休診となります。受付時間の変更や急な休診があるため、予めホームページなどをご確認の上ご来院下さい。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_耳鼻咽喉科直接来院"
+
+  - name: "END_泌尿器科直接来院"
+    condition: "用件＝初診予約 + 診療科＝泌尿器科"
+    tts_announcement: "申し訳ございません。泌尿器科については、恐れ入りますが、祝日を除く、月曜から土曜の、8時から11時に直接ご来院ください。受付時間の変更や急な休診があるため、予めホームページなどをご確認の上ご来院下さい。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_泌尿器科直接来院"
+
+  - name: "END_循環器科直接来院"
+    condition: "用件＝初診予約 + 診療科＝循環器科 + 紹介状あり"
+    tts_announcement: "申し訳ございません。循環器科については、予約制ではないため、恐れ入りますが、祝日を除く、月曜から金曜の、8時から11時に直接ご来院ください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_循環器科直接来院"
+
+  - name: "END_対象外代表"
+    condition: "用件＝初診予約 OR 再診予約 + 診療科＝リハビリテーション科 OR 内視鏡"
+    tts_announcement: "<% clinicalDepartment %>については、代表電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。それでは、失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_対象外代表"
+
+  - name: "END_救急総合代表"
+    condition: "用件＝初診予約 OR 再診予約 + 診療科＝救急総合診療部"
+    tts_announcement: "<% clinicalDepartment %>については、代表電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。それでは、失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_救急総合代表"
+
+  - name: "END_対象外予約センター"
+    condition: "診療科＝集中治療科 OR 病理診断科 OR 放射線診断科（用件問わず）"
+    tts_announcement: "<% clinicalDepartment %>については、恐れ入りますが、祝日を除く、月曜から土曜の、8時から17時に、代表電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。それでは、失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_対象外予約センター"
+
+  # --- 受付完了系（status=1, classification × phonetype の 8 分岐） ---
+  - name: "END_診療予約_携帯"
+    condition: "classification ∈ {初診予約, 再診予約} AND phonetype=1（携帯/ip050）"
+    tts_announcement: "診療予約の申し込みを受付いたしました。日曜・祝日を除く3日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。順番に対応しておりますので、当院からのご連絡をお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_診療予約_携帯"
+
+  - name: "END_診療予約_固定"
+    condition: "classification ∈ {初診予約, 再診予約} AND phonetype=2（固定/その他）"
+    tts_announcement: "診療予約の申し込みを受付いたしました。日曜・祝日を除く3日以内に担当者から折り返しご連絡いたします。順番に対応しておりますので、当院からのご連絡をお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_診療予約_固定"
+
+  - name: "END_予約変更_携帯"
+    condition: "classification=予約変更 AND phonetype=1"
+    tts_announcement: "予約変更の申し込みを受付いたしました。日曜・祝日を除く3日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。順番に対応しておりますので、当院からのご連絡をお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約変更_携帯"
+
+  - name: "END_予約変更_固定"
+    condition: "classification=予約変更 AND phonetype=2"
+    tts_announcement: "予約変更の申し込みを受付いたしました。日曜・祝日を除く3日以内に担当者から折り返しご連絡いたします。順番に対応しておりますので、当院からのご連絡をお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_予約変更_固定"
+
+  - name: "END_予約キャンセル_携帯"
+    condition: "classification=予約キャンセル AND phonetype=1"
+    tts_announcement: "予約キャンセルの申し込みを受付いたしました。必要がある場合のみ、担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約キャンセル_携帯"
+
+  - name: "END_予約キャンセル_固定"
+    condition: "classification=予約キャンセル AND phonetype=2"
+    tts_announcement: "予約キャンセルの申し込みを受付いたしました。必要がある場合のみ、担当者から折り返しご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_予約キャンセル_固定"
+
+  - name: "END_予約確認_携帯"
+    condition: "classification=予約確認 AND phonetype=1"
+    tts_announcement: "ご予約に関するお問い合わせを受付いたしました。日曜・祝日を除く3日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。順番に対応しておりますので、当院からのご連絡をお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約確認_携帯"
+
+  - name: "END_予約確認_固定"
+    condition: "classification=予約確認 AND phonetype=2"
+    tts_announcement: "ご予約に関するお問い合わせを受付いたしました。日曜・祝日を除く3日以内に担当者から折り返しご連絡いたします。順番に対応しておりますので、当院からのご連絡をお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_予約確認_固定"
+
+# smsFlag分岐は classification × phonetype の 2段 ContextMatchRouter で実現するため
+# sms_flag_routing の機械的分岐は使用しない（enabled: false）
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# =====================================================
+# セクション8b: RAG/FAQ検索サブフロー
+# =====================================================
+# Gen1 元資料に RAG/FAQ サブフローの記載なし。pattern: none。
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# =====================================================
+# セクション9: TTSモジュール一覧
+# =====================================================
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内（当日予約不可・診療科制限明示）"
+    announcement: "お電話ありがとうございます。湘南藤沢徳洲会病院の、予約専用、AI電話です。診療科によっては、こちらの番号でお受けできない場合もございます。また、当日の予約は承っておりませんので、ご了承ください。"
+
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知着信時の案内"
+    announcement: "申し訳ございません。電話番号が非通知設定の場合、AI電話では受付できません。先頭に数字の1、8、6、を付けるか、通知が可能な番号でおかけ直しください。それでは失礼いたします。"
+
+  - module_name: "時間外_アナウンス"
+    purpose: "受付時間外の案内"
+    announcement: "申し訳ございませんが、ただいまの時間は受付時間外となっております。受付時間は、祝日を除く、月曜から金曜の9時から16時、土曜の、9時から14時、となっております。恐れ入りますが、受付時間内におかけなおしください。"
+
+  - module_name: "用件聴取"
+    purpose: "用件分類（初診予約/再診予約/予約変更/予約キャンセル/予約確認）"
+    announcement: "ご用件を、次の4つのうちのいずれかでお話ください。「予約を取るは、1」、「変更は、2」、「キャンセルは、3」、「確認は、4」、それでは、お願いします。"
+
+  - module_name: "紹介状有無聴取"
+    purpose: "初診ルートの紹介状有無確認"
+    announcement: "他の医療機関からの紹介状はお持ちですか? お持ちの場合は1、お持ちでない場合は2を押してください。ダイヤルプッシュでも操作可能です。"
+
+  - module_name: "紹介状医師指定確認"
+    purpose: "初診 + 紹介状あり時の医師指定有無"
+    announcement: "紹介状の封筒の表面に、先生のお名前が書かれていますか? 書かれている場合は1、書かれていない場合は2を押してください。わからない場合は、「わからない」とおっしゃってください。"
+
+  - module_name: "紹介元医療機関聴取"
+    purpose: "初診 + 紹介状あり + 医師指定ありの紹介元医療機関名"
+    announcement: "紹介元の医療機関名をおっしゃってください。"
+
+  - module_name: "医師名聴取"
+    purpose: "初診 + 紹介状あり + 医師指定ありの担当医名"
+    announcement: "何先生と書かれていますか? わからない場合は「わからない」とお話ください。"
+
+  - module_name: "診療科_初診"
+    purpose: "初診ルートの診療科聴取"
+    announcement: "受診を希望される診療科をおっしゃってください。"
+
+  - module_name: "脊椎疾患確認"
+    purpose: "整形外科 + 初診時の脊椎疾患Yes/No"
+    announcement: "脊椎疾患についてですか? はい、そうです、や、いいえ、違います、のように、お答えください。はいの場合は1、いいえの場合は2を押すこともできます。"
+
+  - module_name: "側弯症確認"
+    purpose: "脊椎疾患Yes時の側弯症Yes/No"
+    announcement: "側弯症ですか? はい、そうです、や、いいえ、違います、のように、お答えください。はいの場合は1、いいえの場合は2を押すこともできます。"
+
+  - module_name: "味覚嗅覚外来確認"
+    purpose: "耳鼻咽喉科 + 初診時の味覚嗅覚外来Yes/No"
+    announcement: "味覚嗅覚外来の診察をご希望ですか? はい、そうです、や、いいえ、違います、のように、お答えください。はいの場合は1、いいえの場合は2を押すこともできます。"
+
+  - module_name: "診療科_再診"
+    purpose: "再診ルートの診療科聴取"
+    announcement: "予約票に記載されている診療科をおっしゃってください。複数診療科の記載がある場合は、まず、1つ目の診療科をおっしゃってください。"
+
+  - module_name: "診療科_変更"
+    purpose: "予約変更ルートの診療科聴取"
+    announcement: "予約票に記載されている診療科をおっしゃってください。複数診療科の記載がある場合は、まず、1つ目の診療科をおっしゃってください。"
+
+  - module_name: "予約日_変更"
+    purpose: "予約変更の予約日聴取"
+    announcement: "予約票に記載されている予約日を「7月15日」のように日付でおっしゃってください。"
+
+  - module_name: "理由_変更"
+    purpose: "予約変更の理由聴取"
+    announcement: "変更理由をおっしゃってください。"
+
+  - module_name: "診療科_キャンセル"
+    purpose: "予約キャンセルルートの診療科聴取"
+    announcement: "予約票に記載されている診療科をおっしゃってください。複数診療科の記載がある場合は、まず、1つ目の診療科をおっしゃってください。"
+
+  - module_name: "予約日_キャンセル"
+    purpose: "予約キャンセルの予約日聴取"
+    announcement: "予約票に記載されている予約日を「7月15日」のように日付でおっしゃってください。"
+
+  - module_name: "理由_キャンセル"
+    purpose: "予約キャンセルの理由聴取"
+    announcement: "キャンセル理由をおっしゃってください。"
+
+  - module_name: "再予約希望確認"
+    purpose: "予約キャンセル後の再予約希望Yes/No"
+    announcement: "再度、予約を希望されますか? 希望する場合は1、希望しない場合は2を押してください。"
+
+  - module_name: "予約希望時期聴取"
+    purpose: "再予約希望Yes時の希望時期"
+    announcement: "予約希望時期を「来週」、や、「今月下旬」、のようにおっしゃってください。"
+
+  - module_name: "確認内容聴取"
+    purpose: "予約確認ルートの確認内容"
+    announcement: "ご確認内容についてお伺いします。「次回の予約日時を教えて欲しい」など、内容を簡潔におっしゃってください。"
+
+  - module_name: "診療科_確認"
+    purpose: "予約確認ルートの診療科聴取"
+    announcement: "予約票に記載されている診療科をおっしゃってください。複数診療科の記載がある場合は、まず、1つ目の診療科をおっしゃってください。"
+
+  - module_name: "END_産科代表"
+    purpose: "産科 + 初診の代表電話案内"
+    announcement: "産科の新規予約については、産科受付で承ります。恐れ入りますが、祝日を除く、月曜から金曜の14時から16時に、代表電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。それでは、失礼いたします。"
+
+  - module_name: "END_小児科代表"
+    purpose: "小児科小児外科 + 初診の代表電話案内"
+    announcement: "小児科・小児外科については、小児科受付で承ります。恐れ入りますが、祝日を除く、月曜から金曜の14時30分から16時30分に、代表電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。それでは、失礼いたします。"
+
+  - module_name: "END_眼科代表"
+    purpose: "眼科 + 初診の代表電話案内"
+    announcement: "眼科については、眼科受付で承ります。恐れ入りますが、祝日を除く、月曜から金曜の15時から16時30分に、代表電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。それでは、失礼いたします。"
+
+  - module_name: "END_側弯症直通"
+    purpose: "脊椎側弯症外科直通電話案内"
+    announcement: "側弯症については、脊椎側弯症外科で承ります。恐れ入りますが、祝日を除く、月曜から木曜の9時から16時30分に、脊椎側弯症外科へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-53-7731、です。繰り返します。お電話番号は、0466-53-7731、です。繰り返します。お電話番号は、0466-53-7731、です。それでは、失礼いたします。"
+
+  - module_name: "END_人間ドック直通"
+    purpose: "人間ドック直通電話案内"
+    announcement: "人間ドックについては、恐れ入りますが、祝日を除く、月曜から土曜の、14時から17時に、人間ドック直通電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-35-1360、です。繰り返します。お電話番号は、0466-35-1360、です。繰り返します。お電話番号は、0466-35-1360、です。それでは、失礼いたします。"
+
+  - module_name: "END_耳鼻咽喉科直接来院"
+    purpose: "耳鼻咽喉科直接来院案内（味覚嗅覚外来でない場合）"
+    announcement: "耳鼻咽喉科については、恐れ入りますが、祝日を除く、月曜、火曜、水曜、木曜、土曜の、8時から10時30分、水曜の13時30分から15時に直接ご来院ください。なお、金曜日は休診となります。受付時間の変更や急な休診があるため、予めホームページなどをご確認の上ご来院下さい。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_泌尿器科直接来院"
+    purpose: "泌尿器科直接来院案内"
+    announcement: "申し訳ございません。泌尿器科については、恐れ入りますが、祝日を除く、月曜から土曜の、8時から11時に直接ご来院ください。受付時間の変更や急な休診があるため、予めホームページなどをご確認の上ご来院下さい。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_循環器科直接来院"
+    purpose: "循環器科 + 初診 + 紹介状あり時の直接来院案内"
+    announcement: "申し訳ございません。循環器科については、予約制ではないため、恐れ入りますが、祝日を除く、月曜から金曜の、8時から11時に直接ご来院ください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_対象外代表"
+    purpose: "リハビリテーション科 / 内視鏡 + 初診/再診の代表電話案内（diagnostic 名は context 置換）"
+    announcement: "<% clinicalDepartment %>については、代表電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。それでは、失礼いたします。"
+
+  - module_name: "END_救急総合代表"
+    purpose: "救急総合診療部 + 初診/再診の代表電話案内"
+    announcement: "<% clinicalDepartment %>については、代表電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。それでは、失礼いたします。"
+
+  - module_name: "END_対象外予約センター"
+    purpose: "集中治療科 / 病理診断科 / 放射線診断科の代表電話案内"
+    announcement: "<% clinicalDepartment %>については、恐れ入りますが、祝日を除く、月曜から土曜の、8時から17時に、代表電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。繰り返します。お電話番号は、0466-35-1177、です。それでは、失礼いたします。"
+
+  - module_name: "END_診療予約_携帯"
+    purpose: "診療予約（初診/再診）+ 携帯電話の終話"
+    announcement: "診療予約の申し込みを受付いたしました。日曜・祝日を除く3日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。順番に対応しておりますので、当院からのご連絡をお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_診療予約_固定"
+    purpose: "診療予約（初診/再診）+ 固定電話の終話"
+    announcement: "診療予約の申し込みを受付いたしました。日曜・祝日を除く3日以内に担当者から折り返しご連絡いたします。順番に対応しておりますので、当院からのご連絡をお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_予約変更_携帯"
+    purpose: "予約変更 + 携帯電話の終話"
+    announcement: "予約変更の申し込みを受付いたしました。日曜・祝日を除く3日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。順番に対応しておりますので、当院からのご連絡をお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_予約変更_固定"
+    purpose: "予約変更 + 固定電話の終話"
+    announcement: "予約変更の申し込みを受付いたしました。日曜・祝日を除く3日以内に担当者から折り返しご連絡いたします。順番に対応しておりますので、当院からのご連絡をお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_予約キャンセル_携帯"
+    purpose: "予約キャンセル + 携帯電話の終話"
+    announcement: "予約キャンセルの申し込みを受付いたしました。必要がある場合のみ、担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_予約キャンセル_固定"
+    purpose: "予約キャンセル + 固定電話の終話"
+    announcement: "予約キャンセルの申し込みを受付いたしました。必要がある場合のみ、担当者から折り返しご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_予約確認_携帯"
+    purpose: "予約確認 + 携帯電話の終話"
+    announcement: "ご予約に関するお問い合わせを受付いたしました。日曜・祝日を除く3日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。順番に対応しておりますので、当院からのご連絡をお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_予約確認_固定"
+    purpose: "予約確認 + 固定電話の終話"
+    announcement: "ご予約に関するお問い合わせを受付いたしました。日曜・祝日を除く3日以内に担当者から折り返しご連絡いたします。順番に対応しておりますので、当院からのご連絡をお待ちください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "用件聴取 3 回失敗時の予約センター案内（番号 3 回繰り返し）"
+    announcement: "申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、祝日を除く、月曜から金曜の9時から16時、土曜の、9時から14時に、予約センターへおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますので、メモをご準備ください。お電話番号は、0466-35-1350、です。繰り返します。お電話番号は、0466-35-1350、です。繰り返します。お電話番号は、0466-35-1350、です。それでは、失礼いたします。"
+
+# =====================================================
+# セクション10: AmiVoice辞書（profile_words）
+# =====================================================
+# 大半の診療科キーワードは entity_stt_patch.json から scaffold/properties が自動取込のため、
+# ここでは追加の代表的なキーワードのみ列挙（director 転記不要のものは省略）
+amivoice_dictionary:
+  - step_name: "用件聴取"
+    words: |
+      予約 よやく
+      予約取得 よやくしゅとく
+      初診 しょしん
+      初診予約 しょしんよやく
+      新規 しんき
+      新規予約 しんきよやく
+      初めて はじめて
+      再診 さいしん
+      再診予約 さいしんよやく
+      定期受診 ていきじゅしん
+      変更 へんこう
+      予約変更 よやくへんこう
+      延期 えんき
+      キャンセル きゃんせる
+      予約キャンセル よやくきゃんせる
+      取り消し とりけし
+      確認 かくにん
+      予約確認 よやくかくにん
+      予約日時 よやくにちじ
+
+  - step_name: "紹介状有無聴取"
+    words: |
+      紹介状 しょうかいじょう
+      持っています もっています
+      もらいました もらいました
+      ありません ありません
+      わからない わからない
+
+  - step_name: "紹介状医師指定確認"
+    words: |
+      書かれている かかれている
+      記載 きさい
+      ありません ありません
+      わからない わからない
+
+  - step_name: "診療科_初診"
+    words: |
+      産科 さんか
+      婦人科 ふじんか
+      産婦人科 さんふじんか
+      小児科 しょうにか
+      小児外科 しょうにげか
+      眼科 がんか
+      整形外科 せいけいげか
+      脊椎側弯症外科 せきついそくわんしょうげか
+      側弯症 そくわんしょう
+      脊柱側弯症 せきちゅうそくわんしょう
+      脊椎 せきつい
+      股関節 こかんせつ
+      股関節外来 こかんせつがいらい
+      脳神経内科 のうしんけいないか
+      脳神経外科 のうしんけいげか
+      内科 ないか
+      外科 げか
+      内分泌糖尿病内科 ないぶんぴつとうにょうびょうないか
+      内分泌 ないぶんぴつ
+      糖尿病 とうにょうびょう
+      肝胆膵消化器病センター かんたんすいしょうかきびょうせんたー
+      肝胆膵 かんたんすい
+      消化器内科 しょうかきないか
+      内視鏡 ないしきょう
+      内視鏡内科 ないしきょうないか
+      腎臓内科 じんぞうないか
+      呼吸器内科 こきゅうきないか
+      心臓血管外科 しんぞうけっかんげか
+      形成外科 けいせいげか
+      皮膚科 ひふか
+      乳腺外科 にゅうせんげか
+      放射線科 ほうしゃせんか
+      放射線診断科 ほうしゃせんしんだんか
+      リウマチ科 りうまちか
+      ペースメーカー外来 ぺーすめーかーがいらい
+      メモリークリニック めもりーくりにっく
+      シーパップ外来 しーぱっぷがいらい
+      睡眠時無呼吸外来 すいみんじむこきゅうがいらい
+      下肢創傷外来 かしそうしょうがいらい
+      痛みセンター いたみせんたー
+      高精密度放射線治療センター こうせいみつどほうしゃせんちりょうせんたー
+      機能的神経疾患センター きのうてきしんけいしっかんせんたー
+      二次健診外来 にじけんしんがいらい
+      味覚嗅覚外来 みかくきゅうかくがいらい
+      循環器科 じゅんかんきか
+      耳鼻咽喉科 じびいんこうか
+      泌尿器科 ひにょうきか
+      リハビリテーション科 りはびりてーしょんか
+      リハビリ りはびり
+      救急総合診療部 きゅうきゅうそうごうしんりょうぶ
+      集中治療科 しゅうちゅうちりょうか
+      病理診断科 びょうりしんだんか
+      人間ドック検診センター にんげんどっくけんしんせんたー
+      人間ドック にんげんどっく
+      健診 けんしん
+
+  - step_name: "脊椎疾患確認"
+    words: |
+      脊椎 せきつい
+      脊柱 せきちゅう
+      側弯症 そくわんしょう
+
+  - step_name: "側弯症確認"
+    words: |
+      側弯症 そくわんしょう
+      脊柱側弯症 せきちゅうそくわんしょう
+      股関節 こかんせつ
+
+  - step_name: "味覚嗅覚外来確認"
+    words: |
+      味覚 みかく
+      嗅覚 きゅうかく
+      味覚嗅覚外来 みかくきゅうかくがいらい
+
+  - step_name: "診療科_再診"
+    words: |
+      ※診療科_初診 と同じ辞書を使用（scaffold/properties が共通展開）
+
+  - step_name: "診療科_変更"
+    words: |
+      ※診療科_初診 と同じ辞書を使用
+
+  - step_name: "診療科_キャンセル"
+    words: |
+      ※診療科_初診 と同じ辞書を使用
+
+  - step_name: "診療科_確認"
+    words: |
+      ※診療科_初診 と同じ辞書を使用
+
+# =====================================================
+# セクション11: 特記事項・制約
+# =====================================================
+special_notes:
+  - "【冒頭挨拶】Gen1 main.yaml の挨拶文言と一語一句一致。「お電話ありがとうございます。湘南藤沢徳洲会病院の、予約専用、AI電話です。診療科によっては、こちらの番号でお受けできない場合もございます。また、当日の予約は承っておりませんので、ご了承ください。」"
+  - "【受付時間】祝日除く 月〜金 9:00〜16:00 / 土 9:00〜14:00 / 日祝 終日時間外。Dr.JOY 側で acceptance_times のスケジュール設定。"
+  - "【用件 5 分類】Gen1 用件.yaml「セットした用件の分岐」と完全一致（初診予約/再診予約/予約変更/予約キャンセル/予約確認）。Gen3 では用件は1回だけ分類し、以降 classification context で制御（Gen1 の用件の確認_1/_2/_3 を統合）。echo_back: true で各用件を復唱確認。"
+  - "【DTMF 並走】用件聴取（1=予約取得, 2=変更, 3=キャンセル, 4=確認）+ 紹介状/医師指定/脊椎疾患/側弯症/味覚嗅覚/再予約希望（1=Yes, 2=No）の Yes/No 確認系で全面 DTMF 並走。"
+  - "【初診紹介状＋医師指定 cascade】初診 + 紹介状あり → 紹介状医師指定確認 → 医師指定あり時のみ紹介元医療機関 + 医師名を追加聴取（移管ノート §「紹介状あり初診の追加聴取」）。"
+  - "【整形外科 cascade】初診 + 整形外科 → 脊椎疾患確認 → Yes → 側弯症確認 → Yes → END_側弯症直通（脊椎側弯症外科扱い）/ No → 通常初診ルート（股関節外来扱い、Dr.JOY 側で scoliosisCheck=いいえ + spinalCheck=はい を見て股関節外来として処理）/ 脊椎疾患 No → 通常整形外科初診。"
+  - "【耳鼻咽喉科 + 味覚嗅覚外来】初診 + 耳鼻咽喉科 → 味覚嗅覚外来確認 → Yes → 通常ルート（味覚嗅覚外来扱い）/ No → END_耳鼻咽喉科直接来院。"
+  - "【循環器科の紹介状あり時直接来院】初診 + 循環器科 + 紹介状あり → END_循環器科直接来院（予約制ではないため）/ 紹介状なし → jump_氏名聴取（通常初診）。Pattern B（context_match_router で referralLetter 参照）。"
+  - "【内視鏡内科の用件別変換】Gen1 仕様: 用件＝初診/再診時に内視鏡内科は『肝胆膵・消化器病センター』にセット変換、変更/キャンセル/確認なら内視鏡そのまま。Gen3 では prompter で OpenAI prompt 内で初診/再診の場合のみ正規化を行う（NON-BLOCKER N-6）。"
+  - "【コンテキスト変換診療科の読み上げ】内分泌糖尿病内科 / 肝胆膵消化器病センター / 小児科小児外科 → 確認 TTS 時は読み上げ用に「内分泌・糖尿病内科」「肝胆膵・消化器病センター」「小児科・小児外科」と中黒入りで発話するのが望ましいが、Gen3 では context は本来名のまま保存し、TTS prompt 側で個別に対応（properties / prompter フェーズで調整、NON-BLOCKER N-7）。"
+  - "【対象外診療科×用件マトリクス】変更/キャンセルでは対象外診療科でも通常ルートを許可（Gen1 main.yaml 『対象外診療科：用件分岐』）。設計書では診療科_変更/キャンセル の conditions に対象外特殊分岐を入れず、全 default → 予約日_変更/キャンセルへ進める。"
+  - "【代表案内系の context 置換】END_対象外代表 / END_救急総合代表 / END_対象外予約センター の TTS は <% clinicalDepartment %> で動的置換。Brekeke の prompt を IVR エンジンに渡す際の context 置換構文。"
+  - "【キャンセル → 再予約希望】Gen1 仕様: キャンセル後に「再予約希望」Yes → 用件を『予約変更』に書き換えて変更フローに合流。Gen3 では context overwrite ブロックが無いため、用件は『予約キャンセル』のまま、希望時期を desiredTime context に保存して Dr.JOY 側担当者が判断（NON-BLOCKER N-9）。"
+  - "【予約日聴取の DTMF 4 桁対応】Gen1 仕様: シャープ/アスタ + 4 桁数字（月日 MMDD）+ 過去日→+1 年確定。Gen3 初期は voice のみ。Phase 2 で dtmf_max_length 4 + 月日変換 script で実装検討（NON-BLOCKER N-8）。"
+  - "【WEB or 電話の事前選択】Gen1 仕様: 携帯入電時のみ WEB/電話選択可、WEB→SMS 送信終話。Gen3 では incoming-classifier の出力を ContextMatchRouter で参照する正式手段が無いため省略（NON-BLOCKER N-2）。Phase 2 で script_template: phone_type で対応検討。"
+  - "【健診/人間ドック誘導】Gen1 仕様: 用件聴取で「健診」発話時に専用「これから?」フォーク → Yes→人間ドック誘導 / No→氏名聴取。Gen3 では用件聴取で予約取得相当として吸収し、診療科聴取で人間ドック検診センターを選択時に END_人間ドック直通 へ集約（NON-BLOCKER N-12）。"
+  - "【3 回失敗時の予約センター案内】用件聴取で 3 回連続失敗 → END_聴取失敗（予約センター 0466-35-1350 を 3 回繰り返し案内）。retry_count: 2 で 3 回目に発火。status=3。"
+  - "【phonetype 判定】電話番号聴取サブフローが正規表現で mobile/ip050/landline/withheld を判定。mobile/ip050→phonetype=1（携帯用終話）、landline/withheld→phonetype=2（固定用終話）。"
+  - "【終話 8 パターン】classification × phonetype の 2 段 ContextMatchRouter で 8 分岐（診療予約/予約変更/予約キャンセル/予約確認 × 携帯/固定）。初診と再診はどちらも END_診療予約_xx へ集約（Gen1 文言「診療予約の申し込みを受付いたしました。」が共通）。携帯時のみ「ショートメール」を併記。"
+  - "【SMSフラグ割当】受付完了で携帯（phonetype=1）→smsFlag=1（SMS送信あり）、固定（phonetype=2）→smsFlag=-1。誘導系（END_*代表 / 直通 / 直接来院 / 予約センター / 聴取失敗 / 時間外 / 非通知）は全て smsFlag=-1。"
+  - "【Gen1→Gen3: status 置換】Gen1 status=0 / 5 は Gen3 では使用禁止のため、誘導系は全て status=2 へ置換。受付完了は status=1。聴取失敗は status=3。時間外は status=6。非通知は status=2。"
+  - "【Gen1→Gen3: checkpoint 機能】Gen1 commubo の checkpoint（受診歴 / 紹介状有無 / 各 Yes/No 確認）は Gen3 では context（referralLetter / physicianSpecified / spinalCheck / scoliosisCheck / otorhinoSpecial / rescheduleDesired 等）+ context_match_router で代替。"
+  - "【Gen1→Gen3: 重複ブロック削除】Gen1 main.yaml の用件の確認/_1/_2/_3 と 携帯電話分岐/_1/_2 は Gen3 では用件聴取 1 回 + 終話分岐_用件 + 終話分岐_xx_電話種別 の組み合わせで代替。重複展開せず統合。"
+  - "【固定発話厳守】冒頭 / 用件聴取 / 各 END_* TTS は Gen1 元資料 yaml の文言と厳密一致で gen_properties に渡すこと。"
+  - "【prompter 注意】OpenAI_用件聴取 のプロンプトには「初診/再診の自動振り分け」（『初めて』『新規』『初診』→初診予約 / 『再診』『二回目』『定期受診』→再診予約）を明示する。OpenAI_診療科_初診 / 診療科_再診 のプロンプトには「内視鏡内科 → 肝胆膵消化器病センター」変換ルールを明示する。"
+  - "【prompter 注意】generate_by_OpenAI プロンプトには『終話アナウンスの出力前は絶対に status / smsFlag に確定値を書き込まない』制約を必ず含める。"
+
+# =====================================================
+# セクション12: 要確認事項
+# =====================================================
+confirmation_items:
+  - item: "office_id（Dr.JOY 管理画面で確認）"
+    resolved: false
+    notes: "フローJSONには不要。IVR 設定時に別途確認"
+
+  - item: "営業時間スケジュールの Dr.JOY 側登録（祝日除く 月〜金 9-16 / 土 9-14 / 日祝 終日 NG）"
+    resolved: false
+    notes: "Dr.JOY 管理画面から設定。フロー側は acceptance_times モジュール配置のみ"
+
+  - item: "SMS送信文面（smsFlag=1: 受付完了携帯ルート用、用件別 4 種）"
+    resolved: false
+    notes: "Dr.JOY 側設定。本設計書ではフロー側の smsFlag=1 のみ指定。診療予約 / 予約変更 / 予約キャンセル / 予約確認 用の文面を Dr.JOY 側で用意。用件別出し分けが必要なら複数 smsFlag を割り当てる Phase 2 で対応"
+
+  - item: "IVR 着信電話番号（ARS番号）"
+    resolved: false
+    notes: "Brekeke 設定時に設定。設計書には不要"
+
+  - item: "Dr.JOY 画面の表示設定（確認画面表示 ○/×）"
+    resolved: false
+    notes: "Dr.JOY 管理画面から設定"
+
+  - item: "認証設定（生年月日・診察券番号・電話番号の優先順位）"
+    resolved: false
+    notes: "Dr.JOY 管理画面から設定"
+
+  - item: "[電話番号聴取] サブフロー内の retry 上限到達時に 代表案内TTS→切断 を手動追加"
+    resolved: false
+    notes: "Custom Jump to Flow からは親フローの END モジュールへ接続不可。サブフロー内で完結させる。Brekeke IVR UI でサブフロー内の retry_false パスに切断モジュールを追加"
+
+  - item: "WEB or 電話の事前選択（携帯入電時のみ WEB 選択可）"
+    resolved: false
+    notes: "Phase 2 検討事項。Gen3 で incoming-classifier 出力を ContextMatchRouter で参照する正式手段が無いため省略。script_template: phone_type 等で実装検討"
+
+  - item: "内視鏡内科の用件別変換（初診/再診→肝胆膵・消化器病センター）"
+    resolved: false
+    notes: "prompter で OpenAI_診療科_初診 / 診療科_再診 のプロンプトに変換ルールを明示する"
+
+  - item: "予約日聴取の DTMF 4 桁対応（シャープ/アスタ + MMDD + 過去日→+1 年確定）"
+    resolved: false
+    notes: "Phase 2 検討事項。初期実装は voice のみの datetime hearing"
+
+  - item: "再予約希望Yes時の用件書き換え（予約キャンセル→予約変更）"
+    resolved: false
+    notes: "Phase 2 検討事項。Gen3 では context overwrite ブロックが無い。希望時期を desiredTime context に保存し、Dr.JOY 側で担当者判断"
+
+  - item: "用件聴取の echo_back 文言（用件ごとに自然な復唱「初診のご予約でよろしいですか?」等）"
+    resolved: false
+    notes: "prompter フェーズで OpenAI_用件聴取_復唱 のプロンプトをチューニング。scaffold default は『#data# でよろしいですか?』"
+
+  - item: "コンテキスト変換診療科の読み上げ用名（内分泌・糖尿病内科 / 肝胆膵・消化器病センター / 小児科・小児外科）"
+    resolved: false
+    notes: "properties / prompter フェーズで TTS prompt の調整。context 自体は本来名のまま"

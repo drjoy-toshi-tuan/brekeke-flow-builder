@@ -1,0 +1,150 @@
+# 設計書: テスト施設Soniox_診療（Soniox STT テスト用）
+# 目的: Soniox STT モジュールの動作検証。TTS不要（Sonioxが内蔵TTS）。
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト施設Soniox"
+  group_name: "テスト$Soniox診療"
+  flow_name: "テスト$Soniox診療"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: "standalone"
+  flows:
+    - name: "テスト$Soniox診療"
+      role: "main"
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 用件確認
+
+  - step: 用件確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "新規予約"
+        next: 診療科
+      - match: "予約確認"
+        next: END_予約確認
+      - match: "default"
+        next: END_その他
+    next: END_聴取失敗
+
+  - step: 診療科
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "内科"
+        next: END_予約受付
+      - match: "外科"
+        next: END_予約受付
+      - match: "小児科"
+        next: END_予約受付
+      - match: "眼科"
+        next: END_予約受付
+      - match: "耳鼻咽喉科"
+        next: END_予約受付
+      - match: "皮膚科"
+        next: END_予約受付
+      - match: "整形外科"
+        next: END_予約受付
+      - match: "default"
+        next: END_予約受付
+
+  - step: END_予約受付
+    type: termination
+    termination_ref: END_予約受付
+  - step: END_予約確認
+    type: termination
+    termination_ref: END_予約確認
+  - step: END_その他
+    type: termination
+    termination_ref: END_その他
+  - step: END_聴取失敗
+    type: termination
+    termination_ref: END_聴取失敗
+  - step: END_非通知
+    type: termination
+    termination_ref: END_非通知
+  - step: END_時間外
+    type: termination
+    termination_ref: END_時間外
+
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件"
+    display_type: "TEXT"
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+
+hearing_items:
+  - order: 1
+    name: "用件確認"
+    stt_type: "Soniox_STT"
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    output_format: "enum"
+    output_labels:
+      - "新規予約"
+      - "予約確認"
+
+  - order: 2
+    name: "診療科"
+    stt_type: "Soniox_STT"
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    output_format: "enum"
+    output_labels:
+      - "内科"
+      - "外科"
+      - "小児科"
+      - "眼科"
+      - "耳鼻咽喉科"
+      - "皮膚科"
+      - "整形外科"
+
+step_details:
+  - step_name: "用件確認"
+    tts_announcement: "ご用件をお話しください。新規予約、または予約確認のいずれかでお答えください。"
+  - step_name: "診療科"
+    tts_announcement: "ご希望の診療科をお話しください。"
+
+termination_patterns:
+  - name: "予約受付"
+    status: "2"
+    completion_flag_name: "完了フラグ_予約受付"
+    tts_announcement: "ご予約を承りました。お電話ありがとうございました。"
+  - name: "予約確認"
+    status: "2"
+    completion_flag_name: "完了フラグ_予約確認"
+    tts_announcement: "予約確認を承りました。お電話ありがとうございました。"
+  - name: "その他"
+    status: "7"
+    completion_flag_name: "完了フラグ_その他"
+    tts_announcement: "お電話ありがとうございました。"
+  - name: "聴取失敗"
+    status: "6"
+    completion_flag_name: "完了フラグ_聴取失敗"
+    tts_announcement: "申し訳ございません。お電話を切らせていただきます。"
+  - name: "非通知"
+    status: "6"
+    completion_flag_name: "完了フラグ_非通知"
+    tts_announcement: "電話番号を通知しておかけ直しください。"
+  - name: "時間外"
+    status: "6"
+    completion_flag_name: "完了フラグ_時間外"
+    tts_announcement: "ただいまの時間は受付時間外です。"
+
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    announcement: "お電話ありがとうございます。テスト施設です。"

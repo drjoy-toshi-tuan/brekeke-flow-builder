@@ -1,0 +1,97 @@
+# Pattern 6 (テストフロー) — n_choice 決定論エンジン 単体受入テスト（薬処方確認 config）
+#
+# 検証対象: modules/n_choice/acceptance_test/服薬有無/script.js
+#   = 正本テンプレ modules/n_choice/script.js を「薬処方確認_変更キャンセル」config で充填した具体版
+#     （エンジンは正本と同一。DTMF_MAP/TOKEN_MAP/COMPOUND_PATTERNS のみカレス記念病院_診療データ。
+#      {{INPUT_MODULE}} は placeholder のまま）。
+#
+# 狙い: n_choice エンジンを Brekeke 実機 (Nashorn/ES5) で単体実行し、オラクル↔実機パリティを確証する。
+#   本テストは「薬処方確認 config」（飲んでいる/飲んでいない・DTMF 1/2）で検証する
+#   （オラクル test_oracle.py 21/21 と同一ケース）。
+#
+# 確認: Brekeke ログを grep "[TEST FAIL]" で 0 件なら全 PASS。末尾 "[TEST DONE]" で全 21 ケース完走。
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "カレス記念病院_診療_20260716"
+  flow_name: "カレス記念病院_診療_20260716$服薬有無"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "カレス記念病院_診療_20260716$服薬有無"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] n_choice 決定論エンジン 単体受入 (薬処方確認 config, 21 ケース)");
+      $runner.getLogger().info("対象: script.js (正本 script.js を薬処方確認 config 充填) / オラクル 21/21 PASS 済");
+      $runner.getLogger().info("grep [TEST FAIL] = 0 なら実機も全 PASS");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: matrix
+
+  - step: matrix
+    type: script_test_matrix
+    script_file: "./script.js"
+    input_placeholder: "{{INPUT_MODULE}}"
+    final_next: ログ_終了
+    cases:
+      # --- DTMF（単一数字）---
+      - {id: dt1, input: "1", expected: "飲んでいる"}
+      - {id: dt2, input: "2", expected: "飲んでいない"}
+      - {id: dz1, input: "１", expected: "飲んでいる"}
+      - {id: dz2, input: "２", expected: "飲んでいない"}
+      - {id: dt9, input: "9", expected: "NO_RESULT"}
+      - {id: dt0, input: "0", expected: "NO_RESULT"}
+      # --- 数字＋語尾 trim ---
+      - {id: ds1, input: "1です", expected: "飲んでいる"}
+      - {id: ds2, input: "２でお願いします", expected: "飲んでいない"}
+      # --- TOKEN（完全一致）---
+      - {id: tk1, input: "飲んでいる", expected: "飲んでいる"}
+      - {id: tk2, input: "飲んでいない", expected: "飲んでいない"}
+      # --- COMPOUND: 飲んでいる ---
+      - {id: k01, input: "飲んでます", expected: "飲んでいる"}
+      - {id: k02, input: "のんでいる", expected: "飲んでいる"}
+      - {id: k03, input: "はい", expected: "飲んでいる"}
+      # --- COMPOUND: 飲んでいない ---
+      - {id: k04, input: "飲んでません", expected: "飲んでいない"}
+      - {id: k05, input: "のんでいない", expected: "飲んでいない"}
+      - {id: k06, input: "いいえ", expected: "飲んでいない"}
+      # --- フィラーのみ / 無関連（NO_RESULT）---
+      - {id: nr1, input: "えーっと", expected: "NO_RESULT"}
+      - {id: nr2, input: "あのー", expected: "NO_RESULT"}
+      - {id: nr3, input: "うーん", expected: "NO_RESULT"}
+      - {id: nr4, input: "よろしくお願いします", expected: "NO_RESULT"}
+      - {id: nr5, input: "特にありません", expected: "NO_RESULT"}
+
+  - step: ログ_終了
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST DONE] n_choice 服薬有無 config 単体受入 全 21 ケース完走");
+      $runner.setResult("done");
+    next: 終了
+
+  - step: 終了
+    type: termination
+    termination_ref: "END_テスト終了"
+
+termination_patterns:
+  - name: "END_テスト終了"
+    condition: "テスト完走"
+    tts_announcement: "テストを終了します。"
+    status: "1"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_テスト終了"

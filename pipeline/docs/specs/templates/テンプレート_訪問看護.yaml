@@ -1,0 +1,480 @@
+# =============================================================================
+# シナリオテンプレート: 訪問看護（訪問看護指示書 作成依頼）
+# =============================================================================
+# 用途: draw.io でシナリオを起こすための雛形 YAML。
+#   コピー → {施設名} 等を置換 → yaml_to_drawio.py で drawio 化 → diagrams.net で確認。
+# ベース実例: 北里大学病院TSC 訪問看護指示書専用ダイヤル
+#   （Drive: 20260413_濱口_北里大学病院_訪問看護_Brekekeテスト電話.pdf）
+# 構造: 訪問看護事業所 → 病院 への B2B 依頼受付。
+#   SMS 送信前提のため携帯のみ受付（固定電話は終話案内）。依頼確認 → 患者同意確認 →
+#   事業所名・担当者名・連絡先 → 指示書種別(DTMF) → 患者情報 → 指示期間 → 訪問内容 → 終話。
+#   終話後 SMS で本申し込み URL を送付し、更新をもって本申し込み完了となる運用。
+# =============================================================================
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "{施設名}"
+  scenario_name: "訪問看護"
+  group_name: "{施設名}_訪問看護_{YYYYMMDD}"   # 末尾に作業日。日付はグループ名のみに付ける（naming_convention.md）
+  flow_name: "{施設名}_訪問看護_{YYYYMMDD}$訪問看護"   # $ より前は group_name と完全一致（T-2d）
+  target_facility: "{施設名}（トータルサポートセンター等）"
+  office_id: "TODO_要確認"
+  phone_number: "{代表電話番号}"
+  business_hours: "祝日除く月〜金 8:30〜17:00"
+  flow_type: "subflow"
+  work_type: "new"
+  environment: "demo"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "{施設名}$訪問看護"
+      role: "main"
+      description: "訪問看護指示書作成依頼の一次受付。携帯のみ受付（固定電話は終話案内）。依頼確認→患者同意→事業所/担当者/連絡先→指示書種別→患者情報→指示期間→訪問内容→終話（SMSで本申し込みURL送付）"
+  subflows:
+    - name: "{施設名}$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "連絡先が着信番号と異なる場合のみ呼び出す"
+
+# --- セクション3: フローの目的 ---
+purpose: >
+  {施設名} に訪問看護事業所から訪問看護指示書の作成依頼があった際、AI が一次受付する。
+  SMS で本申し込み URL を送るため携帯電話のみ受付し、固定電話・非通知は終話案内する。
+  依頼確認・患者同意の確認後、事業所名・担当者名・連絡先・指示書種別・診療科・主治医名・
+  患者氏名・患者生年月日・診察券番号・指示期間の開始日・訪問看護内容を聴取して Dr.JOY に登録。
+  終話後に SMS で本申し込み URL を送付し、URL 上の更新操作をもって本申し込み完了となる。
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+# 営業時間判定が必要な施設 (曜日別営業時間 / 祝日休 / 固定休 / 年末年始 等):
+# script_template: business_hour_classifier を script ブロックで使用可能。
+# 曜日別営業時間 + 祝日 (Brekeke Note `drjoy.holidays` 連携) + 固定休を 1 ブロックで判定し、
+# 営業中/営業時間外/定休日/祝日/固定休/ERROR の 6 分岐に仕分ける。
+# 使用例: docs/brekeke/script_templates/README.md、詳細仕様: modules/business_hour_classifier/REQUIREMENTS.md
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 着信種別判定
+
+  # 携帯のみ受付。固定電話は SMS 受信不可のため終話案内（非通知/時間外は opening が自動処理）
+  - step: 着信種別判定
+    type: context_match_router
+    reference_module: "incoming-classifier"
+    conditions:
+      - match: "携帯"
+        next: 冒頭_アナウンス
+      - match: "other"
+        next: END_固定電話案内
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 依頼確認
+
+  # 訪問看護指示書作成の依頼か（専用ダイヤルのため対象外は終話案内）
+  - step: 依頼確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "はい"
+        next: 患者同意確認
+      - match: "いいえ"
+        next: END_非該当
+
+  # 患者同意の取得有無（未取得は受付不可で終話）
+  - step: 患者同意確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "同意済み"
+        next: 事業所名
+      - match: "取れていない"
+        next: END_受付不可
+
+  - step: 事業所名
+    type: hearing
+    output_format: text
+    next: 担当者名
+
+  - step: 担当者名
+    type: hearing
+    output_format: text
+    next: 連絡先確認
+
+  # 連絡先は着信番号でよいか。異なる場合のみ電話番号聴取サブフローへ
+  - step: 連絡先確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "はい"
+        next: 指示書種別
+      - match: "いいえ"
+        next: 電話番号聴取
+
+  - step: 電話番号聴取
+    type: subflow
+    flowname: "{施設名}$電話番号聴取"
+    next: 指示書種別
+
+  # 指示書種別（DTMF 1-5、再質問5回→終話）
+  - step: 指示書種別
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "default"
+        next: 診療科
+
+  - step: 診療科
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    conditions:
+      - match: "default"
+        next: 主治医名
+
+  - step: 主治医名
+    type: hearing
+    output_format: text
+    next: 患者氏名
+
+  - step: 患者氏名
+    type: hearing
+    output_format: text
+    next: 患者生年月日
+
+  # DTMF 併用、再質問5回→終話
+  - step: 患者生年月日
+    type: hearing
+    output_format: datetime
+    next: 診察券番号
+
+  # DTMF 7桁、再質問5回→終話
+  - step: 診察券番号
+    type: hearing
+    output_format: text
+    next: 指示期間開始日
+
+  # DTMF 併用、再質問5回→終話
+  - step: 指示期間開始日
+    type: hearing
+    output_format: datetime
+    next: 訪問内容
+
+  - step: 訪問内容
+    type: hearing
+    output_format: text
+    next: END_受付完了
+
+  # 終話
+  - step: END_固定電話案内
+    type: termination
+    termination_ref: "END_固定電話案内"
+  - step: END_非該当
+    type: termination
+    termination_ref: "END_非該当"
+  - step: END_受付不可
+    type: termination
+    termination_ref: "END_受付不可"
+  - step: END_受付完了
+    type: termination
+    termination_ref: "END_受付完了"
+
+# --- セクション5: コンテキストフィールド一覧（抜粋）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "訪問看護指示書作成依頼"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本フローは訪問看護指示書作成依頼固定"
+  - context_name: "officeName"
+    context_name_jp: "事業所名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "訪問看護事業所の正式名称"
+  - context_name: "staffName"
+    context_name_jp: "担当者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "依頼者（事業所担当者）名"
+  - context_name: "instructionType"
+    context_name_jp: "指示書種別"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "訪問看護指示書"
+      - id: "2"
+        order: "2"
+        value: "精神科訪問看護指示書"
+      - id: "3"
+        order: "3"
+        value: "特別訪問看護指示書"
+      - id: "4"
+        order: "4"
+        value: "精神科特別訪問看護指示書"
+      - id: "5"
+        order: "5"
+        value: "医療観察精神科訪問看護指示書"
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "DTMF 1-5 で選択"
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values: []   # 施設の診療科一覧 + 末尾「登録なし」
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "no_result_default は「登録なし」"
+  - context_name: "doctorName"
+    context_name_jp: "主治医名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: ""
+  - context_name: "patientName"
+    context_name_jp: "患者氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "患者生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "西暦。DTMF 併用"
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "7桁。DTMF 併用。7桁未満は再質問"
+  - context_name: "instructionStartDate"
+    context_name_jp: "指示期間の開始日"
+    display_type: "DATE"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "西暦。DTMF 併用"
+  - context_name: "visitContent"
+    context_name_jp: "訪問看護・リハビリテーション内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "病状観察・リハ内容など自由記述"
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "着信番号と異なる場合のみ聴取"
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+      - id: "7"
+        order: "7"
+        value: "固定・非通知"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "システム自動取得"
+
+# --- セクション7: ステップ詳細（TTS 発話文言）---
+step_details:
+  - step_name: "冒頭_アナウンス"
+    tts_announcement: "お電話ありがとうございます。{施設名}、訪問看護指示書専用のAI電話です。訪問看護指示書作成のご依頼でしょうか。「はい、そうです」または「いいえ、違います」とお話しください。"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "依頼確認"
+    retry_failure: "skip"
+  - step_name: "依頼確認"
+    tts_announcement: "訪問看護指示書作成のご依頼でしょうか。「はい、そうです」または「いいえ、違います」とお話しください。"
+    input_method: "voice_only"
+    save_to: "classification"
+    next_step: "患者同意確認 / END_非該当"
+    retry_failure: "end_failure"
+  - step_name: "患者同意確認"
+    tts_announcement: "患者様の同意は得られておりますか。同意済みの場合は「同意済み」、未取得の場合は「取れていない」とお話しください。"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "事業所名 / END_受付不可"
+    retry_failure: "end_failure"
+  - step_name: "事業所名"
+    tts_announcement: "事業所名を正式名称でお話しください。"
+    input_method: "voice_only"
+    save_to: "officeName"
+    next_step: "担当者名"
+    retry_failure: "skip"
+  - step_name: "担当者名"
+    tts_announcement: "担当者名を「名前は山田太郎です」のようにお話しください。"
+    input_method: "voice_only"
+    save_to: "staffName"
+    next_step: "連絡先確認"
+    retry_failure: "skip"
+  - step_name: "連絡先確認"
+    tts_announcement: "ご連絡先の電話番号は、今おかけいただいている番号でよろしいですか。「はい、そうです」または「いいえ、違います」とお話しください。"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "指示書種別 / 電話番号聴取"
+    retry_failure: "skip"
+  - step_name: "指示書種別"
+    tts_announcement: "指示書の種別を、プッシュボタンでお選びください。1.訪問看護指示書、2.精神科訪問看護指示書、3.特別訪問看護指示書、4.精神科特別訪問看護指示書、5.医療観察精神科訪問看護指示書、のいずれかを選択ください。"
+    input_method: "dtmf_voice"
+    save_to: "instructionType"
+    next_step: "診療科"
+    retry_failure: "end_failure"
+  - step_name: "診療科"
+    tts_announcement: "診療科を「診療科は精神科です」のようにお話しください。わからない場合は「わからない」とお話しください。"
+    input_method: "voice_only"
+    save_to: "clinicalDepartment"
+    next_step: "主治医名"
+    retry_failure: "end_failure"
+  - step_name: "主治医名"
+    tts_announcement: "主治医名を「先生は木村先生です」のようにお話しください。"
+    input_method: "voice_only"
+    save_to: "doctorName"
+    next_step: "患者氏名"
+    retry_failure: "skip"
+  - step_name: "患者氏名"
+    tts_announcement: "患者氏名を「名前は佐藤花子です」のようにお話しください。"
+    input_method: "voice_only"
+    save_to: "patientName"
+    next_step: "患者生年月日"
+    retry_failure: "skip"
+  - step_name: "患者生年月日"
+    tts_announcement: "患者様の生年月日を西暦でお話しください。プッシュボタンでも操作できます。"
+    input_method: "dtmf_voice"
+    save_to: "patientDateOfBirth"
+    next_step: "診察券番号"
+    retry_failure: "end_failure"
+  - step_name: "診察券番号"
+    tts_announcement: "7桁の診察券番号をお話しください。プッシュボタンでも操作できます。"
+    input_method: "dtmf_voice"
+    save_to: "medicalCardNumber"
+    next_step: "指示期間開始日"
+    retry_failure: "end_failure"
+  - step_name: "指示期間開始日"
+    tts_announcement: "指示期間の開始日を、西暦でお話しください。プッシュボタンでも操作できます。"
+    input_method: "dtmf_voice"
+    save_to: "instructionStartDate"
+    next_step: "訪問内容"
+    retry_failure: "end_failure"
+  - step_name: "訪問内容"
+    tts_announcement: "訪問看護・リハビリテーションの内容を、「病状観察」「理学療法士が行う訪問看護を1日あたり30分、週1回」などのようにお話しください。"
+    input_method: "voice_only"
+    save_to: "visitContent"
+    next_step: "END_受付完了"
+    retry_failure: "skip"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # 異常系（デフォルト必須 — 削除禁止）
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "お手数をおかけしますが、発信者番号を通知して再度お電話ください。電話番号の前に「186」を追加いただくことで、発信者番号を通知していただくことができます。お電話ありがとうございました。"
+    status: "7"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。{施設名}、訪問看護指示書専用のAI電話です。ただいまの時間は受付時間外です。恐れ入りますが、土日祝日を除く月曜から金曜の8時30分から17時の間におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "ご回答の確認ができませんでしたので、こちらからお電話失礼させていただきます。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+  # 正常系・案内系
+  - name: "END_固定電話案内"
+    condition: "固定電話からの着信（SMS 受信不可）"
+    tts_announcement: "お電話ありがとうございます。{施設名}、訪問看護指示書専用のAI電話です。恐れ入りますが、固定電話からはお受けできません。ショートメッセージが受信可能な携帯電話から、改めておかけ直しください。お電話ありがとうございました。"
+    status: "7"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_固定電話案内"
+  - name: "END_非該当"
+    condition: "訪問看護指示書依頼以外"
+    tts_announcement: "恐れ入ります。こちらは訪問看護指示書の専用ダイヤルです。外来予約やその他のお問合わせは、恐れ入りますが、病院の代表番号、{代表電話番号}へおかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非該当"
+  - name: "END_受付不可"
+    condition: "患者同意=取れていない"
+    tts_announcement: "こちらのお電話では受付できません。恐れ入りますが、事前に患者様の同意をご確認のうえ、改めてお手続きをお願いいたします。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_受付不可"
+  - name: "END_受付完了"
+    condition: "全項目聴取完了"
+    tts_announcement: "ご依頼を承りました。AI電話番号よりショートメッセージにてご連絡いたします。届いたURLより内容をご確認ください。更新をもって本申し込み完了となります。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了"
+
+# --- セクション8b: RAG/FAQ 検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false

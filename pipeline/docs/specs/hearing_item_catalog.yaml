@@ -1,0 +1,986 @@
+# ============================================================
+# 聴取項目カタログ (Hearing Item Catalog)
+# ============================================================
+# 用途: 設計書 YAML の scenario_flow ブロック名を正規化するための辞書
+#   - normalize_hearing_items.py が PDF / drawio テキストと照合する
+#   - 各エントリの synonyms に含まれる名前がすべてマッチ対象
+#   - canonical が設計書 YAML に書き込まれる正式名称
+#
+# 更新ルール:
+#   - synonyms は「顧客資料（PDF / drawio / 議事録）に実際に出現するラベル」のみ。
+#     内部モジュール名（アンダースコア連結・_Soniox 等のサフィックス付き）は載せない。
+#     ※ 照合時に normalize_hearing_items.py が空白・_・・を除去するため、
+#       表記ゆれ（用件_聴取 ↔ 用件聴取 等）は synonym 追加なしでマッチする
+#   - 新しいシノニムを発見したら出典（資料パス）を PR に明記して追加する（canonical は変えない）
+#   - 新しい聴取項目を追加する場合は canonical を明確にしてエントリを追加する
+#   - block_type / output_format / save_to はデフォルト値（施設固有調整可）
+#
+# processing: 聴取値の後処理方式（決定論優先ポリシー準拠）
+#   - script : 認定スクリプト部品で決定論的に判定する（既定。適用できる限りこれを選ぶ）
+#   - openai : generate_by_OpenAI を使う。許可は 2 系統のみ:
+#              ① FAQ（自由発話の質問意図照合 — 決定論で書けない）
+#              ② 予約希望日/希望時期（SKILL_希望日 の固定プロンプト —
+#                 病院側が扱いやすいクリーンな日付データを返すため）
+#   - none   : 後処理なし（slot/card_number 決定論展開・アナウンスのみに限る。
+#              自由テキスト項目は必ず script のテキスト正規化部品を通してクリーンに保存する —
+#              フィラー・言い淀み除去 / 記号・空白正規化 / 全半角統一。意味の書き換え・要約はしない）
+#   processing_ref に判定ロジックの正本（SKILL / 部品 / テンプレ）を記す。
+#
+# next_hint: 構造上の既定遷移先（canonical 名）。問い合わせ系 3 項目
+#   （問い合わせ内容 / その他問い合わせ内容 / 追加の質問）はすべて FAQ照合 の入力であり、
+#   normalize_hearing_items.py が next を FAQ照合 に自動接続する
+#   （FAQ照合 が資料に明記されていなくてもブロックを自動追加する）。
+#
+# script のキーワード設計ポリシー（各部品の REQUIREMENTS.md / oracle で担保）:
+#   1. 完全一致 > 部分一致 の順で必ず先に評価する（完全一致キーワードを部分一致辞書より優先）
+#   2. 部分一致は STRONG（その語だけで確定してよい語）と WEAK（他の手掛かりと併用）に分ける
+#      （SKILL_用件 の STRONG/WEAK 分類に準拠）
+#   3. 複数候補が部分一致したら最長一致を採用（SKILL_診療科 の最長一致ロジックに準拠）
+#   4. AmiVoice 誤認識対策: 部品ごとの文脈に合わせた誤認識辞書（音近似語）を持ってよいが、
+#      他ラベルと衝突する短い語（2 文字以下等）を WEAK にも入れない
+#   5. どれにも該当しなければ確定させず「わからない」系ラベルへ倒す（誤マッチより聞き直し）
+#   ※ 上記は catalog では強制できない。部品認定（oracle + P6 受入）が機械ゲート。
+#
+# risk: 誤判定の実害区分（docs/specs/script-input-handling.md §3）。
+#   - high: 誤判定が予約・患者データ・連絡義務に直接影響 →
+#           ①分類確定後に復唱確認（はい/いいえ）必須 ②WEAK マーカー使用禁止
+#           ③音近似ラベル対（キャンセル/変更 等）は復唱で確定
+#   - 未宣言 = low（標準ラダーのみでよい）
+#
+# 最終更新: 2026-07-14 (processing を決定論優先に再定義。openai は FAQ と希望日系のみ)
+# ============================================================
+
+version: "1.0"
+
+items:
+
+  # ============================================================
+  # A. 患者識別情報（個人情報4種 — scaffold が slot/card_number で
+  #    決定論インライン展開する。Jump to Flow 不使用・2026-07 既定）
+  # ============================================================
+
+  - canonical: 氏名
+    category: 患者識別情報
+    block_type: slot
+    slot: patient_name
+    stt_type: ~
+    output_format: ~
+    processing: none
+    processing_ref: scaffold slot インライン展開（決定論）
+    save_to: patientName
+    output_labels: []
+    synonyms:
+      - 氏名
+      - 氏名聴取
+      - 氏名確認
+      - 患者名
+      - 患者名聴取
+      - 患者氏名
+      - 患者氏名確認
+      - 患者氏名聴取
+      - 代表者氏名
+
+  - canonical: 生年月日
+    category: 患者識別情報
+    block_type: slot
+    slot: date_of_birth
+    stt_type: ~
+    output_format: ~
+    processing: none
+    processing_ref: scaffold slot インライン展開（決定論）
+    save_to: patientDateOfBirth
+    output_labels: []
+    synonyms:
+      - 生年月日
+      - 生年月日聴取
+      - 生年月日確認
+
+  - canonical: 電話番号
+    category: 患者識別情報
+    block_type: slot
+    slot: phone
+    stt_type: ~
+    output_format: ~
+    processing: none
+    processing_ref: scaffold slot インライン展開（決定論）
+    save_to: additionalPhoneNumber
+    output_labels: []
+    synonyms:
+      - 電話番号
+      - 電話番号聴取
+      - 連絡先電話番号
+      - 連絡先電話番号聴取
+      - 折り返し連絡先電話番号
+      - 携帯番号
+      - 携帯番号聴取
+
+  - canonical: 診察券番号
+    category: 患者識別情報
+    block_type: card_number
+    stt_type: ~
+    output_format: ~
+    processing: none
+    processing_ref: scaffold card_number インライン展開（決定論）
+    save_to: medicalCardNumber
+    output_labels:
+      - 数字
+      - わからない
+    synonyms:
+      - 診察券番号
+      - 診察券番号聴取
+      - 診察券確認
+      - 患者ID
+      - 登録番号
+
+  # ============================================================
+  # B. 用件・フロー分岐
+  # ============================================================
+
+  - canonical: 用件確認
+    category: 用件・フロー分岐
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: enum
+    processing: script
+    processing_ref: SKILL_用件（intent classifier 部品）+ modules/n_choice。risk high のため WEAK 不使用・確定後に復唱確認
+    risk: high
+    save_to: classification
+    output_labels:
+      - 予約
+      - 変更
+      - キャンセル
+      - 問合せ
+    synonyms:
+      - 用件確認
+      - 用件
+      - 用件聴取
+      - 用件カテゴリ
+      - 用件選択
+      - ご用件
+
+  - canonical: 受診歴確認
+    category: 受診歴・初診再診
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: enum
+    processing: script
+    processing_ref: 初診/再診キーワード判定部品（完全一致優先・不明時は聞き直し）
+    save_to: firstVisit
+    output_labels:
+      - 初診
+      - 再診
+    synonyms:
+      - 受診歴
+      - 受診歴確認
+      - 受診歴聴取
+      - 通院歴確認
+      - 通院確認
+      - 通院中確認
+      - 初診確認
+      - 初診・再診確認
+      - 新規・再診確認
+      - 新患確認
+      - 新患判断
+      - 再診確認
+
+  # ============================================================
+  # C. 診療科
+  # ============================================================
+
+  - canonical: 診療科
+    category: 診療科
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: enum
+    processing: script
+    processing_ref: SKILL_診療科（kamei_normalize.js / DEPARTMENTS 辞書・最長一致・WAKARANAI）
+    save_to: clinicalDepartment
+    output_labels: []
+    synonyms:
+      - 診療科
+      - 診療科聴取
+      - 診療科確認
+      - 希望診療科
+      - 受診科
+
+  # ============================================================
+  # D. 予約日時
+  # ============================================================
+
+  - canonical: 予約希望日
+    category: 予約日時
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: datetime
+    processing: openai
+    processing_ref: SKILL_希望日（固定プロンプト・9 ステップ判定 — クリーンな日付データ返却のため許可）
+    save_to: desiredDate
+    output_labels:
+      - valid
+      - 当日
+      - 過去日
+    synonyms:
+      - 予約希望日
+      - 予約希望日聴取
+      - 受診希望日
+      - 希望日
+      - 希望日聴取
+      - 変更希望日
+      - 変更希望日聴取
+
+  - canonical: 予約希望時期
+    category: 予約日時
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: openai
+    processing_ref: SKILL_希望日（固定プロンプト・希望時期テンプレ — クリーンな日付データ返却のため許可）
+    save_to: desiredConsultation
+    output_labels:
+      - 当日_翌日
+    synonyms:
+      - 予約希望時期
+      - 予約希望時期聴取
+      - 受診希望時期
+      - 受診希望時期聴取
+      - 希望時期
+      - 変更希望時期
+      - 変更希望時期聴取
+
+  - canonical: 予約日聴取
+    category: 予約日時
+    block_type: hearing
+    stt_type: DTMF_AmiVoice
+    output_format: datetime
+    processing: script
+    processing_ref: DTMF/日付正規化部品（決定論変換。自由発話の相対日付が必要な施設のみ SKILL_希望日 へ切替可）
+    save_to: reservationDate
+    output_labels: []
+    synonyms:
+      - 予約日聴取
+      - 予約日
+      - 予約日確認
+      - 現在の予約日
+      - 現在の予約日聴取
+      - 現在予約日
+      - 現予約日
+      - 前回の予約日
+
+  # ============================================================
+  # E. 紹介状・医師
+  # ============================================================
+
+  - canonical: 紹介状有無
+    category: 紹介状・医師
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: enum
+    processing: script
+    processing_ref: はい/いいえ判定部品（あり/なし語彙・完全一致優先）
+    save_to: hasReferralLetter
+    output_labels:
+      - あり
+      - なし
+    synonyms:
+      - 紹介状有無
+      - 紹介状
+      - 紹介状確認
+      - 紹介状聴取
+      - 紹介状の有無
+
+  - canonical: 医師名
+    category: 紹介状・医師
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー除去・敬称統一 — 施設の医師辞書があれば辞書正規化まで拡張）
+    save_to: doctorName
+    output_labels:
+      - わからない
+    synonyms:
+      - 医師名
+      - 医師名聴取
+      - 医師指定
+      - 希望医師
+      - 担当医
+      - 担当先生
+      - 担当先生聴取
+
+  - canonical: 紹介元医療機関名
+    category: 紹介状・医師
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー・言い淀み除去 / 記号・空白正規化 / 全半角統一 — 意味の書き換えはしない）
+    save_to: introductionHosp
+    output_labels:
+      - わからない
+    synonyms:
+      - 紹介元医療機関名
+      - 紹介元医療機関名聴取
+      - 紹介元医療機関聴取
+      - 紹介元
+      - 医療機関名
+      - 医療機関名聞き取り
+      - 医療機関名聴取
+
+  # ============================================================
+  # F. 症状・理由
+  # ============================================================
+
+  - canonical: 症状
+    category: 症状・理由
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: 緊急ワードゲート部品（緊急語彙 script 判定 → 緊急/通常）＋ テキスト正規化部品（本文整形）
+    save_to: chiefComplaint
+    output_labels:
+      - 緊急
+      - 通常
+    synonyms:
+      - 症状
+      - 症状ヒアリング
+      - 症状聴取
+      - 病名
+      - 病名症状
+      - 病名聴取
+      - 主訴
+      - 症状確認
+
+  - canonical: キャンセル理由
+    category: 症状・理由
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー・言い淀み除去 / 記号・空白正規化 / 全半角統一 — 意味の書き換えはしない）
+    save_to: reason
+    output_labels: []
+    synonyms:
+      - キャンセル理由
+      - キャンセル理由聴取
+
+  - canonical: 変更理由
+    category: 症状・理由
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー・言い淀み除去 / 記号・空白正規化 / 全半角統一 — 意味の書き換えはしない）
+    save_to: reason
+    output_labels: []
+    synonyms:
+      - 変更理由
+      - 変更理由聴取
+      - 変更内容
+      - 変更内容聴取
+
+  - canonical: 理由
+    category: 症状・理由
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー・言い淀み除去 / 記号・空白正規化 / 全半角統一 — 意味の書き換えはしない）
+    save_to: reason
+    output_labels: []
+    synonyms:
+      - 理由
+      - 理由確認
+      - 理由聴取
+      - 再診理由
+
+  # ============================================================
+  # G. 問い合わせ内容・FAQ
+  # ============================================================
+
+  - canonical: 問い合わせ内容
+    category: 問い合わせ
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー・言い淀み除去 / 記号・空白正規化 / 全半角統一 — 意味の書き換えはしない）→ FAQ照合へ入力
+    next_hint: FAQ照合
+    save_to: inquiryContent
+    output_labels: []
+    synonyms:
+      - 問い合わせ内容
+      - 問い合わせ内容聴取
+      - 問い合わせ内容確認
+      - お問い合わせ内容
+      - 問合せ内容
+      - 確認内容
+      - 確認内容聴取
+      - 内容確認
+
+  - canonical: FAQ照合
+    category: 問い合わせ
+    block_type: faq
+    stt_type: AmiVoice_STT
+    output_format: enum
+    processing: openai
+    processing_ref: SKILL_FAQ_Prompt / SKILL_FAQ_Scripts（自由発話の質問意図照合 — 決定論で書けないため許可。完全一致 or NO_RESULT）
+    save_to: faqResult
+    output_labels:
+      - ANSWER
+      - NO_RESULT
+    synonyms:
+      - FAQ
+      - FAQ照合
+      - よくある質問
+      - よくあるご質問
+
+  - canonical: その他問い合わせ内容
+    category: 問い合わせ
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー・言い淀み除去 / 記号・空白正規化 / 全半角統一 — 意味の書き換えはしない）→ FAQ照合へ入力
+    next_hint: FAQ照合
+    save_to: otherInquiry
+    output_labels:
+      - なし
+    synonyms:
+      - その他問い合わせ内容
+      - その他問い合わせ
+      - その他問合せ
+      - その他問合せ内容
+
+  - canonical: 追加の質問
+    category: 問い合わせ
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: はい/いいえ判定部品（なし/ありの語彙判定。あり→FAQ照合へ・なし→終話へ）
+    next_hint: FAQ照合
+    save_to: additionalInquiryFlag
+    output_labels:
+      - なし
+      - default
+    synonyms:
+      - 追加の質問
+      - 追加の質問聴取
+      - ラスト質問
+      - 最後の質問
+      - 最後の問い合わせ
+      - 最終確認
+
+  # ============================================================
+  # H. 企業・団体（健診）
+  # ============================================================
+
+  - canonical: 個人・企業確認
+    category: 企業・団体
+    block_type: hearing
+    stt_type: DTMF_AmiVoice
+    output_format: enum
+    processing: script
+    processing_ref: 個人/企業キーワード判定部品（DTMF 併用・完全一致優先）
+    save_to: individualOrCorporate
+    output_labels:
+      - 個人
+      - 企業
+    synonyms:
+      - 個人・企業確認
+      - 個人企業確認
+      - 個人企業判別
+      - 企業個人確認
+      - 企業か個人かの確認
+
+  - canonical: 企業名
+    category: 企業・団体
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー・言い淀み除去 / 記号・空白正規化 / 全半角統一 — 意味の書き換えはしない）
+    save_to: companyName
+    output_labels: []
+    synonyms:
+      - 企業名
+      - 企業名聴取
+      - 会社名
+      - 企業名担当者名
+      - 企業団体名
+      - 団体名
+
+  - canonical: 担当者名
+    category: 企業・団体
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー・言い淀み除去 / 記号・空白正規化 / 全半角統一 — 意味の書き換えはしない）
+    save_to: callerName
+    output_labels: []
+    synonyms:
+      - 担当者名
+      - 担当者名聴取
+      - ご担当者名
+
+  # ============================================================
+  # I. 健診固有
+  # ============================================================
+
+  - canonical: コース
+    category: 健診固有
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: コース分類部品（施設のコース辞書・最長一致・不明時は聞き直し）
+    save_to: course
+    output_labels:
+      - 人間ドック
+      - 協会けんぽ
+      - 定期健診
+      - 雇用時健診
+      - その他の健診
+    synonyms:
+      - コース
+      - コース聴取
+      - コース選択
+      - 受診コース
+      - 受診希望コース
+      - 希望コース
+
+  - canonical: オプション
+    category: 健診固有
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー・言い淀み除去 / 記号・空白正規化 / 全半角統一 — 意味の書き換えはしない）
+    save_to: option
+    output_labels: []
+    synonyms:
+      - オプション
+      - オプション聴取
+
+  - canonical: がん検診種類
+    category: 健診固有
+    block_type: hearing
+    stt_type: DTMF_AmiVoice
+    output_format: label
+    processing: script
+    processing_ref: がん検診種類判定部品（DTMF 併用・キーワード完全一致優先）
+    save_to: cancerType
+    output_labels:
+      - 乳がん
+      - 胃がん
+      - 肝炎
+      - その他
+    synonyms:
+      - がん検診種類
+      - がん検診の種類
+      - 健康診断の種類
+
+  # ============================================================
+  # J. 連絡先・SMS
+  # ============================================================
+
+  - canonical: 折り返し連絡先
+    category: 連絡先
+    block_type: hearing
+    stt_type: DTMF_AmiVoice
+    output_format: enum
+    processing: script
+    processing_ref: はい/いいえ判定部品（必要/不要の語彙判定・DTMF 併用）。risk high（折り返し漏れ防止）
+    risk: high
+    save_to: details
+    output_labels:
+      - 必要
+      - 不要
+    synonyms:
+      - 折り返し必要
+      - 折り返し確認
+      - 折り返し有無
+      - 折返し有無
+      - 折返有無
+      - 連絡先電話番号確認
+
+  # ============================================================
+  # L. 日程・当日確認（143 シナリオ実測 2026-07-14 追補）
+  # ============================================================
+
+  - canonical: 当日予約確認
+    category: 日程・当日確認
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: enum
+    processing: script
+    processing_ref: はい/いいえ判定部品（当日/後日の語彙判定・DTMF 併用可）。risk high（当日/後日の取り違え防止）
+    risk: high
+    save_to: todayReservation
+    output_labels:
+      - 当日
+      - 後日
+    synonyms:
+      - 当日予約確認
+      - 当日確認
+      - 本日予約確認
+      - 当日翌日確認
+      - 日程確認
+      - 3日以内確認
+
+  - canonical: 都合が悪い日
+    category: 日程・当日確認
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・日付列挙の整形 — 意味の書き換えはしない）
+    save_to: unavailableDate
+    output_labels: []
+    synonyms:
+      - 都合が悪い日
+      - 都合悪い日
+      - 都合の悪い日
+      - 不可日
+
+  - canonical: 希望時間
+    category: 日程・当日確認
+    block_type: hearing
+    stt_type: DTMF_AmiVoice
+    output_format: text
+    processing: script
+    processing_ref: 時間帯正規化部品（午前/午後/時刻表記の統一）
+    save_to: desiredTime
+    output_labels: []
+    synonyms:
+      - 希望時間
+      - 希望時間選択
+      - 希望時間聴取
+      - 希望時間帯
+
+  # ============================================================
+  # M. 患者属性・本人確認（143 シナリオ実測 2026-07-14 追補）
+  # ============================================================
+
+  - canonical: 本人確認
+    category: 患者属性
+    block_type: hearing
+    stt_type: DTMF_AmiVoice
+    output_format: enum
+    processing: script
+    processing_ref: 本人/代理人キーワード判定部品（DTMF 併用）
+    save_to: relationship
+    output_labels:
+      - 本人
+      - 代理人
+    synonyms:
+      - 本人確認
+      - ご本人確認
+      - 本人代理確認
+
+  - canonical: 続柄
+    category: 患者属性
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー除去・続柄語彙の統一）
+    save_to: relationship
+    output_labels: []
+    synonyms:
+      - 続柄
+      - 続柄確認
+      - 続柄聴取
+
+  - canonical: 性別
+    category: 患者属性
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: enum
+    processing: script
+    processing_ref: 性別キーワード判定部品（男性/女性・完全一致優先）
+    save_to: gender
+    output_labels:
+      - 男性
+      - 女性
+    synonyms:
+      - 性別
+      - 性別確認
+      - 性別聴取
+
+  - canonical: 旧姓確認
+    category: 患者属性
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー除去）
+    save_to: former
+    output_labels: []
+    synonyms:
+      - 旧姓確認
+      - 旧姓
+      - 旧姓聴取
+
+  - canonical: 電話口氏名
+    category: 患者属性
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー除去。save_to は施設により person / patientName2 等 — 壁打ちで確定）
+    save_to: patientName2
+    output_labels: []
+    synonyms:
+      - 電話口氏名
+      - お電話口のお名前
+      - 電話口の氏名
+
+  - canonical: 個人情報同意確認
+    category: 患者属性
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: enum
+    processing: script
+    processing_ref: はい/いいえ判定部品（肯定/否定）。risk high（同意の誤記録防止）
+    risk: high
+    save_to: consentAgreement
+    output_labels:
+      - 肯定
+      - 否定
+    synonyms:
+      - 個人情報同意確認
+      - 同意確認
+      - 個人情報の取り扱い同意
+
+  # ============================================================
+  # N. 薬局・薬剤（143 シナリオ実測 2026-07-14 追補）
+  # ============================================================
+
+  - canonical: 残薬確認
+    category: 薬局・薬剤
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー除去 — 残薬の内容/日数は自由発話のため生かして保存。save_to は施設により remainingDrugs / residualMedication — 壁打ちで確定）
+    save_to: remainingDrugs
+    output_labels: []
+    synonyms:
+      - 残薬確認
+      - 残薬
+      - 残薬の有無
+      - お薬の残り
+
+  - canonical: 薬局名
+    category: 薬局・薬剤
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー除去。save_to は施設差が大きい — 壁打ちで確定）
+    save_to: TODO_要確認
+    output_labels: []
+    synonyms:
+      - 薬局名
+      - 薬局名聴取
+      - 薬局さまのお名前
+
+  - canonical: 疑義内容
+    category: 薬局・薬剤
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー・言い淀み除去 — 意味の書き換えはしない）
+    save_to: reason
+    output_labels: []
+    synonyms:
+      - 疑義内容
+      - 疑義照会
+      - 疑義照会内容
+
+  # ============================================================
+  # O. 施設・保険・健診追補（143 シナリオ実測 2026-07-14 追補）
+  # ============================================================
+
+  - canonical: 施設名
+    category: 企業・団体
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー除去。save_to は施設により facilityName / company_name — 壁打ちで確定）
+    save_to: facilityName
+    output_labels: []
+    synonyms:
+      - 施設名
+      - 施設名聴取
+      - 施設情報
+      - ご施設名
+
+  - canonical: 健保名
+    category: 企業・団体
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー除去）
+    save_to: healthInsuranceAssociation
+    output_labels: []
+    synonyms:
+      - 健保名
+      - 健康保険組合名
+      - 健保組合名
+
+  - canonical: 変更項目
+    category: 用件・フロー分岐
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: enum
+    processing: script
+    processing_ref: modules/n_choice（日程変更/その他変更等 — ラベルは施設ごとに壁打ちで確定）。risk high のため WEAK 不使用・確定後に復唱確認
+    risk: high
+    save_to: change_item
+    output_labels:
+      - 日程変更
+      - その他変更
+    synonyms:
+      - 変更項目
+      - 変更項目確認
+      - 変更したい項目
+
+  - canonical: 受診票確認
+    category: 健診固有
+    block_type: hearing
+    stt_type: DTMF_AmiVoice
+    output_format: enum
+    processing: script
+    processing_ref: はい/いいえ判定部品（あり/なし・DTMF 併用）
+    save_to: history
+    output_labels:
+      - あり
+      - なし
+    synonyms:
+      - 受診票確認
+      - 受診票
+      - 受診票の有無
+
+  - canonical: 受診券所持確認
+    category: 健診固有
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: enum
+    processing: script
+    processing_ref: はい/いいえ判定部品（あり/なし。save_to は施設により medicalTicket / examTicket — 壁打ちで確定）
+    save_to: medicalTicket
+    output_labels:
+      - あり
+      - なし
+    synonyms:
+      - 受診券所持確認
+      - 受診券確認
+      - 受診券
+      - 受診券の有無
+
+  - canonical: 健康診断結果の有無
+    category: 健診固有
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: enum
+    processing: script
+    processing_ref: はい/いいえ判定部品（あり/なし）
+    save_to: healthcheckResult
+    output_labels:
+      - あり
+      - なし
+    synonyms:
+      - 健康診断結果の有無
+      - 健診結果の有無
+      - 健康診断結果確認
+
+  - canonical: 市町村確認
+    category: 健診固有
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・自治体名の統一）
+    save_to: city
+    output_labels: []
+    synonyms:
+      - 市町村確認
+      - 市町村
+      - お住まいの市町村
+
+  - canonical: ワクチン種類
+    category: 健診固有
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: enum
+    processing: script
+    processing_ref: ワクチン種類キーワード判定部品（ラベルは施設の取扱ワクチンに合わせ壁打ちで確定）
+    save_to: vaccineType
+    output_labels:
+      - インフルエンザ
+      - 新型コロナ
+    synonyms:
+      - ワクチン種類
+      - ワクチン種類聴取
+      - ワクチンの種類
+      - 接種ワクチン
+
+  - canonical: 受診希望内容
+    category: 健診固有
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: text
+    processing: script
+    processing_ref: modules/text_normalizer（テキスト正規化部品・フィラー除去。save_to は施設により course / option — 壁打ちで確定）
+    save_to: course
+    output_labels: []
+    synonyms:
+      - 受診希望内容
+      - 希望内容
+      - 希望内容聴取
+
+  # ============================================================
+  # P. 連絡方法（143 シナリオ実測 2026-07-14 追補）
+  # ============================================================
+
+  - canonical: 連絡方法
+    category: 連絡先
+    block_type: hearing
+    stt_type: AmiVoice_STT
+    output_format: enum
+    processing: script
+    processing_ref: 連絡方法キーワード判定部品（電話/SMS・完全一致優先）
+    save_to: contact_method
+    output_labels:
+      - 電話
+      - SMS
+    synonyms:
+      - 連絡方法
+      - 連絡方法聴取
+      - ご希望の連絡方法
+
+  # ============================================================
+  # K. 冒頭アナウンス
+  # ============================================================
+
+  - canonical: 冒頭
+    category: システム
+    block_type: opening
+    stt_type: ~
+    output_format: ~
+    processing: none
+    processing_ref: アナウンスのみ
+    save_to: ~
+    output_labels: []
+    synonyms:
+      - 冒頭
+      - 冒頭アナウンス
+      - オープニング
+      - 開始

@@ -1,0 +1,628 @@
+# 設計書 — カレス記念病院 診療検証
+# 生成元: tools/csv_to_yaml.py (raw_to_spec.py 出力から自動生成)
+# 生成日: 2026/07/16
+# ⚠️  TTS文言・business_hours・office_id は (要記入) 箇所を確認・修正してください
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "カレス記念病院"
+  scenario_name: "診療検証"
+  group_name: "カレス記念病院_診療検証_20260716"
+  flow_name: "カレス記念病院_診療検証_20260716$診療検証"
+  office_id: "6a44c5d815f52d0007140538"
+  phone_number: "TODO_要確認"
+  business_hours: "TODO_要確認"
+  flow_type: "1flow"
+  work_type: "new"
+  environment: "demo"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "1flow"
+  flows:
+    - name: "カレス記念病院_診療検証_20260716$診療検証"
+      role: "main"
+      description: "CSV 入口（csv_to_yaml.py）から自動生成"
+
+# --- セクション3: フローの目的 ---
+purpose: "(要記入) — カレス記念病院の診療検証フロー"
+
+# --- セクション4: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 3診療日確認
+
+  - step: 3診療日確認
+    type: UNKNOWN
+    output_format: text
+    next: END_代表案内
+    retry_failure: 代表案内
+
+  - step: END_代表案内
+    type: termination
+
+  - step: 用件確認
+    type: intent
+    output_format: enum
+    save_to: classification
+    options:
+      - 予約
+      - 変更
+      - キャンセル
+      - その他お問い合わせ
+    next: 質問
+    retry_failure: 代表案内
+    # ▼ choices ごとに next を分けてください。 デフォルトは全ルート → 質問
+
+  - step: 質問
+    type: UNKNOWN
+    output_format: text
+    next: 氏名
+    retry_failure: 氏名
+
+  - step: 氏名
+    type: patient_name
+    save_to: patientName
+    next: 生年月日
+
+  - step: 生年月日
+    type: dob
+    save_to: patientDateOfBirth
+    next: 電話番号
+
+  - step: 電話番号
+    type: phone
+    save_to: additionalPhoneNumber
+    next: 連絡先番号（固定電話）
+
+  - step: 連絡先番号（固定電話）
+    type: phone
+    save_to: additionalPhoneNumber
+    next: 終話
+
+  - step: 終話
+    type: termination
+
+  - step: 終話②（キャンセル・問い合わせ）
+    type: termination
+
+  - step: リトライ時ガイダンス
+    type: UNKNOWN
+    output_format: text
+    next: 通話切断ガイダンス（代表案内で終話）
+    retry_failure: END_聴取失敗
+
+  - step: 通話切断ガイダンス（代表案内で終話）
+    type: termination
+
+  - step: 受診歴確認
+    type: hearing
+    output_format: text
+    save_to: firstVisit
+    next: 選定療養費アナウンス（予約）
+    retry_failure: 代表案内
+
+  - step: 選定療養費アナウンス（予約）
+    type: UNKNOWN
+    output_format: text
+    next: 診療科
+    retry_failure: END_聴取失敗
+
+  - step: 診療科
+    type: clinical_department
+    output_format: enum
+    save_to: clinicalDepartment
+    next: 予約希望日
+    retry_failure: 予約希望日
+
+  - step: 予約希望日
+    type: hearing
+    output_format: text
+    save_to: desiredDate
+    next: 診療科（変更・キャンセル）
+    retry_failure: 診療科（変更・キャンセル）
+
+  - step: 診療科（変更・キャンセル）
+    type: clinical_department
+    output_format: enum
+    save_to: clinicalDepartment
+    next: 主治医の先生（変更・キャンセル）
+    retry_failure: 主治医の先生（変更・キャンセル）
+
+  - step: 主治医の先生（変更・キャンセル）
+    type: UNKNOWN
+    output_format: text
+    next: 予約日聴取
+    retry_failure: 予約日聴取
+
+  - step: 予約日聴取
+    type: hearing
+    output_format: text
+    save_to: reservationDate
+    next: 理由
+    retry_failure: 理由
+
+  - step: 理由
+    type: hearing
+    output_format: text
+    save_to: reason
+    next: 薬処方確認（変更・キャンセル）
+    retry_failure: 薬処方確認（変更・キャンセル）
+
+  - step: 薬処方確認（変更・キャンセル）
+    type: UNKNOWN
+    output_format: text
+    next: 残薬確認
+    retry_failure: 残薬確認
+
+  - step: 残薬確認
+    type: hearing
+    output_format: text
+    save_to: remainingDrugs
+    next: 問い合わせ内容
+    retry_failure: 問い合わせ内容
+
+  - step: 問い合わせ内容
+    type: hearing
+    output_format: text
+    save_to: inquiryContent
+    next: END_通話完了
+    retry_failure: END_聴取失敗
+
+  - step: END_通話完了
+    type: termination
+    termination_ref: END_通話完了
+
+  - step: END_時間外
+    type: termination
+    termination_ref: END_時間外
+
+  - step: END_非通知
+    type: termination
+    termination_ref: END_非通知
+
+  - step: END_聴取失敗
+    type: termination
+    termination_ref: END_聴取失敗
+
+# --- セクション5: ステップ詳細 ---
+step_details:
+  - step_name: 冒頭
+    tts_announcement: "{tts_g:お電話ありがとうございます。 カレス記念病院の診療専用AI電話です。
+「プ」と音が鳴ったらお話しください。}"
+    input_method: none
+    next_step: 3診療日確認
+    retry_failure: skip
+
+  - step_name: 3診療日確認
+    tts_announcement: "{tts_g:こちらのお電話は、〇月〇日以降の受診を希望されるお問い合わせでしょうか？
+「はい、そうです」または「いいえ、違います」でお話しください。}"
+    input_method: voice_only
+    next_step: END_代表案内
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、こちらのお電話は、〇月〇日以降の受診を希望されるお問い合わせでしょうか？
+「はい、そうです」または「いいえ、違います」でお話しください。}"
+    retry_failure: end_failure
+
+  - step_name: END_代表案内
+    tts_announcement: "{tts_g:大変申し訳ございません。（直近の診療に関するご用件/お薬が足りない場合）はAI電話では承っておりません。
+恐れ入りますが、代表電話にお電話をお願いいたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+    input_method: none
+    retry_failure: skip
+
+  - step_name: 用件確認
+    tts_announcement: "{tts_g:ご用件を次の４つのうちのいずれかでお話しください。
+「1番、予約」「2番、変更」「3番、キャンセル」「4番、その他お問い合わせ」
+ダイヤルプッシュでも入力いただけます。}"
+    input_method: dtmf_voice
+    next_step: 質問
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、ご用件を次の４つのうちのいずれかでお話しください。
+「1番、予約」「2番、変更」「3番、キャンセル」「4番、その他お問い合わせ」
+ダイヤルプッシュでも入力いただけます。}"
+    reconfirm: true
+    reconfirm_tts: "{tts_g:(要記入 — 復唱文言)}"
+    retry_failure: end_failure
+    save_to: classification
+
+  - step_name: 質問
+    tts_announcement: "{tts_g:そのほかに何かお問い合わせはありますか。ない場合は「ありません。」とお話しください。}"
+    input_method: voice_only
+    next_step: 氏名
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、そのほかに何かお問い合わせはありますか。ない場合は「ありません。」とお話しください。}"
+    retry_failure: skip
+
+  - step_name: 終話
+    tts_announcement: "{tts_g:（予約/変更/キャンセル/問い合わせ）の申し込みを受付いたしました。
+3診療日以内に担当者から折り返し電話、もしくはショートメールにてご連絡いたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+    input_method: none
+    retry_failure: skip
+
+  - step_name: 終話②（キャンセル・問い合わせ）
+    tts_announcement: "{tts_g:（キャンセル/問い合わせ）の申し込みを受付いたしました。
+確認事項がある場合のみ3診療日以内に担当者から折り返し電話、もしくはショートメールにてご連絡いたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+    input_method: none
+    retry_failure: skip
+
+  - step_name: リトライ時ガイダンス
+    tts_announcement: "{tts_g:恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。
+（質問を繰り返す）}"
+    input_method: voice_only
+    next_step: 通話切断ガイダンス（代表案内で終話）
+    retry_count: 0
+    retry_failure: end_failure
+
+  - step_name: 通話切断ガイダンス（代表案内で終話）
+    tts_announcement: "{tts_g:大変申し訳ございません。ご回答をうまく聞き取ることができませんでした。
+恐れ入りますが、代表電話にお電話をお願いいたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+    input_method: none
+    retry_failure: skip
+
+  - step_name: 受診歴確認
+    tts_announcement: "{tts_g:ご希望される診療科での受診ははじめてですか？わからない場合は、「わからない。」とお話しください。}"
+    input_method: voice_only
+    next_step: 選定療養費アナウンス（予約）
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、ご希望される診療科での受診ははじめてですか？わからない場合は、「わからない。」とお話しください。}"
+    retry_failure: end_failure
+    save_to: firstVisit
+
+  - step_name: 選定療養費アナウンス（予約）
+    tts_announcement: "{tts_g:他の医療機関からの紹介状をお持ちでない患者様につきましては、
+通常の診療費とは別に、初診時選定療養費として7,700円を全額自己負担いただいております。
+予めご了承ください。}"
+    input_method: voice_only
+    next_step: 診療科
+    retry_count: 0
+    retry_failure: end_failure
+
+  - step_name: 診療科
+    tts_announcement: "{tts_g:受診を希望される診療科をお話しください。わからない場合は、「わからない。」とお話しください。}"
+    input_method: voice_only
+    next_step: 予約希望日
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、受診を希望される診療科をお話しください。わからない場合は、「わからない。」とお話しください。}"
+    retry_failure: skip
+    save_to: clinicalDepartment
+
+  - step_name: 予約希望日
+    tts_announcement: "{tts_g:ご予約ご希望日をお話しください。ない場合は、ない場合は「ありません。」とお話しください。}"
+    input_method: voice_only
+    next_step: 診療科（変更・キャンセル）
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、ご予約ご希望日をお話しください。ない場合は、ない場合は「ありません。」とお話しください。}"
+    retry_failure: skip
+    save_to: desiredDate
+
+  - step_name: 診療科（変更・キャンセル）
+    tts_announcement: "{tts_g:予約されている診療科をお話しください。わからない場合は、「わからない。」とお話しください。}"
+    input_method: voice_only
+    next_step: 主治医の先生（変更・キャンセル）
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、予約されている診療科をお話しください。わからない場合は、「わからない。」とお話しください。}"
+    retry_failure: skip
+    save_to: clinicalDepartment
+
+  - step_name: 主治医の先生（変更・キャンセル）
+    tts_announcement: "{tts_g:主治医の先生をお話しください。わからない場合は、「わからない。」とお話しください。}"
+    input_method: voice_only
+    next_step: 予約日聴取
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、主治医の先生をお話しください。わからない場合は、「わからない。」とお話しください。}"
+    retry_failure: skip
+
+  - step_name: 予約日聴取
+    tts_announcement: "{tts_g:現在のご予約日をお話しください。}"
+    input_method: dtmf_voice
+    next_step: 理由
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、現在のご予約日をお話しください。}"
+    retry_failure: skip
+    save_to: reservationDate
+
+  - step_name: 理由
+    tts_announcement: "{tts_g:（変更/キャンセル）の理由をお話しください。}"
+    input_method: voice_only
+    next_step: 薬処方確認（変更・キャンセル）
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、（変更/キャンセル）の理由をお話しください。}"
+    retry_failure: skip
+    save_to: reason
+
+  - step_name: 薬処方確認（変更・キャンセル）
+    tts_announcement: "{tts_g:病院からお薬を処方されている方は、「はい、飲んでいます」と、
+されていない方は「いいえ、飲んでいません」とお話しください。}"
+    input_method: voice_only
+    next_step: 残薬確認
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、病院からお薬を処方されている方は、「はい、飲んでいます」と、
+されていない方は「いいえ、飲んでいません」とお話しください。}"
+    retry_failure: skip
+
+  - step_name: 残薬確認
+    tts_announcement: "{tts_g:残薬について確認をいたします。
+残薬がある場合は「はい、あります」、無い場合は「いいえありません」とお話しください。}"
+    input_method: voice_only
+    next_step: 問い合わせ内容
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、残薬について確認をいたします。
+残薬がある場合は「はい、あります」、無い場合は「いいえありません」とお話しください。}"
+    retry_failure: skip
+    save_to: remainingDrugs
+
+  - step_name: 問い合わせ内容
+    tts_announcement: "{tts_g:お問い合わせ内容をお話しください。}"
+    input_method: voice_only
+    next_step: end_success
+    retry_count: 2
+    retry_tts: "{tts_g:恐れ入りますが再度、お問い合わせ内容をお話しください。}"
+    retry_failure: skip
+    save_to: inquiryContent
+
+# --- セクション6: 終話パターン ---
+termination_patterns:
+  - name: END_通話完了
+    condition: 全聴取完了
+    tts_announcement: "{tts_g:(要記入)}"
+    status: 1
+    sms_flag: 1
+    completion_flag_name: 完了フラグ_通話完了
+
+  - name: END_時間外
+    condition: 受付時間外
+    tts_announcement: "{tts_g:(要記入)}"
+    status: 6
+    sms_flag: "-2"
+    completion_flag_name: 完了フラグ_時間外
+
+  - name: END_非通知
+    condition: 非通知着信
+    tts_announcement: "{tts_g:恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。}"
+    status: 2
+    sms_flag: "-2"
+    completion_flag_name: 完了フラグ_非通知
+
+  - name: END_聴取失敗
+    condition: retry 上限到達
+    tts_announcement: "{tts_g:(要記入)}"
+    status: 2
+    sms_flag: "-2"
+    completion_flag_name: 完了フラグ_聴取失敗
+
+# --- セクション7: フロー図（自動生成テキスト）---
+flow_diagrams:
+  - name: "カレス記念病院_診療検証_20260716$診療検証"
+    diagram: |
+      [冒頭] opening -> 3診療日確認
+      [3診療日確認] UNKNOWN -> END_代表案内
+      [END_代表案内] termination
+      [用件確認] intent -> 質問
+      [質問] UNKNOWN -> 氏名
+      [氏名] patient_name -> 生年月日
+      [生年月日] dob -> 電話番号
+      [電話番号] phone -> 連絡先番号（固定電話）
+      [連絡先番号（固定電話）] phone -> 終話
+      [終話] termination
+      [終話②（キャンセル・問い合わせ）] termination
+      [リトライ時ガイダンス] UNKNOWN -> 通話切断ガイダンス（代表案内で終話）
+      [通話切断ガイダンス（代表案内で終話）] termination
+      [受診歴確認] hearing -> 選定療養費アナウンス（予約）
+      [選定療養費アナウンス（予約）] UNKNOWN -> 診療科
+      [診療科] clinical_department -> 予約希望日
+      [予約希望日] hearing -> 診療科（変更・キャンセル）
+      [診療科（変更・キャンセル）] clinical_department -> 主治医の先生（変更・キャンセル）
+      [主治医の先生（変更・キャンセル）] UNKNOWN -> 予約日聴取
+      [予約日聴取] hearing -> 理由
+      [理由] hearing -> 薬処方確認（変更・キャンセル）
+      [薬処方確認（変更・キャンセル）] UNKNOWN -> 残薬確認
+      [残薬確認] hearing -> 問い合わせ内容
+      [問い合わせ内容] hearing -> END_通話完了
+      [END_通話完了] termination
+      [END_時間外] termination
+      [END_非通知] termination
+      [END_聴取失敗] termination
+
+# --- セクション8: コンテキストフィールド ---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件確認"
+    display_type: "CLASSIFICATION"
+    description: "用件確認（CSV 入口由来・自動生成）"
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    description: "氏名（CSV 入口由来・自動生成）"
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE"
+    description: "生年月日（CSV 入口由来・自動生成）"
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "電話番号"
+    display_type: "PHONE_NUMBER"
+    description: "電話番号（CSV 入口由来・自動生成）"
+  - context_name: "firstVisit"
+    context_name_jp: "受診歴確認"
+    display_type: "TEXT"
+    description: "受診歴確認（CSV 入口由来・自動生成）"
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    description: "診療科（CSV 入口由来・自動生成）"
+  - context_name: "desiredDate"
+    context_name_jp: "予約希望日"
+    display_type: "DATE"
+    description: "予約希望日（CSV 入口由来・自動生成）"
+  - context_name: "reservationDate"
+    context_name_jp: "予約日聴取"
+    display_type: "DATE"
+    description: "予約日聴取（CSV 入口由来・自動生成）"
+  - context_name: "reason"
+    context_name_jp: "理由"
+    display_type: "TEXT"
+    description: "理由（CSV 入口由来・自動生成）"
+  - context_name: "remainingDrugs"
+    context_name_jp: "残薬確認"
+    display_type: "TEXT"
+    description: "残薬確認（CSV 入口由来・自動生成）"
+  - context_name: "inquiryContent"
+    context_name_jp: "問い合わせ内容"
+    display_type: "TEXT"
+    description: "問い合わせ内容（CSV 入口由来・自動生成）"
+
+# --- セクション9: 聴取項目 ---
+hearing_items:
+  - name: "3診療日確認"
+    echo_back: false
+    retry_count: 2
+  - name: "用件確認"
+    echo_back: true
+    retry_count: 2
+  - name: "質問"
+    echo_back: false
+    retry_count: 2
+  - name: "氏名"
+    echo_back: false
+    retry_count: 2
+  - name: "生年月日"
+    echo_back: false
+    retry_count: 2
+  - name: "電話番号"
+    echo_back: false
+    retry_count: 2
+  - name: "連絡先番号（固定電話）"
+    echo_back: true
+    retry_count: 2
+  - name: "リトライ時ガイダンス"
+    echo_back: false
+    retry_count: 0
+  - name: "受診歴確認"
+    echo_back: false
+    retry_count: 2
+  - name: "選定療養費アナウンス（予約）"
+    echo_back: false
+    retry_count: 0
+  - name: "診療科"
+    echo_back: false
+    retry_count: 2
+  - name: "予約希望日"
+    echo_back: false
+    retry_count: 2
+  - name: "診療科（変更・キャンセル）"
+    echo_back: false
+    retry_count: 2
+  - name: "主治医の先生（変更・キャンセル）"
+    echo_back: false
+    retry_count: 2
+  - name: "予約日聴取"
+    echo_back: false
+    retry_count: 2
+  - name: "理由"
+    echo_back: false
+    retry_count: 2
+  - name: "薬処方確認（変更・キャンセル）"
+    echo_back: false
+    retry_count: 2
+  - name: "残薬確認"
+    echo_back: false
+    retry_count: 2
+  - name: "問い合わせ内容"
+    echo_back: false
+    retry_count: 2
+
+# --- セクション10: TTS モジュール ---
+tts_modules:
+  - module_name: "冒頭"
+    announcement: "{tts_g:お電話ありがとうございます。 カレス記念病院の診療専用AI電話です。
+「プ」と音が鳴ったらお話しください。}"
+  - module_name: "3診療日確認"
+    announcement: "{tts_g:こちらのお電話は、〇月〇日以降の受診を希望されるお問い合わせでしょうか？
+「はい、そうです」または「いいえ、違います」でお話しください。}"
+  - module_name: "END_代表案内"
+    announcement: "{tts_g:大変申し訳ございません。（直近の診療に関するご用件/お薬が足りない場合）はAI電話では承っておりません。
+恐れ入りますが、代表電話にお電話をお願いいたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+  - module_name: "用件確認"
+    announcement: "{tts_g:ご用件を次の４つのうちのいずれかでお話しください。
+「1番、予約」「2番、変更」「3番、キャンセル」「4番、その他お問い合わせ」
+ダイヤルプッシュでも入力いただけます。}"
+  - module_name: "質問"
+    announcement: "{tts_g:そのほかに何かお問い合わせはありますか。ない場合は「ありません。」とお話しください。}"
+  - module_name: "氏名"
+    announcement: "{tts_g:患者さんのお名前を「名前は山田太郎です。」のようにフルネームでお話しください。}"
+  - module_name: "生年月日"
+    announcement: "{tts_g:生年月日をお話しください。西暦の場合ダイヤルプッシュでも入力いただけます。}"
+  - module_name: "電話番号"
+    announcement: "{tts_g:ご連絡先は今おかけいただいている「××× ‐ ××× ‐ ×××」でよろしいですか？
+「はい、そうです」、または、「いいえ、ちがいます」、でお話しください。}"
+  - module_name: "連絡先番号（固定電話）"
+    announcement: "{tts_g:ご連絡先のお電話番号をお伺いします。携帯番号または0から始まる市外局番でお話しください。
+ダイヤルプッシュでも入力いただけます。
+入力が終わりましたら、最後に「こめじるし」を押してください。}"
+  - module_name: "終話"
+    announcement: "{tts_g:（予約/変更/キャンセル/問い合わせ）の申し込みを受付いたしました。
+3診療日以内に担当者から折り返し電話、もしくはショートメールにてご連絡いたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+  - module_name: "終話②（キャンセル・問い合わせ）"
+    announcement: "{tts_g:（キャンセル/問い合わせ）の申し込みを受付いたしました。
+確認事項がある場合のみ3診療日以内に担当者から折り返し電話、もしくはショートメールにてご連絡いたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+  - module_name: "リトライ時ガイダンス"
+    announcement: "{tts_g:恐れ入りますがご回答が確認できませんでした。今一度おっしゃっていただけますでしょうか。
+（質問を繰り返す）}"
+  - module_name: "通話切断ガイダンス（代表案内で終話）"
+    announcement: "{tts_g:大変申し訳ございません。ご回答をうまく聞き取ることができませんでした。
+恐れ入りますが、代表電話にお電話をお願いいたします。
+お電話ありがとうございました。それでは失礼いたします。}"
+  - module_name: "受診歴確認"
+    announcement: "{tts_g:ご希望される診療科での受診ははじめてですか？わからない場合は、「わからない。」とお話しください。}"
+  - module_name: "選定療養費アナウンス（予約）"
+    announcement: "{tts_g:他の医療機関からの紹介状をお持ちでない患者様につきましては、
+通常の診療費とは別に、初診時選定療養費として7,700円を全額自己負担いただいております。
+予めご了承ください。}"
+  - module_name: "診療科"
+    announcement: "{tts_g:受診を希望される診療科をお話しください。わからない場合は、「わからない。」とお話しください。}"
+  - module_name: "予約希望日"
+    announcement: "{tts_g:ご予約ご希望日をお話しください。ない場合は、ない場合は「ありません。」とお話しください。}"
+  - module_name: "診療科（変更・キャンセル）"
+    announcement: "{tts_g:予約されている診療科をお話しください。わからない場合は、「わからない。」とお話しください。}"
+  - module_name: "主治医の先生（変更・キャンセル）"
+    announcement: "{tts_g:主治医の先生をお話しください。わからない場合は、「わからない。」とお話しください。}"
+  - module_name: "予約日聴取"
+    announcement: "{tts_g:現在のご予約日をお話しください。}"
+  - module_name: "理由"
+    announcement: "{tts_g:（変更/キャンセル）の理由をお話しください。}"
+  - module_name: "薬処方確認（変更・キャンセル）"
+    announcement: "{tts_g:病院からお薬を処方されている方は、「はい、飲んでいます」と、
+されていない方は「いいえ、飲んでいません」とお話しください。}"
+  - module_name: "残薬確認"
+    announcement: "{tts_g:残薬について確認をいたします。
+残薬がある場合は「はい、あります」、無い場合は「いいえありません」とお話しください。}"
+  - module_name: "問い合わせ内容"
+    announcement: "{tts_g:お問い合わせ内容をお話しください。}"
+
+# --- セクション11: AmiVoice 辞書（gen_amivoice_dict.py で別途生成）---
+amivoice_dictionary: []
+
+# --- セクション12: 特記事項・確認項目 ---
+special_notes:
+  - "本設計書は CSV 入口（tools/csv_to_yaml.py）から自動生成。"
+  - "TODO_要確認 は facility 固有値＝壁打ちで確定（confirmation_items にアジェンダ化）。"
+
+confirmation_items:
+  - item: "office_id"
+    description: "施設の Dr.JOY オフィス ID。施設台帳で確認"
+    resolved: true
+  - item: "phone_number"
+    description: "このシナリオに割り当てる着信電話番号"
+    resolved: false
+  - item: "business_hours"
+    description: "受付時間（時間外判定に使用）"
+    resolved: false

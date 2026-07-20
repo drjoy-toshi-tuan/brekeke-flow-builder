@@ -1,0 +1,139 @@
+# Pattern 6 (テストフロー) — 診療科 決定論分類 engine v2（universe構造化・department_classifier）単体受入テスト
+#
+# 検証対象: modules/department_classifier/script.js（このモジュールの正本・engine v2-universe-v0.1）
+#   OpenAI_診療科 を置き換える自作 @General$Script。universe 構造化（レセ63科+基本科+
+#   compose_generative base×modifier 合成）・最長一致・NFKC 実効サブセット正規化。#263 昇格パッケージ。
+#
+# このテストの狙い:
+#   - Python オラクル (test_oracle.py) と同一の 52 ケースを、Brekeke 実機 (Nashorn/ES5.1) で単体実行し
+#     オラクル↔実機のパリティを確証する（engine v1→v2 は engine 変更＝フル再認定・P6 spec-skip 不可）。
+#   - script_file で正本 JS を **そのまま** 読み込む（バイト一致）。input_placeholder "入力_診療科" を
+#     case ごとの <id>_in に置換するだけで、ロジックは 1 文字も変えない。
+#   - facility サブセット（var facility）は既定 null＝universe 全科（oracle 既定 classify(raw,None) と一致）。
+#
+# ケース構成 (52 = test_oracle.py CASES と一致):
+#   基本科 / 臓器×内外科 / 経過措置単独 / 読み・エイリアス / AMBIGUOUS（基本科なし臓器語）/
+#   OUT_OF_SCOPE（専門外来・具体名）/ compose_generative（修飾語+base科）/ 短キー除去回帰 /
+#   略語 exact enrich / 精度ガード（曖昧bare 不取り）/ わからない→登録なし / NO_RESULT。
+#
+# 実機検証時の確認方法:
+#   Brekeke ログを grep "[TEST FAIL]" して件数 0 なら全 PASS。
+#   FAIL 行は "[TEST FAIL] <id> in=<入力> exp=<期待> got=<clf実出力>" 形式で原因が即わかる。
+#   ログ末尾に "[TEST DONE]" が出れば全 52 ケースのチェーンを完走している。
+#
+# モジュール数: dispatch 1 + 52×5 + 冒頭/開始ログ/終了ログ/終了 = 1 + 260 + 4 = 265 (1コール900上限内)。
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$診療科分類"
+  flow_name: "テスト$診療科分類"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$診療科分類"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] 診療科 決定論分類 engine v2 単体受入テスト (52 ケース)");
+      $runner.getLogger().info("対象: modules/department_classifier/script.js (v2-universe) / オラクル 52/52 PASS 済");
+      $runner.getLogger().info("grep [TEST FAIL] = 0 なら実機も全 PASS");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: matrix
+
+  - step: matrix
+    type: script_test_matrix
+    script_file: "../script.js"
+    input_placeholder: "入力_診療科"
+    final_next: ログ_終了
+    cases:
+      # --- 基本科 ---
+      - {id: d01, input: "内科", expected: "内科"}
+      - {id: d02, input: "外科", expected: "外科"}
+      - {id: d03, input: "小児科でお願いします", expected: "小児科"}
+      - {id: d04, input: "皮膚科", expected: "皮膚科"}
+      - {id: d05, input: "じびか", expected: "耳鼻咽喉科"}
+      - {id: d06, input: "耳鼻いんこう科", expected: "耳鼻咽喉科"}
+      # --- 臓器×内科/外科 ---
+      - {id: d07, input: "消化器内科", expected: "消化器内科"}
+      - {id: d08, input: "呼吸器内科を受診", expected: "呼吸器内科"}
+      - {id: d09, input: "循環器内科", expected: "循環器内科"}
+      - {id: d10, input: "脳神経外科", expected: "脳神経外科"}
+      - {id: d11, input: "整形外科にいきたい", expected: "整形外科"}
+      - {id: d12, input: "しんけいないか", expected: "脳神経内科"}
+      - {id: d13, input: "神経内科", expected: "脳神経内科"}
+      # --- 経過措置の単独禁止科（実ログ残存・受理）---
+      - {id: d14, input: "胃腸科", expected: "胃腸科"}
+      - {id: d15, input: "肛門科", expected: "こう門科"}
+      # --- 読み・エイリアス ---
+      - {id: d16, input: "せいけい", expected: "整形外科"}
+      - {id: d17, input: "のうげか", expected: "脳神経外科"}
+      - {id: d18, input: "ますい", expected: "麻酔科"}
+      - {id: d19, input: "ペインクリニック", expected: "麻酔科"}
+      # --- AMBIGUOUS（基本科なしの臓器語）---
+      - {id: d20, input: "消化器", expected: "AMBIGUOUS"}
+      - {id: d21, input: "脳神経", expected: "AMBIGUOUS"}
+      - {id: d22, input: "循環器", expected: "循環器内科"}
+      # --- OUT_OF_SCOPE（専門外来・具体名）---
+      - {id: d23, input: "頭痛外来", expected: "OUT_OF_SCOPE"}
+      - {id: d24, input: "禁煙外来", expected: "OUT_OF_SCOPE"}
+      - {id: d25, input: "もの忘れ外来", expected: "OUT_OF_SCOPE"}
+      - {id: d26, input: "審美歯科", expected: "OUT_OF_SCOPE"}
+      # --- compose_generative（修飾語 + base科）---
+      - {id: d27, input: "脳神経ないか", expected: "脳神経内科"}
+      - {id: d28, input: "消化器ないか", expected: "消化器内科"}
+      - {id: d29, input: "循環器ないか", expected: "循環器内科"}
+      - {id: d30, input: "脳神経げか", expected: "脳神経外科"}
+      - {id: d31, input: "ないか", expected: "内科"}
+      - {id: d32, input: "げか", expected: "外科"}
+      - {id: d33, input: "じゃないか", expected: "NO_RESULT"}
+      # --- 短キー除去の回帰（吸い込み磁石が消えたこと）---
+      - {id: d34, input: "癌化", expected: "NO_RESULT"}
+      - {id: d35, input: "乳がん検診", expected: "NO_RESULT"}
+      - {id: d36, input: "しかし", expected: "NO_RESULT"}
+      - {id: d37, input: "ますい", expected: "麻酔科"}
+      # --- 略語 exact enrich（完全一致のみ）---
+      - {id: d38, input: "整形", expected: "整形外科"}
+      - {id: d39, input: "整形です。", expected: "整形外科"}
+      - {id: d40, input: "内分泌科", expected: "糖尿病・内分泌代謝内科"}
+      - {id: d41, input: "内分泌か。", expected: "糖尿病・内分泌代謝内科"}
+      - {id: d42, input: "糖尿病", expected: "糖尿病・内分泌代謝内科"}
+      - {id: d43, input: "形成", expected: "形成外科"}
+      # --- 略語 enrich の精度ガード（曖昧 bare は拾わない）---
+      - {id: d44, input: "放射線", expected: "NO_RESULT"}
+      - {id: d45, input: "循環", expected: "NO_RESULT"}
+      - {id: d46, input: "精神的につらい", expected: "NO_RESULT"}
+      - {id: d47, input: "整形外来", expected: "OUT_OF_SCOPE"}
+      # --- わからない / DTMF / 空 / 無関係 ---
+      - {id: d48, input: "わからない", expected: "登録なし"}
+      - {id: d49, input: "決まってないです", expected: "登録なし"}
+      - {id: d50, input: "1", expected: "NO_RESULT"}
+      - {id: d51, input: "", expected: "NO_RESULT"}
+      - {id: d52, input: "こんにちは", expected: "NO_RESULT"}
+
+  - step: ログ_終了
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST DONE] 診療科 決定論分類 engine v2 単体受入テスト 52 ケース 完走");
+      $runner.getLogger().info("Brekeke ログを grep [TEST FAIL] で件数確認 (0 なら全 PASS)");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: 終了
+
+  - step: 終了
+    type: termination

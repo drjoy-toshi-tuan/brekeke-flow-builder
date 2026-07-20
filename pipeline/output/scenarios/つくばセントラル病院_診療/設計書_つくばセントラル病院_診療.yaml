@@ -1,0 +1,1832 @@
+# 設計書 — つくばセントラル病院 診療
+# 生成元: @director エージェント
+# 生成日: 2026/05/22
+# 確認レポート: output/scenarios/つくばセントラル病院_診療/確認レポート_つくばセントラル病院_診療_20260522.md
+#
+# 構造概要:
+#   - 新規作成。冒頭で「今日明日問い合わせ」を絞り（はい→代表案内、いいえ→本フロー継続）
+#   - 個人情報聴取（電話番号 / 診察券番号 / 氏名 / 生年月日）→ 診療科 → 用件確認 → 予約/変更/キャンセル/確認
+#   - 診療科の段階で特殊診療科（骨粗しょう症 / がん検診 / 産婦人科 / 一般内科 / 特定健診 / 予防接種 / 健診）を専門ルートへ振り分け
+#   - 症状聴取（一般予約）でもキーワード検出で同様の専門ルートへ再振り分け
+#   - 復唱確認なし、聞き直し1回まで
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "つくばセントラル病院"
+  scenario_name: "診療"
+  group_name: "つくばセントラル病院"
+  flow_name: "つくばセントラル病院$診療"
+  target_facility: "つくばセントラル病院（セントラル総合クリニック）"
+  office_id: "5b8a5379d2122d061d5143a8"
+  phone_number: "TODO_要確認"
+  business_hours: "TODO_要確認（Dr.JOY 管理画面で設定）"
+  flow_type: "subflow"
+  work_type: "new"
+  environment: "demo"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "つくばセントラル病院$診療"
+      role: "main"
+      description: "冒頭→日程確認(Yes/No)→着信番号判定→電話番号聴取→診察券番号→氏名→生年月日→診療科分岐→用件確認分岐→各終話"
+
+  subflows:
+    - name: "つくばセントラル病院$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。静的 JSON コピー。復唱なし"
+
+    - name: "つくばセントラル病院$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。静的 JSON コピー。**復唱なし**（顧客指定: 全フロー復唱確認なし）"
+
+    - name: "つくばセントラル病院$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9/10 準拠。静的 JSON コピー。incoming-classifier 内蔵で携帯→確認/それ以外→直接聴取の分岐を含む。**復唱なし**（顧客指定）"
+
+    - name: "つくばセントラル病院$診察券番号聴取"
+      target: "診察券番号聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。静的 JSON コピー。DTMF入力対応。「わからない」分岐あり"
+
+# --- セクション3: フローの目的 ---
+purpose: "セントラル総合クリニック（つくばセントラル病院）への診療関連電話を受け、当日翌日の問い合わせは代表案内に振り分け、それ以外は連絡先・診察券番号・氏名・生年月日・診療科・用件を聴取して、予約/変更/キャンセル/予約確認/各種検診の折り返し受付を自動化する。診療科や症状のキーワードで特殊診療科（骨粗しょう症健診/がん検診/産婦人科/一般内科/特定健診/予防接種/健診人間ドック）を専門ルートに振り分ける。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "つくばセントラル病院$診療"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → 完了フラグ_非通知 → 非通知_アナウンス → 切断
+            └─ 通常 → 冒頭_アナウンス
+                  → 日程確認(hearing enum: はい/いいえ)
+                      ├─ はい → END_代表案内_当日翌日(status=9)
+                      └─ いいえ → 着信番号判定(script phone_type)
+                              ├─ mobile  → 電話番号聴取(subflow)
+                              └─ それ以外 → 電話番号聴取(subflow)
+                                  → 診察券番号聴取(subflow)
+                                  → 氏名聴取(subflow)
+                                  → 生年月日聴取(subflow)
+                                  → 診療科(hearing enum: 多分岐)
+                                      ├─ 骨粗しょう症検診 → 受診券所持確認_骨粗しょう症 …
+                                      ├─ 子宮がん検診 / 乳がん検診 → 症状確認_がん検診 …
+                                      ├─ 産婦人科 → 検診確認_産婦人科 …
+                                      ├─ 一般内科 → END_代表案内1
+                                      ├─ 特定健診 系 → END_代表案内2
+                                      ├─ 予防接種 系 → END_代表案内3
+                                      ├─ 健診希望 → 健診内容確認 → END_終話_健診_人間ドック
+                                      └─ default → 用件確認(hearing enum)
+                                              ├─ 予約 → 受診歴確認 → (再診→症状聴取 / 初診→紹介状確認 → ...)→ 予約希望日 → END_終話_予約
+                                              ├─ 変更 → 予約日聴取_変更 → 予約希望日_変更 → END_終話_変更
+                                              ├─ キャンセル → 予約日聴取_キャンセル → キャンセル理由 → END_終話_キャンセル
+                                              └─ 確認 → 内容確認_予約確認 → END_終話_お問い合わせ
+
+      ─── 骨粗しょう症健診ルート ───
+      受診券所持確認_骨粗しょう症(enum: はい/いいえ)
+        ├─ はい → 予約希望日聴取_骨粗しょう症 → END_終話_骨粗しょう症健診
+        └─ いいえ → 自費確認_骨粗しょう症 → 予約希望日聴取_骨粗しょう症 → END_終話_骨粗しょう症健診
+
+      ─── がん検診ルート ───
+      症状確認_がん検診(enum: はい/いいえ)
+        ├─ はい → END_来院案内(status=7)
+        └─ いいえ → 受診券所持確認_がん検診(enum)
+              ├─ はい → 市町村確認_がん検診 → 他検診受診確認_がん検診 → 予約希望日聴取_がん検診 → END_終話_子宮がん乳がん検診
+              └─ いいえ → 自費確認_がん検診(enum)
+                    ├─ はい → 市町村確認_がん検診 → ...
+                    └─ いいえ → 予約希望日聴取_がん検診 → END_終話_子宮がん乳がん検診
+
+      ─── 産婦人科ルート ───
+      検診確認_産婦人科(enum: はい/いいえ)
+        ├─ はい → 症状確認_がん検診（がん検診ルート合流）
+        └─ いいえ → END_来院案内
+    notes: |
+      - 日程確認は冒頭ステップ。「今日/明日のお問合せ」は AI 受付対象外。
+      - 着信番号判定は incoming_phone_number に基づく script (phone_type) で携帯/それ以外を振り分ける。
+        サブフロー「電話番号聴取」が内部で同等の incoming-classifier 判定を持つため、本体側の着信番号判定は subflow 内で実質的に処理される。
+      - 個人情報聴取は CLAUDE.md Rule 9 に従い 4 つの独立サブフローで処理。
+      - 診療科の hearing は OpenAI enum 分岐で 7+1（default→用件確認）。
+      - 症状聴取_一般予約 でもキーワード検出で 5 種の専門ルート再振り分けが必要（hearing enum、save_to=disease）。
+
+# --- セクション4c: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # === 冒頭ブロック ===
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: false   # 営業時間情報は顧客指定なし。日程確認 hearing で当日翌日のみ排除する設計
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 日程確認
+
+  # === 日程確認（当日/翌日 排除）===
+  - step: 日程確認
+    type: hearing
+    output_format: enum
+    save_to: ""
+    conditions:
+      - match: "はい"
+        next: END_代表案内_当日翌日
+      - match: "いいえ"
+        next: 電話番号聴取
+    retry_failure: end_failure
+
+  # === 個人情報聴取（4 サブフロー）===
+  # 電話番号聴取は内蔵 incoming-classifier で携帯/固定非通知の分岐を実施
+  - step: 電話番号聴取
+    type: subflow
+    flowname: "つくばセントラル病院$電話番号聴取"
+    next: 診察券番号聴取
+
+  - step: 診察券番号聴取
+    type: subflow
+    flowname: "つくばセントラル病院$診察券番号聴取"
+    next: 氏名聴取
+
+  - step: 氏名聴取
+    type: subflow
+    flowname: "つくばセントラル病院$氏名聴取"
+    next: 生年月日聴取
+
+  - step: 生年月日聴取
+    type: subflow
+    flowname: "つくばセントラル病院$生年月日聴取"
+    next: 診療科
+
+  # === 診療科分岐（多分岐 enum）===
+  - step: 診療科
+    type: hearing
+    output_format: enum
+    save_to: "clinicalDepartment"
+    no_result_default: "登録なし"
+    conditions:
+      - match: "骨粗しょう症検診"
+        next: 受診券所持確認_骨粗しょう症
+      - match: "子宮がん検診"
+        next: 症状確認_がん検診
+      - match: "乳がん検診"
+        next: 症状確認_がん検診
+      - match: "産婦人科"
+        next: 検診確認_産婦人科
+      - match: "一般内科"
+        next: END_代表案内1
+      - match: "特定健診"
+        next: END_代表案内2
+      - match: "予防接種"
+        next: END_代表案内3
+      - match: "健診希望"
+        next: 健診内容確認
+      - match: "default"
+        next: 用件確認
+    retry_failure: end_failure
+
+  # === 用件確認（DTMF対応）===
+  - step: 用件確認
+    type: hearing
+    output_format: enum
+    save_to: "classification"
+    conditions:
+      - match: "予約"
+        next: 受診歴確認
+      - match: "変更"
+        next: 予約日聴取_変更
+      - match: "キャンセル"
+        next: 予約日聴取_キャンセル
+      - match: "確認"
+        next: 内容確認_予約確認
+    retry_failure: end_failure
+
+  # === 一般予約ルート ===
+  - step: 受診歴確認
+    type: hearing
+    output_format: enum
+    save_to: "history"
+    conditions:
+      - match: "再診"
+        next: 症状聴取_一般予約
+      - match: "初診"
+        next: 紹介状確認
+    retry_failure: end_failure
+
+  - step: 紹介状確認
+    type: hearing
+    output_format: enum
+    save_to: "introduction"
+    conditions:
+      - match: "あり"
+        next: 紹介元医療機関聴取
+      - match: "なし"
+        next: 症状聴取_一般予約
+    retry_failure: end_failure
+
+  - step: 紹介元医療機関聴取
+    type: hearing
+    output_format: text
+    save_to: "introductionHosp"
+    next: 担当医聴取
+    retry_failure: skip
+
+  - step: 担当医聴取
+    type: hearing
+    output_format: text
+    save_to: "doctor"
+    next: 予約希望日聴取_一般予約
+    retry_failure: skip
+
+  - step: 症状聴取_一般予約
+    type: hearing
+    output_format: enum
+    save_to: "disease"
+    no_result_default: ""
+    conditions:
+      - match: "産婦人科"
+        next: 検診確認_産婦人科
+      - match: "子宮がん検診"
+        next: 症状確認_がん検診
+      - match: "乳がん検診"
+        next: 症状確認_がん検診
+      - match: "骨粗しょう症検診"
+        next: 受診券所持確認_骨粗しょう症
+      - match: "予防接種"
+        next: END_代表案内3
+      - match: "default"
+        next: 予約希望日聴取_一般予約
+    retry_failure: skip
+    notes: "OpenAI で症状からキーワード（産婦人科・がん検診・骨粗しょう症・予防接種）を抽出して再振り分け。default は自由テキストとして save_to=disease に格納し予約希望日へ進む"
+
+  - step: 予約希望日聴取_一般予約
+    type: hearing
+    output_format: datetime
+    save_to: "Preferred_date"
+    next: END_終話_予約
+    retry_failure: skip
+
+  # === 変更ルート ===
+  - step: 予約日聴取_変更
+    type: hearing
+    output_format: datetime
+    save_to: "reservationDate"
+    next: 予約希望日聴取_変更
+    retry_failure: end_failure
+
+  - step: 予約希望日聴取_変更
+    type: hearing
+    output_format: datetime
+    save_to: "Preferred_date"
+    next: END_終話_変更
+    retry_failure: skip
+
+  # === キャンセルルート ===
+  - step: 予約日聴取_キャンセル
+    type: hearing
+    output_format: datetime
+    save_to: "reservationDate"
+    next: キャンセル理由聴取
+    retry_failure: end_failure
+
+  - step: キャンセル理由聴取
+    type: hearing
+    output_format: text
+    save_to: "reason"
+    next: END_終話_キャンセル
+    retry_failure: skip
+
+  # === 予約確認ルート ===
+  - step: 内容確認_予約確認
+    type: hearing
+    output_format: text
+    save_to: "inquiry"
+    next: END_終話_お問い合わせ
+    retry_failure: skip
+
+  # === 骨粗しょう症健診ルート ===
+  - step: 受診券所持確認_骨粗しょう症
+    type: hearing
+    output_format: enum
+    save_to: "medicalTicket"
+    conditions:
+      - match: "はい"
+        next: 予約希望日聴取_骨粗しょう症
+      - match: "いいえ"
+        next: 自費確認_骨粗しょう症
+    retry_failure: end_failure
+
+  - step: 自費確認_骨粗しょう症
+    type: hearing
+    output_format: enum
+    save_to: "selfpaidCheck"
+    conditions:
+      - match: "default"
+        next: 予約希望日聴取_骨粗しょう症
+    retry_failure: skip
+
+  - step: 予約希望日聴取_骨粗しょう症
+    type: hearing
+    output_format: datetime
+    save_to: "Preferred_date"
+    next: END_終話_骨粗しょう症健診
+    retry_failure: skip
+
+  # === がん検診・産婦人科ルート ===
+  - step: 検診確認_産婦人科
+    type: hearing
+    output_format: enum
+    save_to: ""
+    conditions:
+      - match: "はい"
+        next: 症状確認_がん検診
+      - match: "いいえ"
+        next: END_来院案内
+    retry_failure: end_failure
+
+  - step: 症状確認_がん検診
+    type: hearing
+    output_format: enum
+    save_to: "disease"
+    conditions:
+      - match: "はい"
+        next: END_来院案内
+      - match: "いいえ"
+        next: 受診券所持確認_がん検診
+    retry_failure: end_failure
+
+  - step: 受診券所持確認_がん検診
+    type: hearing
+    output_format: enum
+    save_to: "medicalTicket"
+    conditions:
+      - match: "はい"
+        next: 市町村確認_がん検診
+      - match: "いいえ"
+        next: 自費確認_がん検診
+    retry_failure: end_failure
+
+  - step: 自費確認_がん検診
+    type: hearing
+    output_format: enum
+    save_to: "selfpaidCheck"
+    conditions:
+      - match: "はい"
+        next: 市町村確認_がん検診
+      - match: "いいえ"
+        next: 予約希望日聴取_がん検診
+    retry_failure: end_failure
+
+  - step: 市町村確認_がん検診
+    type: hearing
+    output_format: text
+    save_to: "city"
+    next: 他検診受診確認_がん検診
+    retry_failure: skip
+
+  - step: 他検診受診確認_がん検診
+    type: hearing
+    output_format: text
+    save_to: "inquiry"
+    next: 予約希望日聴取_がん検診
+    retry_failure: skip
+
+  - step: 予約希望日聴取_がん検診
+    type: hearing
+    output_format: datetime
+    save_to: "Preferred_date"
+    next: END_終話_子宮がん乳がん検診
+    retry_failure: skip
+
+  # === 健診・人間ドックルート ===
+  - step: 健診内容確認
+    type: hearing
+    output_format: text
+    save_to: "inquiry"
+    next: END_終話_健診_人間ドック
+    retry_failure: skip
+
+  # === 終話ブロック群 ===
+  - step: END_終話_予約
+    type: termination
+    termination_ref: "END_終話_予約"
+
+  - step: END_終話_変更
+    type: termination
+    termination_ref: "END_終話_変更"
+
+  - step: END_終話_キャンセル
+    type: termination
+    termination_ref: "END_終話_キャンセル"
+
+  - step: END_終話_お問い合わせ
+    type: termination
+    termination_ref: "END_終話_お問い合わせ"
+
+  - step: END_終話_子宮がん乳がん検診
+    type: termination
+    termination_ref: "END_終話_子宮がん乳がん検診"
+
+  - step: END_終話_骨粗しょう症健診
+    type: termination
+    termination_ref: "END_終話_骨粗しょう症健診"
+
+  - step: END_終話_健診_人間ドック
+    type: termination
+    termination_ref: "END_終話_健診_人間ドック"
+
+  - step: END_代表案内1
+    type: termination
+    termination_ref: "END_代表案内1"
+
+  - step: END_代表案内2
+    type: termination
+    termination_ref: "END_代表案内2"
+
+  - step: END_代表案内3
+    type: termination
+    termination_ref: "END_代表案内3"
+
+  - step: END_代表案内_当日翌日
+    type: termination
+    termination_ref: "END_代表案内_当日翌日"
+
+  - step: END_来院案内
+    type: termination
+    termination_ref: "END_来院案内"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "予約"
+      - id: "2"
+        order: "2"
+        value: "変更"
+      - id: "3"
+        order: "3"
+        value: "キャンセル"
+      - id: "4"
+        order: "4"
+        value: "予約確認"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件確認 hearing の保存先"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "診察券番号聴取サブフローで保存"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "骨粗しょう症検診"
+      - id: "2"
+        order: "2"
+        value: "子宮がん検診"
+      - id: "3"
+        order: "3"
+        value: "乳がん検診"
+      - id: "4"
+        order: "4"
+        value: "産婦人科"
+      - id: "5"
+        order: "5"
+        value: "一般内科"
+      - id: "6"
+        order: "6"
+        value: "特定健診"
+      - id: "7"
+        order: "7"
+        value: "予防接種"
+      - id: "8"
+        order: "8"
+        value: "健診希望"
+      - id: "9"
+        order: "9"
+        value: "登録なし"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "診療科の hearing 出力リスト。default 時は「登録なし」で保存し用件確認へ進む"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日(和暦)"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "生年月日聴取サブフローで保存"
+
+  - context_name: "reason"
+    context_name_jp: "理由"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "キャンセル理由の保存先"
+
+  - context_name: "reservationDate"
+    context_name_jp: "予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "変更/キャンセル時の元予約日"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "電話番号聴取サブフローで保存"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "聴取失敗"
+      - id: "7"
+        order: "7"
+        value: "来院案内"
+      - id: "6"
+        order: "6"
+        value: "時間外案内"
+      - id: "9"
+        order: "9"
+        value: "当日翌日案内"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=AI受付完了 2=代表案内（一般内科/特定健診/予防接種）3=聴取失敗 6=時間外 7=来院案内（がん検診症状あり・産婦人科非検診）9=当日翌日案内"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: ""
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値"
+
+  # --- 案件固有フィールド ---
+  - context_name: "history"
+    context_name_jp: "受診歴"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "受診歴確認の保存先（初診/再診）"
+
+  - context_name: "introduction"
+    context_name_jp: "紹介状有無"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "紹介状確認の保存先（あり/なし）"
+
+  - context_name: "introductionHosp"
+    context_name_jp: "紹介元医療機関"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: ""
+
+  - context_name: "doctor"
+    context_name_jp: "担当医"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: ""
+
+  - context_name: "disease"
+    context_name_jp: "症状"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "症状聴取_一般予約 / 症状確認_がん検診 で使用"
+
+  - context_name: "Preferred_date"
+    context_name_jp: "予約希望日"
+    display_type: "DATE"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "予約希望日（datetime 正規化）"
+
+  - context_name: "medicalTicket"
+    context_name_jp: "受診券所持"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "受診券所持確認（骨粗しょう症/がん検診）の保存先"
+
+  - context_name: "selfpaidCheck"
+    context_name_jp: "自費受診"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "自費確認（骨粗しょう症/がん検診）の保存先"
+
+  - context_name: "city"
+    context_name_jp: "市町村"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "がん検診市町村確認の保存先"
+
+  - context_name: "inquiry"
+    context_name_jp: "問い合わせ内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "予約確認/健診内容/他検診受診確認の保存先"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "日程確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: ""
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "Yes/No判定。「はい」=当日翌日問い合わせ→END_代表案内_当日翌日、「いいえ」=本フロー継続"
+
+  - order: 2
+    name: "診療科"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "骨粗しょう症検診"
+      - "子宮がん検診"
+      - "乳がん検診"
+      - "産婦人科"
+      - "一般内科"
+      - "特定健診"
+      - "予防接種"
+      - "健診希望"
+      - "登録なし"
+    notes: "default（登録なし）は no_result_default で保存し、用件確認へ進む。特定健診=緩和ケア/眼科/救急/歯科口腔/放射線腫瘍/麻酔/リハビリ/化学療法を含む。予防接種=予防注射/ワクチン/HPV/乳幼児健診を含む。健診希望=人間ドック/健診"
+
+  - order: 3
+    name: "用件確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 1
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "予約"
+      - "変更"
+      - "キャンセル"
+      - "確認"
+    notes: "DTMF 1=予約, 2=変更, 3=キャンセル, 4=確認"
+
+  - order: 4
+    name: "受診歴確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "history"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "初診"
+      - "再診"
+    notes: "「初めて」「はい」→初診、「いいえ」「2回目以降」→再診"
+
+  - order: 5
+    name: "紹介状確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "introduction"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "あり"
+      - "なし"
+    notes: "Yes/No"
+
+  - order: 6
+    name: "紹介元医療機関聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "introductionHosp"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "「ない」入力時は空文字相当を保存"
+
+  - order: 7
+    name: "担当医聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "doctor"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "指定なしも許容"
+
+  - order: 8
+    name: "症状聴取_一般予約"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "disease"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "産婦人科"
+      - "子宮がん検診"
+      - "乳がん検診"
+      - "骨粗しょう症検診"
+      - "予防接種"
+      - "その他"
+    notes: "症状からキーワード抽出して専門ルートへ再振り分け。「その他」(default) → 予約希望日聴取_一般予約。フリーテキストは disease に格納"
+
+  - order: 9
+    name: "予約希望日聴取_一般予約"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "Preferred_date"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: "datetime 正規化"
+
+  - order: 10
+    name: "予約日聴取_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: "元予約日（変更対象）"
+
+  - order: 11
+    name: "予約希望日聴取_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "Preferred_date"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: ""
+
+  - order: 12
+    name: "予約日聴取_キャンセル"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: ""
+
+  - order: 13
+    name: "キャンセル理由聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: "自由記述"
+
+  - order: 14
+    name: "内容確認_予約確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "inquiry"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: "自由記述（次回予約日確認等）"
+
+  - order: 15
+    name: "受診券所持確認_骨粗しょう症"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "medicalTicket"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "牛久市受診券の所持確認"
+
+  - order: 16
+    name: "自費確認_骨粗しょう症"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "selfpaidCheck"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "Yes/No 共に予約希望日聴取_骨粗しょう症へ"
+
+  - order: 17
+    name: "予約希望日聴取_骨粗しょう症"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "Preferred_date"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: "月曜日午後のみ"
+
+  - order: 18
+    name: "検診確認_産婦人科"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: ""
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "子宮がん検診/乳がん検診希望の有無"
+
+  - order: 19
+    name: "症状確認_がん検診"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "disease"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "はい→来院案内、いいえ→受診券所持確認_がん検診"
+
+  - order: 20
+    name: "受診券所持確認_がん検診"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "medicalTicket"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: ""
+
+  - order: 21
+    name: "自費確認_がん検診"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "selfpaidCheck"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: ""
+
+  - order: 22
+    name: "市町村確認_がん検診"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "city"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "市町村名フリーテキスト"
+
+  - order: 23
+    name: "他検診受診確認_がん検診"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "inquiry"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: "子宮がん・乳がんを併せて予約するかフリーテキスト"
+
+  - order: 24
+    name: "予約希望日聴取_がん検診"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "Preferred_date"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: ""
+
+  - order: 25
+    name: "健診内容確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1
+    echo_back: false
+    save_to: "inquiry"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: "健診・人間ドックの自由記述"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "冒頭_アナウンス"
+    tts_announcement: "{tts_g:お電話ありがとうございます。セントラル総合クリニックのAI電話です。このお電話にてご連絡いただいた内容は、当院にて確認後、折り返しご連絡差し上げますので最後までお話しください。}"
+    input_method: "voice_only"
+    next_step: "日程確認"
+    retry_failure: "skip"
+
+  - step_name: "日程確認"
+    tts_announcement: "{tts_g:お電話は、今日、明日の予約に関するお問い合わせでしょうか？「はい」、または「いいえ」でお答えください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+      mapping:
+        - input: "「はい」「そうです」「今日」「明日」を含む"
+          output: "はい"
+        - input: "「いいえ」「違います」を含む"
+          output: "いいえ"
+      no_result_condition: "上記いずれにも該当しない / 認識不能"
+    save_to: ""
+    next_step: "（条件分岐）"
+    retry_failure: "end_failure"
+
+  - step_name: "診療科"
+    tts_announcement: "{tts_g:受診を希望されている診療科をお話ください。検査の方は検査とお話しください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "骨粗しょう症検診"
+        - "子宮がん検診"
+        - "乳がん検診"
+        - "産婦人科"
+        - "一般内科"
+        - "特定健診"
+        - "予防接種"
+        - "健診希望"
+        - "登録なし"
+      mapping:
+        - input: "「骨粗しょう症」「骨密度」を含む"
+          output: "骨粗しょう症検診"
+        - input: "「子宮がん」「子宮頸がん」を含む"
+          output: "子宮がん検診"
+        - input: "「乳がん」「マンモグラフィ」「乳腺」を含む"
+          output: "乳がん検診"
+        - input: "「産婦人科」「婦人科」「産科」を含む"
+          output: "産婦人科"
+        - input: "「一般内科」「内科」を含む"
+          output: "一般内科"
+        - input: "「特定健診」「緩和ケア」「眼科」「救急」「歯科」「口腔」「放射線」「腫瘍」「麻酔」「リハビリ」「化学療法」を含む"
+          output: "特定健診"
+        - input: "「予防接種」「予防注射」「ワクチン」「HPV」「乳幼児健診」を含む"
+          output: "予防接種"
+        - input: "「健診」「人間ドック」を含む"
+          output: "健診希望"
+        - input: "上記いずれにも該当しない"
+          output: "登録なし"
+      no_result_condition: "認識不能"
+    save_to: "clinicalDepartment"
+    next_step: "（条件分岐）"
+    retry_failure: "end_failure"
+
+  - step_name: "用件確認"
+    tts_announcement: "{tts_g:ご用件をお伺いします。次の4つのうち、いずれかでお話ください。1「予約」、2「変更」、3「キャンセル」、4「予約確認」、それではお話ください。プッシュボタンでも操作できます。}"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "予約"
+        - "変更"
+        - "キャンセル"
+        - "確認"
+      mapping:
+        - input: "DTMF 1 または「予約」を含む"
+          output: "予約"
+        - input: "DTMF 2 または「変更」を含む"
+          output: "変更"
+        - input: "DTMF 3 または「キャンセル」を含む"
+          output: "キャンセル"
+        - input: "DTMF 4 または「確認」を含む"
+          output: "確認"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "classification"
+    next_step: "（条件分岐）"
+    retry_failure: "end_failure"
+
+  - step_name: "受診歴確認"
+    tts_announcement: "{tts_g:当院でのご受診は初めてですか？}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "初診"
+        - "再診"
+      mapping:
+        - input: "「はい」「初めて」を含む"
+          output: "初診"
+        - input: "「いいえ」「以前」「2回目」を含む"
+          output: "再診"
+      no_result_condition: "認識不能"
+    save_to: "history"
+    next_step: "（条件分岐）"
+    retry_failure: "end_failure"
+
+  - step_name: "紹介状確認"
+    tts_announcement: "{tts_g:他の医療機関からの紹介状はお持ちですか。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "あり"
+        - "なし"
+      mapping:
+        - input: "「はい」「持っている」を含む"
+          output: "あり"
+        - input: "「いいえ」「ない」を含む"
+          output: "なし"
+      no_result_condition: "認識不能"
+    save_to: "introduction"
+    next_step: "（条件分岐）"
+    retry_failure: "end_failure"
+
+  - step_name: "紹介元医療機関聴取"
+    tts_announcement: "{tts_g:紹介元医療機関をお話しください。なければ「ない」とお話しください。}"
+    input_method: "voice_only"
+    save_to: "introductionHosp"
+    next_step: "担当医聴取"
+    retry_failure: "skip"
+
+  - step_name: "担当医聴取"
+    tts_announcement: "{tts_g:指定の担当医はございますか。}"
+    input_method: "voice_only"
+    save_to: "doctor"
+    next_step: "予約希望日聴取_一般予約"
+    retry_failure: "skip"
+
+  - step_name: "症状聴取_一般予約"
+    tts_announcement: "{tts_g:症状を簡潔にお話しください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "産婦人科"
+        - "子宮がん検診"
+        - "乳がん検診"
+        - "骨粗しょう症検診"
+        - "予防接種"
+        - "その他"
+      mapping:
+        - input: "「産婦人科」「婦人科」を含む"
+          output: "産婦人科"
+        - input: "「子宮がん」「子宮頸がん」を含む"
+          output: "子宮がん検診"
+        - input: "「乳がん」「乳腺」を含む"
+          output: "乳がん検診"
+        - input: "「骨粗しょう症」「骨密度」を含む"
+          output: "骨粗しょう症検診"
+        - input: "「予防接種」「ワクチン」「予防注射」を含む"
+          output: "予防接種"
+        - input: "上記いずれにも該当しない一般症状"
+          output: "その他"
+      no_result_condition: "発話なし / 認識不能"
+    save_to: "disease"
+    next_step: "（条件分岐）"
+    retry_failure: "skip"
+
+  - step_name: "予約希望日聴取_一般予約"
+    tts_announcement: "{tts_g:受診を希望されるお日にちがあればお話しください。}"
+    input_method: "voice_only"
+    save_to: "Preferred_date"
+    next_step: "END_終話_予約"
+    retry_failure: "skip"
+
+  - step_name: "予約日聴取_変更"
+    tts_announcement: "{tts_g:予約票に記載されている予約日を「4月1日」のように日付でお話ください。}"
+    input_method: "voice_only"
+    save_to: "reservationDate"
+    next_step: "予約希望日聴取_変更"
+    retry_failure: "end_failure"
+
+  - step_name: "予約希望日聴取_変更"
+    tts_announcement: "{tts_g:受診を希望されるお日にちがあればお話しください。}"
+    input_method: "voice_only"
+    save_to: "Preferred_date"
+    next_step: "END_終話_変更"
+    retry_failure: "skip"
+
+  - step_name: "予約日聴取_キャンセル"
+    tts_announcement: "{tts_g:予約票に記載されている予約日を「4月1日」のように日付でお話ください。}"
+    input_method: "voice_only"
+    save_to: "reservationDate"
+    next_step: "キャンセル理由聴取"
+    retry_failure: "end_failure"
+
+  - step_name: "キャンセル理由聴取"
+    tts_announcement: "{tts_g:キャンセル理由をお話しください。}"
+    input_method: "voice_only"
+    save_to: "reason"
+    next_step: "END_終話_キャンセル"
+    retry_failure: "skip"
+
+  - step_name: "内容確認_予約確認"
+    tts_announcement: "{tts_g:ご確認内容についてお伺いします。「次回の予約日時を教えて欲しい」等、その他ご不明な点等ございましたら、こちらでお話しください。}"
+    input_method: "voice_only"
+    save_to: "inquiry"
+    next_step: "END_終話_お問い合わせ"
+    retry_failure: "skip"
+
+  - step_name: "受診券所持確認_骨粗しょう症"
+    tts_announcement: "{tts_g:牛久市の受診券はお持ちですか？}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+      mapping:
+        - input: "「はい」「持っている」「あります」を含む"
+          output: "はい"
+        - input: "「いいえ」「ない」「持っていない」を含む"
+          output: "いいえ"
+      no_result_condition: "認識不能"
+    save_to: "medicalTicket"
+    next_step: "（条件分岐）"
+    retry_failure: "end_failure"
+
+  - step_name: "自費確認_骨粗しょう症"
+    tts_announcement: "{tts_g:自費で受診されますか？}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+      mapping:
+        - input: "「はい」「自費」「自分で」を含む"
+          output: "はい"
+        - input: "「いいえ」を含む"
+          output: "いいえ"
+      no_result_condition: "認識不能"
+    save_to: "selfpaidCheck"
+    next_step: "予約希望日聴取_骨粗しょう症"
+    retry_failure: "skip"
+
+  - step_name: "予約希望日聴取_骨粗しょう症"
+    tts_announcement: "{tts_g:骨粗しょう症検診のご予約は月曜日午後になります。受診を希望されるお日にちがあればお話しください。}"
+    input_method: "voice_only"
+    save_to: "Preferred_date"
+    next_step: "END_終話_骨粗しょう症健診"
+    retry_failure: "skip"
+
+  - step_name: "検診確認_産婦人科"
+    tts_announcement: "{tts_g:子宮がん検診・乳がん検診をご希望ですか。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+      mapping:
+        - input: "「はい」「希望」「受けたい」を含む"
+          output: "はい"
+        - input: "「いいえ」「違う」「ない」を含む"
+          output: "いいえ"
+      no_result_condition: "認識不能"
+    next_step: "（条件分岐）"
+    retry_failure: "end_failure"
+
+  - step_name: "症状確認_がん検診"
+    tts_announcement: "{tts_g:症状はありますか？「はい」、または「いいえ」でお答えください。}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+      mapping:
+        - input: "「はい」「ある」「あります」を含む"
+          output: "はい"
+        - input: "「いいえ」「ない」「なし」「症状なし」を含む"
+          output: "いいえ"
+      no_result_condition: "認識不能"
+    save_to: "disease"
+    next_step: "（条件分岐）"
+    retry_failure: "end_failure"
+
+  - step_name: "受診券所持確認_がん検診"
+    tts_announcement: "{tts_g:受診券もしくは利用券などはありますか？}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+      mapping:
+        - input: "「はい」「持っている」「あります」を含む"
+          output: "はい"
+        - input: "「いいえ」「ない」「持っていない」を含む"
+          output: "いいえ"
+      no_result_condition: "認識不能"
+    save_to: "medicalTicket"
+    next_step: "（条件分岐）"
+    retry_failure: "end_failure"
+
+  - step_name: "自費確認_がん検診"
+    tts_announcement: "{tts_g:自費で受診されますか？}"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+      mapping:
+        - input: "「はい」「自費」「自分で払う」を含む"
+          output: "はい"
+        - input: "「いいえ」を含む"
+          output: "いいえ"
+      no_result_condition: "認識不能"
+    save_to: "selfpaidCheck"
+    next_step: "（条件分岐）"
+    retry_failure: "end_failure"
+
+  - step_name: "市町村確認_がん検診"
+    tts_announcement: "{tts_g:市町村はどちらでしょうか？}"
+    input_method: "voice_only"
+    save_to: "city"
+    next_step: "他検診受診確認_がん検診"
+    retry_failure: "skip"
+
+  - step_name: "他検診受診確認_がん検診"
+    tts_announcement: "{tts_g:ご一緒に子宮がん、乳がん検診のご予約はございますか？}"
+    input_method: "voice_only"
+    save_to: "inquiry"
+    next_step: "予約希望日聴取_がん検診"
+    retry_failure: "skip"
+
+  - step_name: "予約希望日聴取_がん検診"
+    tts_announcement: "{tts_g:受診を希望されるお日にちがあればお話しください。}"
+    input_method: "voice_only"
+    save_to: "Preferred_date"
+    next_step: "END_終話_子宮がん乳がん検診"
+    retry_failure: "skip"
+
+  - step_name: "健診内容確認"
+    tts_announcement: "{tts_g:ご用件をお伺いいたします。お話し途中で次に進んだ場合、当院より折り返しご連絡をいたしますので、ご連絡をお待ちください。}"
+    input_method: "voice_only"
+    save_to: "inquiry"
+    next_step: "END_終話_健診_人間ドック"
+    retry_failure: "skip"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # === 異常系（デフォルト必須）===
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "{tts_g:恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。}"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "{tts_g:お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。}"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "{tts_g:申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。}"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # === 正常系 ===
+  - name: "END_終話_予約"
+    condition: "予約ルート完了"
+    tts_announcement: "{tts_g:お電話承りました。予約の申し込みを受付いたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、日曜、祝日を除く3診療日内に折り返し電話、またはショートメッセージをお送りし、確定となります。それでは失礼いたします。}"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約"
+
+  - name: "END_終話_変更"
+    condition: "変更ルート完了"
+    tts_announcement: "{tts_g:お電話承りました。予約変更の申し込みを受付いたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、日曜、祝日を除く3診療日内に折り返し電話、またはショートメッセージをお送りし、確定となります。それでは失礼いたします。}"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_変更"
+
+  - name: "END_終話_キャンセル"
+    condition: "キャンセルルート完了"
+    tts_announcement: "{tts_g:お電話承りました。予約キャンセルの申し込みを受付いたしました。必要がある場合のみ、当院より折り返しさせていただきます。それでは失礼いたします。}"
+    status: "1"
+    sms_flag: "2"
+    completion_flag_name: "完了フラグ_キャンセル"
+
+  - name: "END_終話_お問い合わせ"
+    condition: "予約確認ルート完了"
+    tts_announcement: "{tts_g:お電話承りました。予約確認の申し込みを受付いたしました。日曜、祝日を除く3診療日以内に折り返しショートメッセージをお送りいたします。内容のご確認をお願いします。必要がある場合のみ、当院より折り返しさせていただきます。それでは失礼いたします。}"
+    status: "1"
+    sms_flag: "2"
+    completion_flag_name: "完了フラグ_お問い合わせ"
+
+  - name: "END_終話_子宮がん乳がん検診"
+    condition: "がん検診ルート完了"
+    tts_announcement: "{tts_g:お電話承りました。AI電話で一旦申し込みを受け付けいたしました。このお電話にてご連絡いただいた内容は当院にて確認後、日曜、祝日を除く3診療日以内に折り返し電話またはショートメッセージをお送りし確定となります。それでは失礼いたします。}"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_がん検診"
+
+  - name: "END_終話_骨粗しょう症健診"
+    condition: "骨粗しょう症健診ルート完了"
+    tts_announcement: "{tts_g:お電話承りました。AI電話で一旦申し込みを受け付けいたしました。このお電話にてご連絡いただいた内容は当院にて確認後、日曜、祝日を除く3診療日以内に折り返し電話またはショートメッセージをお送りし確定となります。それでは失礼いたします。}"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_骨粗しょう症健診"
+
+  - name: "END_終話_健診_人間ドック"
+    condition: "健診・人間ドックルート完了"
+    tts_announcement: "{tts_g:お電話承りました。AI電話で一旦申し込みを受け付けいたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、日曜、祝日を除く3診療日以内に折り返し電話またはショートメッセージをお送りし、確定となります。それでは失礼いたします。}"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_健診"
+
+  - name: "END_代表案内1"
+    condition: "診療科=一般内科"
+    tts_announcement: "{tts_g:申し訳ございません。一般内科に関しては、こちらのAI電話ではお受けできません。受付時間内に直接ご来院ください。お電話ありがとうございました。それでは失礼いたします。}"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_代表案内1"
+
+  - name: "END_代表案内2"
+    condition: "診療科=特定健診（緩和ケア/眼科/救急/歯科口腔/放射線腫瘍/麻酔/リハビリ/化学療法 等）"
+    tts_announcement: "{tts_g:申し訳ございません。該当診療科に関しては、こちらのAI電話ではお受けできません。代表電話へおかけ直しください。電話番号を申し上げます。メモをご準備ください。番号は029-872-1771です。くりかえします。029-872-1771です。くりかえします。029-872-1771です。お電話ありがとうございました。それでは失礼いたします。}"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_代表案内2"
+
+  - name: "END_代表案内3"
+    condition: "診療科=予防接種（予防注射/ワクチン/HPV/乳幼児健診 等）"
+    tts_announcement: "{tts_g:申し訳ございません。該当キーワードに関しては、こちらのAI電話ではお受けできません。代表電話へおかけ直しください。電話番号を申し上げます。メモをご準備ください。番号は029-875-3511です。くりかえします。029-875-3511です。くりかえします。029-875-3511です。お電話ありがとうございました。それでは失礼いたします。}"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_代表案内3"
+
+  - name: "END_代表案内_当日翌日"
+    condition: "日程確認=はい（当日翌日の問い合わせ）"
+    tts_announcement: "{tts_g:申し訳ございません。当日、翌日のお問い合わせに関しては、こちらのAI電話ではお受けできません。代表電話へおかけ直しください。電話番号を申し上げます。メモをご準備ください。番号は029-872-1771です。くりかえします。029-872-1771です。くりかえします。029-872-1771です。お電話ありがとうございました。それでは失礼いたします。}"
+    status: "9"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_当日翌日"
+
+  - name: "END_来院案内"
+    condition: "がん検診症状あり / 産婦人科非検診"
+    tts_announcement: "{tts_g:症状がある方へのご案内です。症状のある方で、産婦人科をご希望の方は、診療日当日の午前8時から午前11時30分までに、直接ご来院ください。乳腺外科を希望の方は、木曜日と土曜日の午後1時から午後4時までに、直接ご来院ください。休診などの診療案内につきましては、当院ホームページをご確認のうえ、ご来院くださいますようお願いいたします。なお、産婦人科の予約変更、確認、キャンセルにつきましては、代表電話へおかけ直しください。電話番号は029-875-3511です。くりかえします。029-875-3511です。くりかえします。029-875-3511です。それでは失礼いたします。}"
+    status: "7"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_来院案内"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+  # 各終話ノードで smsFlag が固定（1=SMS送信、2=条件付き、-1=なし）。動的分岐不要。
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション8c: Dr.JOY 電話帳エントリ ---
+phonebook:
+  enabled: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "施設名 + AI 電話案内 + 折り返し連絡の説明"
+    announcement: "{tts_g:お電話ありがとうございます。セントラル総合クリニックのAI電話です。このお電話にてご連絡いただいた内容は、当院にて確認後、折り返しご連絡差し上げますので最後までお話しください。}"
+
+  - module_name: "日程確認"
+    purpose: "当日翌日問い合わせ排除"
+    announcement: "{tts_g:お電話は、今日、明日の予約に関するお問い合わせでしょうか？「はい」、または「いいえ」でお答えください。}"
+
+  - module_name: "診療科"
+    purpose: "診療科聴取（多分岐）"
+    announcement: "{tts_g:受診を希望されている診療科をお話ください。検査の方は検査とお話しください。}"
+
+  - module_name: "用件確認"
+    purpose: "用件聴取（DTMF対応）"
+    announcement: "{tts_g:ご用件をお伺いします。次の4つのうち、いずれかでお話ください。1「予約」、2「変更」、3「キャンセル」、4「予約確認」、それではお話ください。プッシュボタンでも操作できます。}"
+
+  - module_name: "受診歴確認"
+    purpose: "初診/再診判定"
+    announcement: "{tts_g:当院でのご受診は初めてですか？}"
+
+  - module_name: "紹介状確認"
+    purpose: "紹介状有無の Yes/No"
+    announcement: "{tts_g:他の医療機関からの紹介状はお持ちですか。}"
+
+  - module_name: "紹介元医療機関聴取"
+    purpose: "紹介元医療機関名（フリーテキスト）"
+    announcement: "{tts_g:紹介元医療機関をお話しください。なければ「ない」とお話しください。}"
+
+  - module_name: "担当医聴取"
+    purpose: "指定担当医（フリーテキスト）"
+    announcement: "{tts_g:指定の担当医はございますか。}"
+
+  - module_name: "症状聴取_一般予約"
+    purpose: "症状からのキーワード再振り分け"
+    announcement: "{tts_g:症状を簡潔にお話しください。}"
+
+  - module_name: "予約希望日聴取_一般予約"
+    purpose: "予約希望日"
+    announcement: "{tts_g:受診を希望されるお日にちがあればお話しください。}"
+
+  - module_name: "予約日聴取_変更"
+    purpose: "変更対象の予約日"
+    announcement: "{tts_g:予約票に記載されている予約日を「4月1日」のように日付でお話ください。}"
+
+  - module_name: "予約希望日聴取_変更"
+    purpose: "変更後の希望日"
+    announcement: "{tts_g:受診を希望されるお日にちがあればお話しください。}"
+
+  - module_name: "予約日聴取_キャンセル"
+    purpose: "キャンセル対象の予約日"
+    announcement: "{tts_g:予約票に記載されている予約日を「4月1日」のように日付でお話ください。}"
+
+  - module_name: "キャンセル理由聴取"
+    purpose: "キャンセル理由（フリーテキスト）"
+    announcement: "{tts_g:キャンセル理由をお話しください。}"
+
+  - module_name: "内容確認_予約確認"
+    purpose: "予約確認内容（フリーテキスト）"
+    announcement: "{tts_g:ご確認内容についてお伺いします。「次回の予約日時を教えて欲しい」等、その他ご不明な点等ございましたら、こちらでお話しください。}"
+
+  - module_name: "受診券所持確認_骨粗しょう症"
+    purpose: "牛久市受診券の所持確認"
+    announcement: "{tts_g:牛久市の受診券はお持ちですか？}"
+
+  - module_name: "自費確認_骨粗しょう症"
+    purpose: "骨粗しょう症 自費受診の確認"
+    announcement: "{tts_g:自費で受診されますか？}"
+
+  - module_name: "予約希望日聴取_骨粗しょう症"
+    purpose: "骨粗しょう症 予約希望日（月曜午後のみ）"
+    announcement: "{tts_g:骨粗しょう症検診のご予約は月曜日午後になります。受診を希望されるお日にちがあればお話しください。}"
+
+  - module_name: "検診確認_産婦人科"
+    purpose: "産婦人科 がん検診希望の Yes/No"
+    announcement: "{tts_g:子宮がん検診・乳がん検診をご希望ですか。}"
+
+  - module_name: "症状確認_がん検診"
+    purpose: "がん検診 症状有無の Yes/No"
+    announcement: "{tts_g:症状はありますか？「はい」、または「いいえ」でお答えください。}"
+
+  - module_name: "受診券所持確認_がん検診"
+    purpose: "がん検診 受診券所持確認"
+    announcement: "{tts_g:受診券もしくは利用券などはありますか？}"
+
+  - module_name: "自費確認_がん検診"
+    purpose: "がん検診 自費受診の確認"
+    announcement: "{tts_g:自費で受診されますか？}"
+
+  - module_name: "市町村確認_がん検診"
+    purpose: "市町村名（フリーテキスト）"
+    announcement: "{tts_g:市町村はどちらでしょうか？}"
+
+  - module_name: "他検診受診確認_がん検診"
+    purpose: "他検診の同時予約希望"
+    announcement: "{tts_g:ご一緒に子宮がん、乳がん検診のご予約はございますか？}"
+
+  - module_name: "予約希望日聴取_がん検診"
+    purpose: "がん検診 予約希望日"
+    announcement: "{tts_g:受診を希望されるお日にちがあればお話しください。}"
+
+  - module_name: "健診内容確認"
+    purpose: "健診・人間ドック内容（フリーテキスト）"
+    announcement: "{tts_g:ご用件をお伺いいたします。お話し途中で次に進んだ場合、当院より折り返しご連絡をいたしますので、ご連絡をお待ちください。}"
+
+  # --- 終話 TTS ---
+  - module_name: "END_終話_予約"
+    purpose: "予約ルート完了"
+    announcement: "{tts_g:お電話承りました。予約の申し込みを受付いたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、日曜、祝日を除く3診療日内に折り返し電話、またはショートメッセージをお送りし、確定となります。それでは失礼いたします。}"
+
+  - module_name: "END_終話_変更"
+    purpose: "変更ルート完了"
+    announcement: "{tts_g:お電話承りました。予約変更の申し込みを受付いたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、日曜、祝日を除く3診療日内に折り返し電話、またはショートメッセージをお送りし、確定となります。それでは失礼いたします。}"
+
+  - module_name: "END_終話_キャンセル"
+    purpose: "キャンセルルート完了"
+    announcement: "{tts_g:お電話承りました。予約キャンセルの申し込みを受付いたしました。必要がある場合のみ、当院より折り返しさせていただきます。それでは失礼いたします。}"
+
+  - module_name: "END_終話_お問い合わせ"
+    purpose: "予約確認ルート完了"
+    announcement: "{tts_g:お電話承りました。予約確認の申し込みを受付いたしました。日曜、祝日を除く3診療日以内に折り返しショートメッセージをお送りいたします。内容のご確認をお願いします。必要がある場合のみ、当院より折り返しさせていただきます。それでは失礼いたします。}"
+
+  - module_name: "END_終話_子宮がん乳がん検診"
+    purpose: "がん検診ルート完了"
+    announcement: "{tts_g:お電話承りました。AI電話で一旦申し込みを受け付けいたしました。このお電話にてご連絡いただいた内容は当院にて確認後、日曜、祝日を除く3診療日以内に折り返し電話またはショートメッセージをお送りし確定となります。それでは失礼いたします。}"
+
+  - module_name: "END_終話_骨粗しょう症健診"
+    purpose: "骨粗しょう症健診ルート完了"
+    announcement: "{tts_g:お電話承りました。AI電話で一旦申し込みを受け付けいたしました。このお電話にてご連絡いただいた内容は当院にて確認後、日曜、祝日を除く3診療日以内に折り返し電話またはショートメッセージをお送りし確定となります。それでは失礼いたします。}"
+
+  - module_name: "END_終話_健診_人間ドック"
+    purpose: "健診・人間ドックルート完了"
+    announcement: "{tts_g:お電話承りました。AI電話で一旦申し込みを受け付けいたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、日曜、祝日を除く3診療日以内に折り返し電話またはショートメッセージをお送りし、確定となります。それでは失礼いたします。}"
+
+  - module_name: "END_代表案内1"
+    purpose: "一般内科 → 直接来院案内（番号案内なし）"
+    announcement: "{tts_g:申し訳ございません。一般内科に関しては、こちらのAI電話ではお受けできません。受付時間内に直接ご来院ください。お電話ありがとうございました。それでは失礼いたします。}"
+
+  - module_name: "END_代表案内2"
+    purpose: "特定健診 系 → 代表電話 029-872-1771 案内"
+    announcement: "{tts_g:申し訳ございません。該当診療科に関しては、こちらのAI電話ではお受けできません。代表電話へおかけ直しください。電話番号を申し上げます。メモをご準備ください。番号は029-872-1771です。くりかえします。029-872-1771です。くりかえします。029-872-1771です。お電話ありがとうございました。それでは失礼いたします。}"
+
+  - module_name: "END_代表案内3"
+    purpose: "予防接種 系 → 代表電話 029-875-3511 案内"
+    announcement: "{tts_g:申し訳ございません。該当キーワードに関しては、こちらのAI電話ではお受けできません。代表電話へおかけ直しください。電話番号を申し上げます。メモをご準備ください。番号は029-875-3511です。くりかえします。029-875-3511です。くりかえします。029-875-3511です。お電話ありがとうございました。それでは失礼いたします。}"
+
+  - module_name: "END_代表案内_当日翌日"
+    purpose: "当日翌日問い合わせ → 代表電話 029-872-1771 案内"
+    announcement: "{tts_g:申し訳ございません。当日、翌日のお問い合わせに関しては、こちらのAI電話ではお受けできません。代表電話へおかけ直しください。電話番号を申し上げます。メモをご準備ください。番号は029-872-1771です。くりかえします。029-872-1771です。くりかえします。029-872-1771です。お電話ありがとうございました。それでは失礼いたします。}"
+
+  - module_name: "END_来院案内"
+    purpose: "がん検診症状あり / 産婦人科非検診 → 直接来院 + 代表電話 029-875-3511"
+    announcement: "{tts_g:症状がある方へのご案内です。症状のある方で、産婦人科をご希望の方は、診療日当日の午前8時から午前11時30分までに、直接ご来院ください。乳腺外科を希望の方は、木曜日と土曜日の午後1時から午後4時までに、直接ご来院ください。休診などの診療案内につきましては、当院ホームページをご確認のうえ、ご来院くださいますようお願いいたします。なお、産婦人科の予約変更、確認、キャンセルにつきましては、代表電話へおかけ直しください。電話番号は029-875-3511です。くりかえします。029-875-3511です。くりかえします。029-875-3511です。それでは失礼いたします。}"
+
+  - module_name: "END_非通知"
+    purpose: "非通知終話"
+    announcement: "{tts_g:恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。}"
+
+  - module_name: "END_時間外"
+    purpose: "時間外終話（本フローでは未使用、デフォルト配置のみ）"
+    announcement: "{tts_g:お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。}"
+
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ上限到達時の聴取失敗終話"
+    announcement: "{tts_g:申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。}"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "診療科"
+    words: |
+      骨粗しょう症検診 コツソショウショウケンシン
+      骨粗しょう症 コツソショウショウ
+      骨密度 コツミツド
+      子宮がん検診 シキュウガンケンシン
+      子宮頸がん検診 シキュウケイガンケンシン
+      子宮頸がん シキュウケイガン
+      乳がん検診 ニュウガンケンシン
+      乳がん ニュウガン
+      乳腺 ニュウセン
+      マンモグラフィ マンモグラフィ
+      産婦人科 サンフジンカ
+      婦人科 フジンカ
+      産科 サンカ
+      一般内科 イッパンナイカ
+      内科 ナイカ
+      特定健診 トクテイケンシン
+      緩和ケア カンワケア
+      眼科 ガンカ
+      救急 キュウキュウ
+      歯科 シカ
+      口腔 コウクウ
+      放射線 ホウシャセン
+      腫瘍 シュヨウ
+      麻酔 マスイ
+      リハビリ リハビリ
+      化学療法 カガクリョウホウ
+      予防接種 ヨボウセッシュ
+      予防注射 ヨボウチュウシャ
+      ワクチン ワクチン
+      HPV エイチピーブイ
+      乳幼児健診 ニュウヨウジケンシン
+      健診 ケンシン
+      人間ドック ニンゲンドック
+      検査 ケンサ
+
+  - step_name: "用件確認"
+    words: |
+      予約 ヨヤク
+      変更 ヘンコウ
+      キャンセル キャンセル
+      確認 カクニン
+      予約確認 ヨヤクカクニン
+
+  - step_name: "症状聴取_一般予約"
+    words: |
+      産婦人科 サンフジンカ
+      婦人科 フジンカ
+      子宮がん シキュウガン
+      乳がん ニュウガン
+      骨粗しょう症 コツソショウショウ
+      予防接種 ヨボウセッシュ
+      症状 ショウジョウ
+      痛み イタミ
+      発熱 ハツネツ
+
+  - step_name: "受診歴確認"
+    words: |
+      初めて ハジメテ
+      初診 ショシン
+      再診 サイシン
+
+  - step_name: "紹介状確認"
+    words: |
+      紹介状 ショウカイジョウ
+      ある アル
+      ない ナイ
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "**復唱確認なし**（顧客指定、全フロー共通）。電話番号/生年月日のサブフローでも recitation: なし"
+  - "**聞き直し1回まで**（retry_count=1）。全 hearing 共通"
+  - "**冒頭で当日翌日問い合わせを排除**: 日程確認 hearing で「はい」→ END_代表案内_当日翌日(status=9)"
+  - "**着信番号判定は電話番号聴取サブフロー内蔵の incoming-classifier に委譲**: メインフロー側に追加の script 判定は不要"
+  - "**診療科多分岐**: 骨粗しょう症/がん検診/産婦人科/一般内科/特定健診/予防接種/健診希望 の 7 ラベル + default。default は no_result_default で「登録なし」を保存し用件確認へ進む"
+  - "**症状聴取でも同様のキーワード再振り分け**: 一般内科ルートに入った後でも、症状発話から専門ルートに振り分け可能。enum 5 ラベル + その他(default)"
+  - "**代表案内 3 種**: END_代表案内1（一般内科、来院案内のみ）/ END_代表案内2（特定健診系、029-872-1771）/ END_代表案内3（予防接種系、029-875-3511）"
+  - "**当日翌日案内**: status=9 を採用。029-872-1771 を案内"
+  - "**来院案内 (END_来院案内)**: status=7。がん検診症状あり または 産婦人科非検診で発生。代表電話 029-875-3511 を 3 回読み上げ"
+  - "**SMS 送信パターン**: status=1 の終話で smsFlag=1 (予約/変更/健診/がん検診/骨粗しょう症), smsFlag=2 (キャンセル/お問い合わせ)。代表案内・来院案内・聴取失敗・非通知・時間外は smsFlag=-1"
+  - "**DTMF 対応**: 診察券番号（サブフロー内）、連絡先電話番号（サブフロー内）、用件確認（DTMF 1=予約, 2=変更, 3=キャンセル, 4=確認）"
+  - "**個人情報聴取の順序**: 連絡先電話番号 → 診察券番号 → 氏名 → 生年月日。CLAUDE.md Rule 9 に従い 4 サブフローで処理"
+  - "**営業時間チェックなし**: use_acceptance_times=false。日程確認 hearing で当日翌日を排除し、その他の時間制御は Dr.JOY 側で運用"
+  - "RAG / FAQ サブフロー未使用"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "[N-1] office_id（施設 ID）の確定"
+    resolved: false
+    status: "TODO"
+    assignee: "Dr.JOY 管理者"
+    notes: "Dr.JOY 管理画面で確認"
+
+  - item: "[N-2] 営業時間（受付曜日・時間）の確定"
+    resolved: false
+    status: "TODO"
+    assignee: "施設運用担当"
+    notes: "顧客指定で日程確認 hearing による排除のみ実装。Dr.JOY 側で acceptance_times 相当の運用設定が必要か確認"
+
+  - item: "[N-3] IVR 着信電話番号（ARS番号）の確定"
+    resolved: false
+    status: "TODO"
+    assignee: "施設運用担当"
+    notes: "Brekeke 設定時に設定"
+
+  - item: "[N-4] サブフロー内 retry 上限到達時の挙動 — 代表転送に切り替えるか確認"
+    resolved: false
+    status: "TODO"
+    assignee: "人間（Brekeke IVR UI）"
+    notes: "Custom Jump to Flow からは親フローの END へ接続不可。サブフロー内 retry_false パスの扱いは IVR UI で個別調整"
+
+  - item: "[N-5] SMS 文面の Dr.JOY 側設定"
+    resolved: false
+    status: "TODO"
+    assignee: "Dr.JOY 管理者"
+    notes: "smsFlag=1, 2 に対応する SMS 本文は Dr.JOY 管理画面で個別に設定"
+
+  - item: "[N-6] 「健診希望」と「特定健診」の混同回避 — 顧客指示では特定健診は代表案内2、健診希望（人間ドック含む）は健診内容確認ルートへ振り分けるが、診療科 OpenAI プロンプトでキーワードが競合しないことを通話テストで検証"
+    resolved: false
+    status: "TODO"
+    assignee: "QA / 施設運用担当"
+    notes: "「健診」「健診希望」「人間ドック」→ 健診希望ルート、「特定健診」「特定」→ 特定健診ルート、をプロンプトで明示区別"
+
+  - item: "[N-7] 通話テスト — 全ルート（予約/変更/キャンセル/確認 × 一般 + 骨粗しょう症 + がん検診 + 産婦人科 + 健診 + 各代表案内）の動作確認"
+    resolved: false
+    status: "TODO"
+    assignee: "QA / 施設運用担当"
+    notes: "特に診療科分岐と症状再振り分けの 2 段階キーワード判定を本番投入前に実コール確認"

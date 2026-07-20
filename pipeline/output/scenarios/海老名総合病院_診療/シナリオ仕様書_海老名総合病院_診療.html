@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>シナリオ仕様書 — 海老名総合病院</title>
+<style>
+  :root {
+    --primary: #2563eb; --primary-light: #eff6ff;
+    --success: #16a34a; --success-light: #f0fdf4;
+    --warning: #d97706; --warning-light: #fffbeb;
+    --danger: #dc2626; --danger-light: #fef2f2;
+    --gray-50: #f9fafb; --gray-100: #f3f4f6; --gray-200: #e5e7eb;
+    --gray-300: #d1d5db; --gray-500: #6b7280; --gray-700: #374151; --gray-900: #111827;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI','Hiragino Sans','Yu Gothic UI',sans-serif; background: var(--gray-50); color: var(--gray-900); line-height: 1.7; }
+  .header { background: linear-gradient(135deg, #1e40af, #3b82f6); color: white; padding: 2.5rem 2rem; text-align: center; }
+  .header h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 0.5rem; }
+  .header .meta { opacity: 0.85; font-size: 0.9rem; }
+  .container { max-width: 900px; margin: 0 auto; padding: 1.5rem; }
+  .overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+  .overview-card { background: white; border-radius: 12px; padding: 1.2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); text-align: center; }
+  .overview-card .num { font-size: 2rem; font-weight: 700; color: var(--primary); }
+  .overview-card .label { font-size: 0.85rem; color: var(--gray-500); margin-top: 0.2rem; }
+  .flow-overview { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin: 1.5rem 0; }
+  .flow-chain { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.3rem; padding: 1rem 0; }
+  .flow-node { background: var(--primary-light); border: 2px solid var(--primary); border-radius: 8px; padding: 0.5rem 1rem; font-size: 0.85rem; font-weight: 600; color: var(--primary); white-space: nowrap; }
+  .flow-node.start { background: var(--success-light); border-color: var(--success); color: var(--success); }
+  .flow-node.end { background: var(--danger-light); border-color: var(--danger); color: var(--danger); }
+  .flow-node.branch { background: var(--warning-light); border-color: var(--warning); color: var(--warning); }
+  .flow-arrow { font-size: 1.2rem; color: var(--gray-300); }
+  .section { margin: 1.5rem 0; }
+  .section-title { font-size: 1.3rem; font-weight: 700; color: var(--gray-900); padding-bottom: 0.5rem; border-bottom: 2px solid var(--primary); margin-bottom: 1rem; }
+  .block { background: white; border-radius: 12px; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); overflow: hidden; }
+  .block-header { background: var(--gray-100); padding: 0.8rem 1.2rem; cursor: pointer; display: flex; align-items: center; gap: 0.8rem; user-select: none; transition: background 0.2s; }
+  .block-header:hover { background: var(--gray-200); }
+  .block-header .icon { font-size: 1.3rem; }
+  .block-header .title { font-weight: 600; flex: 1; }
+  .block-header .badge { font-size: 0.75rem; padding: 0.15rem 0.6rem; border-radius: 999px; font-weight: 600; }
+  .badge-blue { background: var(--primary-light); color: var(--primary); }
+  .badge-green { background: var(--success-light); color: var(--success); }
+  .badge-orange { background: var(--warning-light); color: var(--warning); }
+  .badge-red { background: var(--danger-light); color: var(--danger); }
+  .badge-purple { background: #f3e8ff; color: #7c3aed; }
+  .badge-gray { background: var(--gray-100); color: var(--gray-500); }
+  .block-header .chevron { transition: transform 0.3s; font-size: 0.8rem; color: var(--gray-500); }
+  .block.open .block-header .chevron { transform: rotate(90deg); }
+  .block-body { display: none; padding: 1.2rem; }
+  .block.open .block-body { display: block; }
+  .speech { background: var(--primary-light); border-left: 4px solid var(--primary); border-radius: 0 8px 8px 0; padding: 0.8rem 1rem; margin: 0.5rem 0 0.5rem 2rem; font-size: 0.9rem; position: relative; }
+  .speech::before { content: '\1F50A'; position: absolute; left: -2rem; top: 0.7rem; font-size: 1rem; }
+  .speech .label { font-size: 0.75rem; color: var(--gray-500); font-weight: 600; margin-bottom: 0.3rem; }
+  .branch-table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; font-size: 0.9rem; }
+  .branch-table th { background: var(--gray-100); padding: 0.5rem 0.8rem; text-align: left; font-weight: 600; font-size: 0.8rem; color: var(--gray-500); }
+  .branch-table td { padding: 0.5rem 0.8rem; border-bottom: 1px solid var(--gray-200); }
+  .steps { list-style: none; padding: 0; }
+  .steps li { padding: 0.6rem 0 0.6rem 2.5rem; position: relative; border-left: 2px solid var(--gray-200); margin-left: 0.8rem; }
+  .steps li::before { content: attr(data-num); position: absolute; left: -0.85rem; top: 0.5rem; width: 1.5rem; height: 1.5rem; border-radius: 50%; background: var(--primary); color: white; font-size: 0.75rem; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+  .steps li:last-child { border-left-color: transparent; }
+  .step-title { font-weight: 600; }
+  .step-desc { font-size: 0.85rem; color: var(--gray-500); margin-top: 0.2rem; }
+  .info-box { background: var(--warning-light); border-left: 4px solid var(--warning); padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-size: 0.85rem; }
+  .error-box { background: var(--danger-light); border-left: 4px solid var(--danger); padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-size: 0.85rem; }
+  .collect-table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; }
+  .collect-table th { background: var(--gray-100); padding: 0.6rem 1rem; text-align: left; font-size: 0.85rem; }
+  .collect-table td { padding: 0.6rem 1rem; border-bottom: 1px solid var(--gray-200); font-size: 0.9rem; }
+  .footer { text-align: center; color: var(--gray-500); font-size: 0.8rem; padding: 2rem 0; }
+  /* 縦型ツリー図 */
+  .tree-section { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin: 1.5rem 0; overflow-x: auto; }
+  .vtree { display: flex; flex-direction: column; align-items: center; gap: 0; }
+  .vtree-node { background: var(--primary-light); border: 2px solid var(--primary); border-radius: 8px; padding: 0.35rem 1rem; font-size: 0.8rem; font-weight: 600; color: var(--primary); white-space: nowrap; text-align: center; min-width: 100px; }
+  .vtree-node.t-opening { background: var(--success-light); border-color: var(--success); color: var(--success); }
+  .vtree-node.t-announcement { background: #e0f2fe; border-color: #0284c7; color: #0284c7; }
+  .vtree-node.t-hearing { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
+  .vtree-node.t-subflow { background: #f3e8ff; border-color: #7c3aed; color: #7c3aed; }
+  .vtree-node.t-context_match_router, .vtree-node.t-script, .vtree-node.t-date_of_call_classifier { background: var(--warning-light); border-color: var(--warning); color: var(--warning); }
+  .vtree-node.t-call_transfer { background: #fce7f3; border-color: #db2777; color: #db2777; }
+  .vtree-node.t-termination { background: var(--danger-light); border-color: var(--danger); color: var(--danger); }
+  .vtree-arrow { color: var(--gray-300); font-size: 0.9rem; line-height: 1; text-align: center; padding: 2px 0; }
+  .vtree-branches { display: flex; justify-content: center; gap: 0.8rem; margin: 0.3rem 0; }
+  .vtree-branch { display: flex; flex-direction: column; align-items: center; gap: 0; border: 1px solid var(--gray-200); border-radius: 10px; padding: 0.5rem; background: var(--gray-50); }
+  .vtree-branch-label { font-size: 0.7rem; font-weight: 700; color: var(--gray-500); background: white; border-radius: 4px; padding: 0.1rem 0.5rem; margin-bottom: 0.2rem; border: 1px solid var(--gray-200); }
+  .vtree-merge { text-align: center; font-size: 0.75rem; color: var(--gray-500); padding: 0.2rem 0; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>シナリオ仕様書</h1>
+  <div class="meta">海老名総合病院 | 作成日: 2026年04月17日</div>
+</div>
+<div class="container">
+
+<div class="overview">
+  <div class="overview-card"><div class="num">24</div><div class="label">総ブロック数</div></div>
+  <div class="overview-card"><div class="num">2</div><div class="label">用件メニュー</div></div>
+  <div class="overview-card"><div class="num">5</div><div class="label">サブフロー</div></div>
+  <div class="overview-card"><div class="num">1</div><div class="label">分岐ブロック</div></div>
+  <div class="overview-card"><div class="num">9</div><div class="label">終話パターン</div></div>
+</div>
+
+<div class="tree-section">
+  <h3 style="margin-bottom:0.8rem;color:var(--gray-700);">通話の全体フロー（樹形図）</h3>
+  <div class="vtree"><div class="vtree-node t-opening">冒頭</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">3日以内確認</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-termination">END_3日以内</div></div><div class="vtree-branch"><div class="vtree-branch-label">いいえ</div><div class="vtree"><div class="vtree-node t-hearing">用件確認</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree"><div class="vtree-node t-hearing">診療科_変更</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">リハビリテーション科</div><div class="vtree-node t-termination">END_予約不可</div></div><div class="vtree-branch"><div class="vtree-branch-label">歯科口腔外科</div><div class="vtree-node t-termination">END_予約不可</div></div><div class="vtree-branch"><div class="vtree-branch-label">麻酔科</div><div class="vtree-node t-termination">END_予約不可</div></div><div class="vtree-branch"><div class="vtree-branch-label">放射線科</div><div class="vtree-node t-termination">END_予約不可</div></div><div class="vtree-branch"><div class="vtree-branch-label">内視鏡</div><div class="vtree-node t-termination">END_予約不可</div></div><div class="vtree-branch"><div class="vtree-branch-label">在宅診療科</div><div class="vtree-node t-termination">END_予約不可</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-hearing">予約日_変更</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">希望日有無_変更</div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">キャンセル</div><div class="vtree"><div class="vtree-node t-hearing">診療科_キャンセル</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">リハビリテーション科</div><div class="vtree-node t-termination">END_予約不可</div></div><div class="vtree-branch"><div class="vtree-branch-label">歯科口腔外科</div><div class="vtree-node t-termination">END_予約不可</div></div><div class="vtree-branch"><div class="vtree-branch-label">麻酔科</div><div class="vtree-node t-termination">END_予約不可</div></div><div class="vtree-branch"><div class="vtree-branch-label">放射線科</div><div class="vtree-node t-termination">END_予約不可</div></div><div class="vtree-branch"><div class="vtree-branch-label">内視鏡</div><div class="vtree-node t-termination">END_予約不可</div></div><div class="vtree-branch"><div class="vtree-branch-label">在宅診療科</div><div class="vtree-node t-termination">END_予約不可</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-hearing">予約日_キャンセル</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">希望日有無_キャンセル</div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">確認</div><div class="vtree-node t-hearing">内容確認</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_診察券番号</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_氏名聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_生年月日聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_電話番号聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">jump_RAG検索</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">終話分岐</div></div><div class="vtree-branch"><div class="vtree-branch-label">予約希望</div><div class="vtree-node t-termination">END_予約希望</div></div></div></div></div></div></div>
+</div>
+
+<div style="background:white;border-radius:12px;padding:1rem 1.5rem;box-shadow:0 1px 3px rgba(0,0,0,0.08);margin:1.5rem 0;display:flex;flex-wrap:wrap;gap:1.5rem;align-items:center;">
+  <span style="font-weight:600;color:var(--gray-700);font-size:0.9rem;">処理方式の凡例:</span>
+  <span style="display:flex;align-items:center;gap:0.4rem;"><span class="badge badge-gray">音声認識のみ</span><span style="font-size:0.8rem;color:var(--gray-500);">患者の発話をそのまま記録</span></span>
+  <span style="display:flex;align-items:center;gap:0.4rem;"><span class="badge badge-purple">AI判定</span><span style="font-size:0.8rem;color:var(--gray-500);">AIが発話内容を分類・変換して分岐</span></span>
+</div>
+<div class="section">
+<div class="section-title">1. 着信～用件選択</div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F500;</span><span class="title">3日以内確認</span><span class="badge badge-orange">分岐</span><span class="badge badge-purple">AI判定</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">AIが話す内容</div>本日から2営業日後までのご予約に関するお問い合わせは、受付時間内に外来予約センターへおかけ直しください。3日以内の予約に関するお問い合わせですか？</div>
+<table class="branch-table">
+<tr><th>選択</th><th>遷移先</th></tr>
+<tr><td><strong>1</strong> または「はい」</td><td>&rarr; END_3日以内</td></tr>
+<tr><td><strong>2</strong> または「いいえ」</td><td>&rarr; 用件確認</td></tr>
+</table>
+<div class="error-box">&#x1F504; 聞き取れなかった場合: 最大<strong>2回</strong>再質問</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">2. はいフロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">はいフロー</span><span class="badge badge-blue">0ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">3. いいえフロー</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F3E5;</span><span class="title">いいえフロー</span><span class="badge badge-blue">1ステップ</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><ol class="steps"><li data-num="1"><div class="step-title">用件確認 <span class="processing-tag"><span class="badge badge-purple">AI判定</span></span></div></li>
+<li data-num="2"><div class="step-title">個人情報聴取</div><div class="step-desc">氏名・生年月日・電話番号を聴取（共通サブフロー）</div></li>
+</ol>
+<div class="speech"><div class="label">用件確認</div>ご用件を、次の４つからお話ください。予約の変更は1を、キャンセルは2を、確認は3を、紹介状のある方・予約を取りたい方は4。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">4. 個人情報聴取（共通サブフロー）</div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F464;</span><span class="title">聴取する項目</span><span class="badge badge-blue">5項目</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th>順序</th><th>項目</th><th>入力方法</th></tr>
+<tr><td>1</td><td><strong>診察券番号聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>2</td><td><strong>氏名聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>3</td><td><strong>生年月日聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>4</td><td><strong>電話番号聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>5</td><td><strong>RAG検索</strong></td><td>音声 / プッシュ</td></tr>
+</table>
+<div class="info-box">&#x1F4F1; <strong>携帯電話からの着信の場合</strong>: 電話番号は着信番号を復唱確認</div>
+<div class="error-box">&#x1F504; 各項目とも聞き取れなかった場合は最大<strong>2回</strong>再質問</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">5. ブロック構成（技術仕様）</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F9E9;</span><span class="title">全ブロック一覧（24ブロック）</span><span class="badge badge-blue">24件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th style="width:5%">#</th><th style="width:25%">ブロック名</th><th style="width:15%">タイプ</th><th style="width:25%">接続先</th><th style="width:30%">詳細</th></tr>
+<tr><td>1</td><td>&#x1F3E0; <strong>冒頭</strong></td><td><span class="badge badge-green">冒頭</span></td><td style="font-size:0.8rem">3日以内確認</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>2</td><td>&#x1F3A4; <strong>3日以内確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">END_3日以内 / 用件確認</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>3</td><td>&#x1F3A4; <strong>用件確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">診療科_変更 / 診療科_キャンセル / 内容確認 / END_予約希望</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>4</td><td>&#x1F3A4; <strong>内容確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">jump_診察券番号</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>5</td><td>&#x1F3A4; <strong>診療科_変更</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">END_予約不可 / END_予約不可 / END_予約不可 / END_予約不可 / END_予約不可 / END_予約不可 / 予約日_変更</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>6</td><td>&#x1F3A4; <strong>予約日_変更</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">希望日有無_変更</td><td style="font-size:0.8rem">format: datetime</td></tr>
+<tr><td>7</td><td>&#x1F3A4; <strong>希望日有無_変更</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">次回希望日_変更 / jump_診察券番号</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>8</td><td>&#x1F3A4; <strong>次回希望日_変更</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">jump_診察券番号</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>9</td><td>&#x1F3A4; <strong>診療科_キャンセル</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">END_予約不可 / END_予約不可 / END_予約不可 / END_予約不可 / END_予約不可 / END_予約不可 / 予約日_キャンセル</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>10</td><td>&#x1F3A4; <strong>予約日_キャンセル</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">希望日有無_キャンセル</td><td style="font-size:0.8rem">format: datetime</td></tr>
+<tr><td>11</td><td>&#x1F3A4; <strong>希望日有無_キャンセル</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">次回希望日_キャンセル / jump_診察券番号</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>12</td><td>&#x1F3A4; <strong>次回希望日_キャンセル</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">jump_診察券番号</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>13</td><td>&#x1F517; <strong>jump_診察券番号</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">jump_氏名聴取</td><td style="font-size:0.8rem">flow: 海老名総合病院$診察券番号聴取</td></tr>
+<tr><td>14</td><td>&#x1F517; <strong>jump_氏名聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">jump_生年月日聴取</td><td style="font-size:0.8rem">flow: 海老名総合病院$氏名聴取</td></tr>
+<tr><td>15</td><td>&#x1F517; <strong>jump_生年月日聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">jump_電話番号聴取</td><td style="font-size:0.8rem">flow: 海老名総合病院$生年月日聴取</td></tr>
+<tr><td>16</td><td>&#x1F517; <strong>jump_電話番号聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">jump_RAG検索</td><td style="font-size:0.8rem">flow: 海老名総合病院$電話番号聴取</td></tr>
+<tr><td>17</td><td>&#x1F517; <strong>jump_RAG検索</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">終話分岐</td><td style="font-size:0.8rem">flow: 海老名総合病院$RAG検索</td></tr>
+<tr><td>18</td><td>&#x1F500; <strong>終話分岐</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">END_変更 / END_キャンセル / END_確認</td><td style="font-size:0.8rem">ref: classification</td></tr>
+<tr><td>19</td><td>&#x1F6D1; <strong>END_変更</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_変更</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>20</td><td>&#x1F6D1; <strong>END_キャンセル</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_キャンセル</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>21</td><td>&#x1F6D1; <strong>END_確認</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_確認</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>22</td><td>&#x1F6D1; <strong>END_3日以内</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_3日以内</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>23</td><td>&#x1F6D1; <strong>END_予約希望</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_予約希望</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>24</td><td>&#x1F6D1; <strong>END_予約不可</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_予約不可</td><td style="font-size:0.8rem">—</td></tr>
+</table>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">6. エラー・例外時の挙動</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x26A0;&#xFE0F;</span><span class="title">エラー時の対応一覧</span><span class="badge badge-red">重要</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th>状況</th><th>対応</th></tr>
+<tr><td>非通知着信</td><td>恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td>受付時間外（acceptance_times 不使用のため通常到達しないが、デフォルト必須として残す）</td><td>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td>リトライ上限到達</td><td>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td>3日以内確認で「はい」（直近予約）と判定</td><td>申し訳ございません。恐れ入りますが受付時間内に外来予約センターへおかけ直しください。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td>用件確認で「予約希望」（新規/紹介状）と判定</td><td>申し訳ございません。恐れ入りますが受付時間内に外来予約センターへおかけ直しください。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td>診療科が予約不可6科（リハビリテーション科/歯科口腔外科/麻酔科/放射線科/内視鏡/在宅診療科）</td><td>受付時間内に外来予約センターへおかけ直しください。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td>全聴取完了 かつ classification=変更</td><td>予約変更を受付いたしました。3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。ご連絡がいくまでは確定ではありません。お電話あり</td></tr>
+<tr><td>全聴取完了 かつ classification=キャンセル</td><td>予約キャンセルを受付いたしました。3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。ご連絡がいくまでは確定ではありません。お電</td></tr>
+<tr><td>全聴取完了 かつ classification=確認</td><td>予約確認を受付いたしました。3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。ご連絡がいくまでは確定ではありません。お電話あり</td></tr>
+</table>
+<div class="speech"><div class="label">聞き取り失敗時の切断アナウンス</div>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">7. 終話パターン一覧</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F6AA;</span><span class="title">全終話パターンの発話テキスト</span><span class="badge badge-red">9件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">END_非通知</div>恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_時間外</div>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_聴取失敗</div>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_3日以内</div>申し訳ございません。恐れ入りますが受付時間内に外来予約センターへおかけ直しください。お電話ありがとうございました。それでは失礼いたします。</div>
+<div class="speech"><div class="label">END_予約希望</div>申し訳ございません。恐れ入りますが受付時間内に外来予約センターへおかけ直しください。お電話ありがとうございました。それでは失礼いたします。</div>
+<div class="speech"><div class="label">END_予約不可</div>受付時間内に外来予約センターへおかけ直しください。お電話ありがとうございました。それでは失礼いたします。</div>
+<div class="speech"><div class="label">END_変更</div>予約変更を受付いたしました。3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。ご連絡がいくまでは確定ではありません。お電話ありがとうございました。それでは失礼いたします。</div>
+<div class="speech"><div class="label">END_キャンセル</div>予約キャンセルを受付いたしました。3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。ご連絡がいくまでは確定ではありません。お電話ありがとうございました。それでは失礼いたします。</div>
+<div class="speech"><div class="label">END_確認</div>予約確認を受付いたしました。3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。ご連絡がいくまでは確定ではありません。お電話ありがとうございました。それでは失礼いたします。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">8. 発話テキスト全文一覧</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F4DD;</span><span class="title">全発話テキスト（30件）</span><span class="badge badge-blue">30件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th style="width:30%">ステップ名</th><th>発話テキスト</th></tr>
+<tr><td><strong>冒頭_アナウンス</strong></td><td>海老名総合病院、メディカルプラザのAI電話がお受けします。</td></tr>
+<tr><td><strong>3日以内確認</strong></td><td>本日から2営業日後までのご予約に関するお問い合わせは、受付時間内に外来予約センターへおかけ直しください。3日以内の予約に関するお問い合わせですか？</td></tr>
+<tr><td><strong>用件確認</strong></td><td>ご用件を、次の４つからお話ください。予約の変更は1を、キャンセルは2を、確認は3を、紹介状のある方・予約を取りたい方は4。</td></tr>
+<tr><td><strong>内容確認</strong></td><td>それでは、ご確認内容についてお伺いします。次回の予約日時を教えて欲しいなど、内容を簡潔にお話ください。</td></tr>
+<tr><td><strong>診療科_変更</strong></td><td>それでは、ご予約されている診療科をお話しください。</td></tr>
+<tr><td><strong>予約日_変更</strong></td><td>それでは、現在の予約日を「4月1日」のように日付でお話しください。</td></tr>
+<tr><td><strong>希望日有無_変更</strong></td><td>次の受診予定日はお決まりですか？はい決まっています、または、いいえ決まっていません、のようにお話ください。</td></tr>
+<tr><td><strong>次回希望日_変更</strong></td><td>予約希望日を「4月1日」「4月中旬」のようにお話ください。</td></tr>
+<tr><td><strong>診療科_キャンセル</strong></td><td>それでは、ご予約されている診療科をお話しください。</td></tr>
+<tr><td><strong>予約日_キャンセル</strong></td><td>それでは、現在の予約日を「4月1日」のように日付でお話しください。</td></tr>
+<tr><td><strong>希望日有無_キャンセル</strong></td><td>次の受診予定日はお決まりですか？はい決まっています、または、いいえ決まっていません、のようにお話ください。</td></tr>
+<tr><td><strong>次回希望日_キャンセル</strong></td><td>予約希望日を「4月1日」「4月中旬」のようにお話ください。</td></tr>
+<tr><td><strong>非通知_アナウンス</strong></td><td>恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>時間外_アナウンス</strong></td><td>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>聴取失敗_アナウンス</strong></td><td>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>3日以内_アナウンス</strong></td><td>申し訳ございません。恐れ入りますが受付時間内に外来予約センターへおかけ直しください。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>予約希望_アナウンス</strong></td><td>申し訳ございません。恐れ入りますが受付時間内に外来予約センターへおかけ直しください。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>予約不可_アナウンス</strong></td><td>受付時間内に外来予約センターへおかけ直しください。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>変更_アナウンス</strong></td><td>予約変更を受付いたしました。3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。ご連絡がいくまでは確定ではありません。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>キャンセル_アナウンス</strong></td><td>予約キャンセルを受付いたしました。3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。ご連絡がいくまでは確定ではありません。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>確認_アナウンス</strong></td><td>予約確認を受付いたしました。3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。ご連絡がいくまでは確定ではありません。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_非通知</strong></td><td>恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_時間外</strong></td><td>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_聴取失敗</strong></td><td>申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_3日以内</strong></td><td>申し訳ございません。恐れ入りますが受付時間内に外来予約センターへおかけ直しください。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_予約希望</strong></td><td>申し訳ございません。恐れ入りますが受付時間内に外来予約センターへおかけ直しください。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_予約不可</strong></td><td>受付時間内に外来予約センターへおかけ直しください。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_変更</strong></td><td>予約変更を受付いたしました。3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。ご連絡がいくまでは確定ではありません。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_キャンセル</strong></td><td>予約キャンセルを受付いたしました。3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。ご連絡がいくまでは確定ではありません。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+<tr><td><strong>END_確認</strong></td><td>予約確認を受付いたしました。3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。ご連絡がいくまでは確定ではありません。お電話ありがとうございました。それでは失礼いたします。</td></tr>
+</table>
+</div></div>
+</div>
+
+</div>
+<div class="footer">自動生成: VoiceBot Flow Builder | 海老名総合病院 | 2026年04月17日</div>
+<script>
+document.querySelectorAll('.block-header').forEach(function(el){
+  el.addEventListener('click', function(){});
+});
+</script>
+</body>
+</html>

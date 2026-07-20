@@ -1,0 +1,1127 @@
+# 設計書 — 鹿児島厚生連病院 健診
+# 生成元: @director エージェント
+# 生成日: 2026/04/23
+# 元資料: docs/reference/customer_docs/鹿児島厚生連病院_健診.md（Gen2 yaml + function + プロンプト全量）
+# 移管ノート: docs/migration/gen2_鹿児島厚生連病院_健診.md
+#
+# 作業種別: Gen2→Gen3移管
+# 健康管理センター（健診予約）専用AI電話。用件4分岐（予約/変更/キャンセル/その他お問い合わせ）。
+# 既存の診療フロー（設計書_鹿児島厚生連病院_診療.yaml）と同一施設のため group_name="鹿厚連" を再利用。
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "鹿児島厚生連病院"
+  scenario_name: "健診"
+  group_name: "鹿厚連"
+  flow_name: "鹿厚連$健診"
+  target_facility: "鹿児島厚生連病院 健康管理センター（健診予約専用）"
+  office_id: "TODO_要確認"                    # NON-BLOCKER N-1: Dr.JOY Admin 画面で確認
+  phone_number: "TODO_要確認"                 # NON-BLOCKER N-2: 本番050番号の確定
+  business_hours: "TODO_要確認"               # NON-BLOCKER N-3: Gen2 プロンプト未記載。acceptance_times 配置あり（仮設定）
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "prod"                         # 移管ノート「環境: 本番」準拠
+
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+# Gen2 yaml の「共通」「分類別（予約/変更/キャンセル/問い合わせ）」「合流」「終了」の5ブロック構造を
+# Gen3 scenario_flow ブロック構造に機械変換。
+# 個人情報聴取（氏名・生年月日・電話番号）はリファレンス bivr サブフローを完全コピー（CLAUDE.md Rule 9）。
+# 診察券番号はGen2 yaml フローに聴取ステップがないため、サブフロー登録しない。
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "鹿厚連$健診"
+      role: "main"
+      description: "冒頭チェーン → 用件4分岐（予約/変更/キャンセル/問い合わせ）→ 用件別聴取 → 個人情報サブフロー（氏名→生年月日→電話番号）→ 終話"
+    - name: "鹿厚連$氏名聴取"
+      role: "sub"
+      description: "受診者氏名聴取（復唱なし・カタカナ強制正規化）→ 結果返却"
+    - name: "鹿厚連$生年月日聴取"
+      role: "sub"
+      description: "生年月日聴取（DOB Re-confirmation 復唱あり）→ 結果返却"
+    - name: "鹿厚連$電話番号聴取"
+      role: "sub"
+      description: "incoming-classifier 3分岐（携帯/固定/その他）→ Phone Normalization → 復唱確認 → 結果返却"
+  subflows:
+    - name: "鹿厚連$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9/11 準拠。氏名聴取.json を完全コピー。Gen2 プロンプト 1-9 のカタカナ強制正規化・苗字のみ追問はサブフロー内 OpenAI で対応。Gen2「受診者名は復唱してはいけない」に従い復唱なし版を使用"
+    - name: "鹿厚連$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9/11 準拠。生年月日聴取_復唱あり.json を完全コピー。Gen2 プロンプト 3「生年月日は復唱確認1回のみ。否定・不明瞭でも次へ」に対応。和暦/西暦変換は DOB Re-confirmation 内で処理"
+    - name: "鹿厚連$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9/10/11 準拠。電話番号聴取_復唱あり.json を完全コピー。Gen2 プロンプト 1-11 の分岐1(非通知/anonymous/空白)/分岐2(携帯 060/070/080/090)/分岐3(固定/その他)の3分岐＋Phone Normalization＋復唱フォーマットに対応"
+
+# --- セクション3: フローの目的 ---
+purpose: >
+  鹿児島厚生連病院 健康管理センター専用の健診予約AI電話。冒頭で用件を
+  4択（予約・変更・キャンセル・その他お問い合わせ）で振り分け、予約ルートでは希望コースと
+  予約希望日を、変更ルートでは現在の予約日と変更内容（受診内容/日程変更）を、
+  キャンセルルートでは現在の予約日と再受診希望を聴取する。その他お問い合わせは
+  RAG 検索を使わずそのまま質問文を格納し、回答の要不要確認で「必要」の場合のみ
+  個人情報聴取へ進む。全ルート共通で最後に個人情報（氏名・生年月日・連絡先電話番号）を
+  聴取して、「3営業日以内に折り返し電話もしくは SMS」を案内して終話する。
+  Gen2→Gen3 移管。元資料 766 行の重厚版を軽量化した付箋版仕様に準拠。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "鹿厚連$健診"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → 非通知_アナウンス(TTS) → 完了フラグ_非通知(status=2,smsFlag=-1) → 切断
+            └─ 通常/携帯/固定 → acceptance_times
+                        ├─ 時間外/TIMEOUT/ERROR → 時間外_アナウンス(TTS) → 完了フラグ_時間外(status=6,smsFlag=-1) → 切断
+                        └─ 受付可 → 冒頭_アナウンス(TTS)
+
+      ─── 用件確認（Pattern A）───
+      冒頭_アナウンス → 用件確認(TTS+AmiVoice STT+OpenAI)
+        ├─ 予約            → 予約_希望コース
+        ├─ 変更            → 共通_現在の予約日
+        ├─ キャンセル      → 共通_現在の予約日
+        └─ その他お問い合わせ → 問い合わせ_内容
+
+      ─── 予約ルート ───
+      予約_希望コース(TTS+STT+OpenAI save→course)
+        → 共通_予約希望日
+
+      ─── 変更・キャンセル共通：現在の予約日 → 用件別再分岐（Pattern B）───
+      共通_現在の予約日(TTS+STT+OpenAI datetime,echo_back=true)
+        → 共通_現在の予約日_分岐(ContextMatchRouter on classification)
+            ├─ 変更       → 変更_内容確認
+            └─ キャンセル → キャンセル_再受診希望
+
+      ─── 変更ルート（Pattern A: 受診内容/日程変更）───
+      変更_内容確認(TTS+STT+OpenAI save→details)
+        ├─ 受診内容 → 変更_受診内容 → 共通_その他質問
+        └─ 日程変更 → 共通_予約希望日
+
+      ─── キャンセルルート（Pattern A: 再受診 yes/no）───
+      キャンセル_再受診希望(TTS+STT+OpenAI)
+        ├─ はい    → 共通_予約希望日
+        └─ いいえ  → 共通_その他質問
+
+      ─── 問い合わせルート（RAG 不使用）───
+      問い合わせ_内容(TTS+STT+OpenAI save→question, RAG確認しない)
+        → 問い合わせ_受付回答(TTS+STT+OpenAI yes/no)
+            ├─ はい   → ジャンプ_氏名聴取
+            └─ いいえ → END_汎用終話
+
+      ─── 合流：予約希望日 → その他質問 → 個人情報 ───
+      共通_予約希望日(TTS+STT+OpenAI save→DesiredreservationDate, text)
+        → 共通_その他質問(TTS+STT+OpenAI save→another, text)
+          → ジャンプ_氏名聴取(Custom Jump to Flow → 鹿厚連$氏名聴取)
+            → ジャンプ_生年月日聴取(Custom Jump to Flow → 鹿厚連$生年月日聴取)
+              → ジャンプ_電話番号聴取(Custom Jump to Flow → 鹿厚連$電話番号聴取)
+                → END_汎用終話
+
+      ─── 終話パターン ───
+      END_汎用終話         : 完了フラグ_汎用終話(status=1, smsFlag=1) → 終話_汎用(TTS) → 切断
+      END_非通知           : 完了フラグ_非通知(status=2, smsFlag=-1) → 非通知_アナウンス(TTS) → 切断
+      END_時間外           : 完了フラグ_時間外(status=6, smsFlag=-1) → 時間外_アナウンス(TTS) → 切断
+      END_聴取失敗         : 完了フラグ_聴取失敗(status=3, smsFlag=-1) → 終話_聴取失敗(TTS) → 切断
+    notes: |
+      Gen2 yaml の「共通」「分類別」「合流」「終了」ブロック構造を Gen3 の 9 ブロック型に機械変換。
+      - 用件分岐: Pattern A（OpenAI 直後 enum 4 分岐）。Gen2 の「含む」マッチング + default=問い合わせ は Pattern A + conditions + OpenAI プロンプトの NO_RESULT 時 default 指示で再現。
+      - 現在の予約日後の再分岐: classification が 変更/キャンセル のどちらかで遷移先が違うため Pattern B（ContextMatchRouter on classification）。
+      - 変更_内容確認: 受診内容/日程変更の二択で分岐先が違うため Pattern A。
+      - キャンセル_再受診希望・問い合わせ_受付回答: はい/いいえで分岐先が違うため Pattern A。
+      - 共通_現在の予約日 は echo_back=true（Gen2 プロンプト 3「復唱確認1回のみ」）。Gen3 標準の「否定→再聴取」で Gen2 の「否定でも次へ」を上書き（フロー速度より精度優先）。
+      - RAGサブフローは不使用（Gen2 プロンプト 1-3「問い合わせ項目では RAG 確認禁止」に従う）。
+      - 用件「空文字」（Gen2 function enum の空文字許容）は default = その他お問い合わせルートで吸収。
+
+  - flow_name: "鹿厚連$氏名聴取"
+    diagram: |
+      docs/reference/bivr/samples/json/氏名聴取.json を完全コピー。
+      フロー名プレフィックスのみ「鹿厚連$」に置換。構造・接続・スクリプトは一切変更不可。
+    notes: "CLAUDE.md Rule 9/11 準拠。Gen2 プロンプト 2『受診者名については復唱をしてはいけない』に従い復唱なし版を使用。カタカナ強制正規化・苗字のみ追問はサブフロー内 OpenAI プロンプトで処理"
+
+  - flow_name: "鹿厚連$生年月日聴取"
+    diagram: |
+      docs/reference/bivr/samples/json/生年月日聴取_復唱あり.json を完全コピー。
+      フロー名プレフィックスのみ「鹿厚連$」に置換。構造・接続・スクリプトは一切変更不可。
+    notes: "CLAUDE.md Rule 9/11 準拠。Gen2 プロンプト 1-10/3『生年月日は復唱確認1回のみ。和暦対応』に対応する復唱あり版を使用。2桁年の元号判定は DOB Re-confirmation 内プロンプトで処理"
+
+  - flow_name: "鹿厚連$電話番号聴取"
+    diagram: |
+      docs/reference/bivr/samples/json/電話番号聴取_復唱あり.json を完全コピー。
+      フロー名プレフィックスのみ「鹿厚連$」に置換。構造・接続・スクリプトは一切変更不可。
+      termination=return: 終話チェーンはメインフロー側（END_汎用終話）に配置。
+    notes: "CLAUDE.md Rule 9/10/11 準拠。Gen2 プロンプト 1-11 の分岐1(非通知/anonymous/空白)/分岐2(携帯 090/080/070/060)/分岐3(固定/その他)と Phone Normalization + 復唱フォーマットに完全対応"
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭ブロック ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 用件確認
+
+  # --- 用件確認（Pattern A: enum 4分岐）---
+  - step: 用件確認
+    type: hearing
+    output_format: enum
+    echo_back: false
+    conditions:
+      - match: "予約"
+        next: 予約_希望コース
+      - match: "変更"
+        next: 共通_現在の予約日
+      - match: "キャンセル"
+        next: 共通_現在の予約日
+      - match: "その他お問い合わせ"
+        next: 問い合わせ_内容
+
+  # === 予約ルート ===
+  - step: 予約_希望コース
+    type: hearing
+    output_format: text
+    echo_back: false
+    next: 共通_予約希望日
+
+  # === 変更/キャンセル共通：現在の予約日 → ContextMatchRouter で分岐 ===
+  - step: 共通_現在の予約日
+    type: hearing
+    output_format: datetime
+    echo_back: true
+    next: 共通_現在の予約日_分岐
+
+  - step: 共通_現在の予約日_分岐
+    type: context_match_router
+    reference_module: "classification"
+    conditions:
+      - match: "変更"
+        next: 変更_内容確認
+      - match: "キャンセル"
+        next: キャンセル_再受診希望
+      - match: "default"
+        next: 変更_内容確認
+
+  # === 変更ルート（Pattern A: 受診内容/日程変更）===
+  - step: 変更_内容確認
+    type: hearing
+    output_format: enum
+    echo_back: false
+    conditions:
+      - match: "受診内容"
+        next: 変更_受診内容
+      - match: "日程変更"
+        next: 共通_予約希望日
+
+  - step: 変更_受診内容
+    type: hearing
+    output_format: text
+    echo_back: false
+    next: 共通_その他質問
+
+  # === キャンセルルート（Pattern A: 再受診 yes/no）===
+  - step: キャンセル_再受診希望
+    type: hearing
+    output_format: enum
+    echo_back: false
+    conditions:
+      - match: "はい"
+        next: 共通_予約希望日
+      - match: "いいえ"
+        next: 共通_その他質問
+
+  # === 問い合わせルート（RAG 不使用）===
+  - step: 問い合わせ_内容
+    type: hearing
+    output_format: text
+    echo_back: false
+    next: 問い合わせ_受付回答
+
+  - step: 問い合わせ_受付回答
+    type: hearing
+    output_format: enum
+    echo_back: false
+    conditions:
+      - match: "はい"
+        next: jump_氏名聴取
+      - match: "いいえ"
+        next: END_汎用終話
+
+  # === 合流：予約希望日 → その他質問 → 個人情報サブフロー ===
+  - step: 共通_予約希望日
+    type: hearing
+    output_format: text
+    echo_back: false
+    next: 共通_その他質問
+
+  - step: 共通_その他質問
+    type: hearing
+    output_format: text
+    echo_back: false
+    next: jump_氏名聴取
+
+  # === 個人情報サブフロー（3本連鎖）===
+  - step: jump_氏名聴取
+    type: subflow
+    flowname: "鹿厚連$氏名聴取"
+    next: jump_生年月日聴取
+
+  - step: jump_生年月日聴取
+    type: subflow
+    flowname: "鹿厚連$生年月日聴取"
+    next: jump_電話番号聴取
+
+  - step: jump_電話番号聴取
+    type: subflow
+    flowname: "鹿厚連$電話番号聴取"
+    next: END_汎用終話
+
+  # === 終話ブロック ===
+  - step: END_汎用終話
+    type: termination
+    termination_ref: "END_汎用終話"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  # --- 標準フィールド（itemDefault: true）---
+  - context_name: "classification"
+    context_name_jp: "用件"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "予約"
+      - id: "2"
+        order: "2"
+        value: "変更"
+      - id: "3"
+        order: "3"
+        value: "キャンセル"
+      - id: "4"
+        order: "4"
+        value: "その他お問い合わせ"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件区分。Gen2 function enum の空文字は Gen3 では未使用（default=その他お問い合わせで吸収）"
+
+  - context_name: "patientName"
+    context_name_jp: "受診者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "氏名聴取サブフローで聴取。Gen2 プロンプト 1-9 のカタカナ強制正規化・苗字のみ追問対応。復唱禁止（Gen2 プロンプト 2 準拠）"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "生年月日聴取サブフロー（復唱あり）で聴取。Gen2 プロンプト 1-10 の和暦対応。復唱確認1回のみ（Gen2 プロンプト 3 準拠）"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "電話番号聴取サブフローで聴取。Gen2 プロンプト 1-11 の分岐1/2/3 に対応。携帯着信時は着信番号を自動格納→復唱、固定/その他は聴取→Phone Normalization→復唱"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "聴取失敗"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=未処理（正常完了）, 2=代表案内（非通知）, 3=聴取失敗, 6=時間外。Gen2 プロンプト status enum（0/1/2）は Gen3 では 0 が禁止のため、0 相当を 3（聴取失敗）に振替。代表案内は 2 を維持"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "受電日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値。displayType/itemDefault/deletable は変更不可"
+
+  # --- 施設固有フィールド（itemDefault: false）---
+  - context_name: "course"
+    context_name_jp: "希望コース・オプション"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約ルートのみ。希望コース・オプション・検査内容をフリーテキストで格納（Gen2 プロンプト 5 準拠）"
+
+  - context_name: "reservationDate"
+    context_name_jp: "現在の予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "変更/キャンセルルートのみ。YYYY-MM-DD 00:00 形式で格納。月日のみ発話時は着信年を補完。10月以降入電で1〜9月の日付は翌年に補正（Gen2 プロンプト 5 準拠）"
+
+  - context_name: "DesiredreservationDate"
+    context_name_jp: "予約希望日"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約/変更（日程変更）/キャンセル（再受診あり）ルートで聴取。フリーテキスト（『早め』『5月上旬』等の曖昧表現も許容、日付形式で格納しない）— Gen2 プロンプト 5「予約希望日はフリーワードで言われたまま文字起こしする。日付形式で格納しない」準拠"
+
+  - context_name: "details"
+    context_name_jp: "変更内容確認"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "変更ルートのみ。『受診内容』 or 『日程変更』の二択分岐キー。OpenAI の enum 分岐で確定した値を格納"
+
+  - context_name: "Change"
+    context_name_jp: "受診内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "変更ルートで details=『受診内容』選択時のみ聴取。オプション検査や検査内容の追加・変更をフリーテキスト格納"
+
+  - context_name: "question"
+    context_name_jp: "問い合わせ"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "その他お問い合わせルートのみ。RAG 確認せず音声認識結果をそのまま格納（Gen2 プロンプト 1-3 準拠）"
+
+  - context_name: "another"
+    context_name_jp: "その他質問"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約/変更/キャンセル（再受診なし含む）ルートで聴取。『その他、病院側へお伝えしたいこと』をフリーテキスト格納"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  # --- サブフローで聴取する個人情報（リファレンス bivr 準拠のため概要のみ記載） ---
+  - order: 1
+    name: "氏名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientName"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "氏名聴取サブフロー内（復唱なし版）。Gen2 プロンプト 1-9 のカタカナ強制正規化・苗字のみの場合の追問に対応。リトライ上限→未取得のまま次へスキップ"
+
+  - order: 2
+    name: "生年月日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: true
+    save_to: "patientDateOfBirth"
+    openai_processing: "convert"
+    output_format: "datetime"
+    output_labels: []
+    notes: "生年月日聴取サブフロー内（復唱あり版）。DOB Re-confirmation が和暦/西暦変換・2桁年元号判定を処理。Gen2 プロンプト 3「復唱確認1回のみ。否定・不明瞭でも次へ」→ Gen3 では標準挙動（否定→再聴取 2回まで）に合わせる"
+
+  - order: 3
+    name: "電話番号"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 11
+    retry_count: 2
+    echo_back: true
+    save_to: "additionalPhoneNumber"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "電話番号聴取サブフロー内（復唱あり版）。Gen2 プロンプト 1-11 の分岐1/2/3対応。携帯着信時は着信番号確認、それ以外は聴取→Phone Normalization→復唱。max_dtmf_length=11"
+
+  # --- メインフロー聴取項目 ---
+  - order: 4
+    name: "用件確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "予約"
+      - "変更"
+      - "キャンセル"
+      - "その他お問い合わせ"
+    notes: >
+      音声のみ（Gen2 仕様は DTMF 未使用）。Gen2 プロンプト 5 の救済語:
+      「薬」「お薬」→予約、「人工」「変更」→変更、「印刷」「定期」「新薬」「再診」「最新」「禁忌」→診察扱い（問い合わせに寄せる）、
+      「電気」「でんき」→新規（予約）。
+      NO_RESULT 時は default として『その他お問い合わせ』扱い（Gen2 yaml の『デフォルト: 問い合わせ_内容』準拠）
+
+  - order: 5
+    name: "予約_希望コース"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "course"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: "音声のみ。予約ルートのみ。希望コース・オプション・検査内容をフリーテキストで格納。復唱禁止（Gen2 プロンプト 2 準拠）"
+
+  - order: 6
+    name: "共通_現在の予約日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: true
+    save_to: "reservationDate"
+    openai_processing: "convert"
+    output_format: "datetime"
+    output_labels: []
+    notes: >
+      音声のみ。変更/キャンセルルート共通。YYYY-MM-DD 00:00 形式で格納。
+      Gen2 プロンプト 5 の年補完ロジック:
+      (1) 月日のみ発話→着信年を付与, (2) 10月以降入電で1〜9月の日付→翌年に補正。
+      echo_back=true（Gen2 プロンプト 3 准拠。「現在の予約日は、○○でよろしいですか。」）。
+      Gen3 標準の否定→再聴取挙動を採用（Gen2 の「否定でも次へ」より精度優先）
+
+  - order: 7
+    name: "変更_内容確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "details"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "受診内容"
+      - "日程変更"
+    notes: "音声のみ。変更ルートのみ。Gen2 プロンプト 5 の救済語: 『シンナイヨウ』→受診内容、『人工』『変更』→変更系。NO_RESULT 時は default として『日程変更』扱い（Gen2 yaml 準拠）"
+
+  - order: 8
+    name: "変更_受診内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "Change"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: "音声のみ。変更ルートで details=『受診内容』選択時のみ聴取。オプション検査や検査内容の追加・変更をフリーテキスト格納。復唱禁止"
+
+  - order: 9
+    name: "キャンセル_再受診希望"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "another"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: >
+      音声のみ。キャンセルルートのみ。Gen2 プロンプト 5 の救済語:
+      肯定=「肺」「いいです」/ 否定=「が今」「PHVます」。
+      NO_RESULT 時は default として『いいえ』扱い（Gen2 yaml『デフォルト: 共通_その他質問』準拠）。
+      save_to=another は本来『その他質問』用フィールドだが、Gen2 yaml にはキャンセル_再受診希望の保存先指定なし。Gen3 では contextName 必須のため another を借用（Dr.JOY 側には再受診意思として現れる）
+
+  - order: 10
+    name: "問い合わせ_内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "question"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: "音声のみ。その他お問い合わせルートのみ。Gen2 プロンプト 1-3『RAG 確認禁止・外部検索禁止・入力内容は加工せずそのまま格納』に準拠。復唱禁止"
+
+  - order: 11
+    name: "問い合わせ_受付回答"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "another"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: >
+      音声のみ。その他お問い合わせルートのみ。Gen2 プロンプト 5 の救済語:
+      肯定=「肺」「いいです」/ 否定=「が今」「PHVます」。
+      NO_RESULT 時は default として『いいえ』扱い（Gen2 yaml『デフォルト: END_汎用終話』準拠）。
+      save_to=another は回答要不要の判定結果を一時的に記録（Dr.JOY 側では参考値）
+
+  - order: 12
+    name: "共通_予約希望日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "DesiredreservationDate"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: >
+      音声のみ。予約/変更（日程変更）/キャンセル（再受診あり）ルートで聴取。
+      Gen2 プロンプト 5「予約希望日はフリーワードで言われたまま文字起こしする。日付形式で格納しない」に従い text フォーマット。
+      「早め」「5月上旬」等の曖昧表現も許容
+
+  - order: 13
+    name: "共通_その他質問"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "another"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: "音声のみ。予約/変更/キャンセル（再受診なし・あり両方）ルート共通。『その他、病院側へお伝えしたいこと』をフリーテキスト格納。リトライ失敗時はスキップ（空欄で次へ）"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  # === 個人情報（サブフロー — 静的JSONコピーのため詳細省略）===
+  # 氏名聴取: docs/reference/bivr/samples/json/氏名聴取.json 完全コピー
+  # 生年月日聴取: docs/reference/bivr/samples/json/生年月日聴取_復唱あり.json 完全コピー
+  # 電話番号聴取: docs/reference/bivr/samples/json/電話番号聴取_復唱あり.json 完全コピー
+
+  # === メインフロー ===
+  - step_name: "用件確認"
+    tts_announcement: "ご用件を、次の4つのうちの、いずれかでお話ください。1、「健康診断・人間ドックの予約」、、2、「予約の変更」、、3、「予約のキャンセル」、、4、「その他お問い合わせ」。それでは、お話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "予約"
+        - "変更"
+        - "キャンセル"
+        - "その他お問い合わせ"
+        - "NO_RESULT"
+      mapping:
+        - input: "「1」「予約」「健康診断」「人間ドック」「ドック」「健診」「検診」、または Gen2 救済語「薬」「お薬」「電気」「でんき」を含む"
+          output: "予約"
+        - input: "「2」「変更」「予約変更」「変えたい」、または Gen2 救済語「人工」を含む"
+          output: "変更"
+        - input: "「3」「キャンセル」「取り消し」「やめたい」を含む"
+          output: "キャンセル"
+        - input: "「4」「問い合わせ」「問合せ」「質問」「確認」、または Gen2 診察関連救済語「印刷」「定期」「新薬」「再診」「最新」「禁忌」を含む"
+          output: "その他お問い合わせ"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT（default=その他お問い合わせルートへ。Gen2 yaml 準拠）"
+      no_result_condition: "上記いずれにも該当しない（default 経路に進む）"
+    save_to: "classification"
+    next_step: "予約→予約_希望コース / 変更→共通_現在の予約日 / キャンセル→共通_現在の予約日 / その他お問い合わせ→問い合わせ_内容"
+    retry_failure: "end_failure"
+
+  - step_name: "予約_希望コース"
+    tts_announcement: "それでは、ご希望のコース、オプション、検査内容などをお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "希望コース・オプション・検査内容を含む音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "course"
+    next_step: "共通_予約希望日"
+    retry_failure: "skip"
+
+  - step_name: "共通_現在の予約日"
+    tts_announcement: "現在の予約日を、5月1日、のように日付でお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "YYYY-MM-DD 00:00 形式の日付"
+        - "NO_RESULT"
+      mapping:
+        - input: "「5月1日」「5月の10日」等の月日表現"
+          output: "入電年 + 月日 を YYYY-MM-DD 00:00 に変換（Gen2 プロンプト 5: 月日のみ発話は着信年を付与）"
+        - input: "10月以降入電で 1〜9月の日付を発話"
+          output: "翌年 + 月日 を YYYY-MM-DD 00:00 に変換（Gen2 プロンプト 5: 10月以降入電で1〜9月の日付は翌年）"
+        - input: "「今日」「明日」「明後日」等の相対表現"
+          output: "着信日時から自動換算した YYYY-MM-DD 00:00"
+        - input: "日付として認識できない / 音声認識結果が空"
+          output: "NO_RESULT"
+      no_result_condition: "日付として認識できない"
+    save_to: "reservationDate"
+    next_step: "共通_現在の予約日_分岐（ContextMatchRouter on classification）"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "変更_内容確認"
+    tts_announcement: "変更される内容を、次の2つのうちの、いずれかでお話ください。「受診内容」「日程変更」、それでは、お話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "受診内容"
+        - "日程変更"
+        - "NO_RESULT"
+      mapping:
+        - input: "「受診内容」「受診」「検査内容」、または Gen2 救済語「シンナイヨウ」を含む"
+          output: "受診内容"
+        - input: "「日程変更」「日程」「日付」「日にち」「予約日」「時間」、または Gen2 救済語「人工」「変更」を含む"
+          output: "日程変更"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT（default=日程変更ルートへ。Gen2 yaml 準拠）"
+      no_result_condition: "上記いずれにも該当しない（default 経路に進む）"
+    save_to: "details"
+    next_step: "受診内容→変更_受診内容 / 日程変更→共通_予約希望日"
+    retry_failure: "skip"
+
+  - step_name: "変更_受診内容"
+    tts_announcement: "オプション検査や検査内容の追加や変更等、希望されている内容をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "オプション検査・検査内容の追加/変更を含む音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "Change"
+    next_step: "共通_その他質問"
+    retry_failure: "skip"
+
+  - step_name: "キャンセル_再受診希望"
+    tts_announcement: "再受診の希望はありますか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+        - "NO_RESULT"
+      mapping:
+        - input: "「はい」「あります」「希望します」「お願いします」等の肯定表現、または Gen2 救済語「肺」「いいです」"
+          output: "はい"
+        - input: "「いいえ」「ありません」「ない」等の否定表現、または Gen2 救済語「が今」「PHVます」"
+          output: "いいえ"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT（default=いいえルートへ。Gen2 yaml 準拠）"
+      no_result_condition: "上記いずれにも該当しない（default 経路に進む）"
+    save_to: "another"
+    next_step: "はい→共通_予約希望日 / いいえ→共通_その他質問"
+    retry_failure: "skip"
+
+  - step_name: "問い合わせ_内容"
+    tts_announcement: "お問い合わせの内容をお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "問い合わせ内容を含む音声認識結果"
+          output: "フリーテキスト（加工せず、RAG 検索せず、そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "question"
+    next_step: "問い合わせ_受付回答"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "問い合わせ_受付回答"
+    tts_announcement: "かしこまりました。お問い合わせ内容に折り返し電話は必要ですか。必要がなければこのままお電話をお切りください。必要でしたら、このまま受診される方の情報をお伺いいたします。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+        - "NO_RESULT"
+      mapping:
+        - input: "「はい」「必要」「お願いします」等の肯定表現、または Gen2 救済語「肺」「いいです」"
+          output: "はい"
+        - input: "「いいえ」「不要」「必要ない」「結構」等の否定表現、または Gen2 救済語「が今」「PHVます」"
+          output: "いいえ"
+        - input: "上記いずれにも該当しない"
+          output: "NO_RESULT（default=いいえルート=END_汎用終話へ。Gen2 yaml 準拠）"
+      no_result_condition: "上記いずれにも該当しない（default 経路に進む）"
+    save_to: "another"
+    next_step: "はい→jump_氏名聴取 / いいえ→END_汎用終話"
+    retry_failure: "skip"
+
+  - step_name: "共通_予約希望日"
+    tts_announcement: "では次に、受診希望されている時期をお話ください。「早め」や「5月上旬」「5月1日」のようにお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "日付・時期・期間等の音声認識結果"
+          output: "フリーテキスト（そのまま保存、日付形式には変換しない）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "DesiredreservationDate"
+    next_step: "共通_その他質問"
+    retry_failure: "skip"
+
+  - step_name: "共通_その他質問"
+    tts_announcement: "その他、病院側へお伝えしたいことはありますか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "伝えたい内容を含む音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+        - input: "「ない」「なし」「ありません」「特にない」等の否定表現"
+          output: "空欄（ブランク保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "another"
+    next_step: "jump_氏名聴取"
+    retry_failure: "skip"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須 — 削除禁止）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系 ---
+  - name: "END_汎用終話"
+    condition: "全ルート正常完了（予約/変更/キャンセル/問い合わせ-回答要 + 個人情報聴取完了、および 問い合わせ-回答不要）"
+    tts_announcement: "かしこまりました。健診の予約、予約の変更、キャンセル、お問い合わせ、を受付いたしました。3営業日以内に、担当者から折り返し電話、もしくは、SMSにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_汎用終話"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+  notes: >
+    Gen2 プロンプト「status が 1 の場合は smsFlag=1、代表電話番号案内は smsFlag=2、それ以外は smsFlag=0」を
+    Gen3 に合わせて簡素化:
+    END_汎用終話（全ルート正常完了）→ status=1, smsFlag=1。
+    代表案内系（非通知/時間外/聴取失敗）→ status=2/6/3, smsFlag=-1（SMS 送信なし）。
+    Gen3 では smsFlag=0/2 は未使用（全て smsFlag=-1 に寄せる）。
+    分岐不要のため ContextMatchRouter/Script による動的ルーティングは無効。
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+  notes: >
+    Gen2 プロンプト 1-3「問い合わせ項目では FAQ/RAG 確認を行ってはならない。外部検索を行ってはならない。
+    入力内容は加工せず、そのまま格納する」に厳密に従い、RAG サブフローは配置しない。
+    問い合わせルートは「問い合わせ_内容(TTS+STT) → 問い合わせ_受付回答(はい/いいえ) → 個人情報 or END」の単純直列構造。
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  # --- 冒頭・異常系 ---
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。鹿児島厚生連病院、健康管理センターの、AI電話です。"
+
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知案内"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "時間外_アナウンス"
+    purpose: "時間外案内（Gen2 プロンプト未記載のため Gen3 デフォルト文言を使用）"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  # --- 用件確認 ---
+  - module_name: "用件確認"
+    purpose: "用件4択の選択案内"
+    announcement: "ご用件を、次の4つのうちの、いずれかでお話ください。1、「健康診断・人間ドックの予約」、、2、「予約の変更」、、3、「予約のキャンセル」、、4、「その他お問い合わせ」。それでは、お話ください。"
+
+  # --- 予約ルート ---
+  - module_name: "予約_希望コース"
+    purpose: "希望コース・オプション聴取（予約ルート）"
+    announcement: "それでは、ご希望のコース、オプション、検査内容などをお話ください。"
+
+  # --- 変更/キャンセル共通：現在の予約日 ---
+  - module_name: "共通_現在の予約日"
+    purpose: "現在の予約日聴取（変更/キャンセルルート共通）"
+    announcement: "現在の予約日を、5月1日、のように日付でお話ください。"
+
+  # --- 変更ルート ---
+  - module_name: "変更_内容確認"
+    purpose: "変更内容の二択分岐"
+    announcement: "変更される内容を、次の2つのうちの、いずれかでお話ください。「受診内容」「日程変更」、それでは、お話ください。"
+
+  - module_name: "変更_受診内容"
+    purpose: "受診内容の変更内容聴取"
+    announcement: "オプション検査や検査内容の追加や変更等、希望されている内容をお話ください。"
+
+  # --- キャンセルルート ---
+  - module_name: "キャンセル_再受診希望"
+    purpose: "再受診希望確認（キャンセルルート）"
+    announcement: "再受診の希望はありますか？"
+
+  # --- 問い合わせルート ---
+  - module_name: "問い合わせ_内容"
+    purpose: "問い合わせ内容聴取（RAG 不使用）"
+    announcement: "お問い合わせの内容をお話ください。"
+
+  - module_name: "問い合わせ_受付回答"
+    purpose: "回答要不要確認（問い合わせルート）"
+    announcement: "かしこまりました。お問い合わせ内容に折り返し電話は必要ですか。必要がなければこのままお電話をお切りください。必要でしたら、このまま受診される方の情報をお伺いいたします。"
+
+  # --- 合流 ---
+  - module_name: "共通_予約希望日"
+    purpose: "予約希望日聴取（予約/変更-日程変更/キャンセル-再受診あり共通）"
+    announcement: "では次に、受診希望されている時期をお話ください。「早め」や「5月上旬」「5月1日」のようにお話しください。"
+
+  - module_name: "共通_その他質問"
+    purpose: "その他質問聴取（全ルート共通）"
+    announcement: "その他、病院側へお伝えしたいことはありますか？"
+
+  # --- 終話 ---
+  - module_name: "終話_汎用"
+    purpose: "全ルート正常完了時の終話（END_汎用終話）"
+    announcement: "かしこまりました。健診の予約、予約の変更、キャンセル、お問い合わせ、を受付いたしました。3営業日以内に、担当者から折り返し電話、もしくは、SMSにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "終話_聴取失敗"
+    purpose: "リトライ上限到達時の終話"
+    announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+# Gen2 プロンプト 5 の救済語を profile_words として登録し、AmiVoice STT の認識精度を向上させる。
+amivoice_dictionary:
+  - step_name: "用件確認"
+    words: |
+      予約 よやく
+      変更 へんこう
+      キャンセル きゃんせる
+      問い合わせ といあわせ
+      問合せ といあわせ
+      健診 けんしん
+      検診 けんしん
+      人間ドック にんげんどっく
+      ドック どっく
+      健康診断 けんこうしんだん
+      取り消し とりけし
+      薬 くすり
+      お薬 おくすり
+      電気 でんき
+      でんき でんき
+      人工 じんこう
+      印刷 いんさつ
+      定期 ていき
+      新薬 しんやく
+      再診 さいしん
+      最新 さいしん
+      禁忌 きんき
+
+  - step_name: "共通_現在の予約日"
+    words: |
+      予約日 よやくび
+      日程 にってい
+      日にち ひにち
+      月 がつ
+      日 にち
+      今日 きょう
+      明日 あした
+      明後日 あさって
+
+  - step_name: "変更_内容確認"
+    words: |
+      受診内容 じゅしんないよう
+      シンナイヨウ しんないよう
+      日程変更 にっていへんこう
+      日程 にってい
+      日付 ひづけ
+      日時 にちじ
+      時間 じかん
+      予約日 よやくび
+      人工 じんこう
+      変更 へんこう
+
+  - step_name: "変更_受診内容"
+    words: |
+      オプション おぷしょん
+      検査 けんさ
+      追加 ついか
+      変更 へんこう
+
+  - step_name: "キャンセル_再受診希望"
+    words: |
+      はい はい
+      いいえ いいえ
+      あります あります
+      ありません ありません
+      希望 きぼう
+      肺 はい
+      いいです いいです
+      が今 がいま
+      PHVます ぴーえっちぶいます
+
+  - step_name: "問い合わせ_受付回答"
+    words: |
+      はい はい
+      いいえ いいえ
+      必要 ひつよう
+      不要 ふよう
+      結構 けっこう
+      肺 はい
+      いいです いいです
+      が今 がいま
+      PHVます ぴーえっちぶいます
+
+  - step_name: "共通_予約希望日"
+    words: |
+      早め はやめ
+      上旬 じょうじゅん
+      中旬 ちゅうじゅん
+      下旬 げじゅん
+      来月 らいげつ
+      再来月 さらいげつ
+      月 がつ
+      日 にち
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "Gen2→Gen3 移管。元資料 docs/reference/customer_docs/鹿児島厚生連病院_健診.md（766行重厚版の軽量化付箋版）の yaml/function/プロンプト を全量読み込み、第3世代 scenario_flow 構造に機械変換済み"
+  - "Gen2 function プロパティ 19 種のうち、Gen3 で使用するもの: classification / patientName / course / Change / details / question / another / clinicalDepartment 相当なし / reservationDate / DesiredreservationDate / patientDateOfBirth / additionalPhoneNumber / status + 自動格納系(telephoneNumber / dateOfCall / callId)。Gen2 の medicalCardNumber / clinicalDepartment / clinicalDepartment2 / reservationDate2 / reason / endpoint / smsFlag は Gen3 では saveContextModel2DB に含めない（診察券・診療科はフロー上聴取ステップなし。reason は未使用。endpoint/smsFlag は saveCompletionFlag2db パラメータとして扱う）"
+  - "個人情報聴取はサブフロー分割型。氏名（復唱なし）・生年月日（復唱あり）・電話番号（復唱あり）の3本をそれぞれ独立サブフローとして呼び出し。診察券番号サブフローは不要（Gen2 yaml に聴取ステップなし）— CLAUDE.md Rule 9/11 準拠"
+  - "電話番号聴取サブフローは incoming-classifier 3分岐（携帯 090/080/070/060 / 固定 / その他・非通知）付きの復唱あり版を完全コピー。Gen2 プロンプト 1-11 の分岐1/2/3ロジック＋Phone Normalization＋復唱フォーマットを包含"
+  - "RAGサブフローは使用しない（Gen2 プロンプト 1-3『問い合わせ項目では FAQ/RAG 確認禁止・外部検索禁止・入力内容は加工せず格納』に厳密準拠）"
+  - "status enum: 1=未処理 / 2=代表案内 / 3=聴取失敗 / 6=時間外。Gen2 の status=0（冒頭切断/途中切断）は Gen3 で使用禁止のため、冒頭切断相当は status=2、途中切断/聴取失敗は status=3 に振替"
+  - "smsFlag: END_汎用終話=1（SMS 送信あり）/ 非通知・時間外・聴取失敗=-1（SMS 送信なし）。Gen2 の smsFlag=0/2 は Gen3 では未使用（全て -1 に寄せる）"
+  - "用件分岐の default（NO_RESULT 時）は『その他お問い合わせ』ルートに振る（Gen2 yaml『デフォルト: 問い合わせ_内容』準拠）"
+  - "変更_内容確認の default は『日程変更』（Gen2 yaml『デフォルト: 共通_予約希望日』準拠）"
+  - "キャンセル_再受診希望の default は『いいえ』（Gen2 yaml『デフォルト: 共通_その他質問』準拠）"
+  - "問い合わせ_受付回答の default は『いいえ』（Gen2 yaml『デフォルト: END_汎用終話』準拠）"
+  - "Gen2 プロンプト 5 の救済語（肯定=『肺』『いいです』/否定=『が今』『PHVます』/診察=『印刷』『定期』『新薬』『再診』『最新』『禁忌』/予約=『薬』『お薬』/新規=『電気』『でんき』/変更=『人工』『変更』/幼児=『雇用時』『幼児』/受診内容=『シンナイヨウ』）は各 hearing ブロックの OpenAI プロンプトに埋め込む（prompter が設計書の openai_rules.mapping を読んで反映）。また AmiVoice STT 認識精度向上のため profile_words にも登録"
+  - "Gen2 プロンプト 5 の予約日年補完ロジック（月日のみ発話→着信年を付与、10月以降入電で1〜9月の日付→翌年に補正、今日/明日/明後日→着信日時から自動換算、過去日は今日より未来かどうか確認し未来のみ受付）は『共通_現在の予約日』の OpenAI プロンプトに埋め込む"
+  - "Gen2 プロンプト 1-9 の氏名カタカナ強制正規化・苗字のみ追問・AI による内部カタカナ変換（ユーザーに『カタカナで』と指示禁止）は氏名聴取サブフローの OpenAI プロンプトに埋め込み（サブフロー側で対応）"
+  - "Gen2 プロンプト 1-10 の生年月日和暦対応は DOB Re-confirmation モジュール内のプロンプトで処理（サブフロー側で対応）"
+  - "Gen2 プロンプト 1-3 の固定文『ご質問いただいた内容はAI電話ではご対応できませんので、折り返しでご確認させていただきます。』は Gen3 では実装しない（prompter がプロンプトを書く時点でスコープ外質問時の挙動はリトライに委ねる）。ただし『問い合わせ』ヒアリング項目では本固定文を出力してはならない点は『問い合わせ_内容』ブロックの OpenAI プロンプトで明示"
+  - "Gen2 プロンプト 3 の復唱ポリシー（受診者名以外について『○○ですね』復唱）は Gen3 では『共通_現在の予約日』のみ echo_back=true で実装。生年月日・連絡先電話番号は専用 Re-confirmation モジュールで処理。それ以外の業務項目（希望コース・変更内容・問い合わせ内容等）の復唱はフロー速度優先で実装しない"
+  - "Gen2 プロンプト 3『復唱が否定でも再確認せず次へ進む』仕様は Gen3 標準挙動（否定→再聴取 2回まで、失敗時スキップ）で上書き（精度優先）"
+  - "SSML タグ（<speak>, <break>, <speak type=telephone> 等）は Gen3 TTS プロンプトに埋め込まない。電話番号の復唱は Re-confirmation モジュールが処理、break time は TTS 側で制御"
+  - "既存の診療フロー（鹿厚連$診療）と同一施設・同一 group_name=『鹿厚連』を使用（Brekeke 管理上の同一グループ運用のため）"
+  - "営業時間（business_hours）は Gen2 プロンプトに記載がないため TODO_要確認。acceptance_times は配置のみ指示し、詳細スケジュールは Dr.JOY 管理画面で設定"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+# 詳細は確認レポート（docs/designs/確認レポート_鹿児島厚生連病院_健診_20260423.md）を参照。
+confirmation_items:
+  - item: "[N-1] office_id（Dr.JOY Admin 画面で確認）"
+    status: "NON-BLOCKER"
+    resolved: false
+    notes: "Dr.JOY Admin 画面から取得。設計書・フローJSONには不要（NON-BLOCKER ガイドライン準拠）"
+  - item: "[N-2] IVR 着信電話番号（本番 050 番号）"
+    status: "NON-BLOCKER"
+    resolved: false
+    notes: "既存の診療フローと同一施設だが、健診は別の 050 番号の可能性あり。Brekeke IVR 設定時に人間が確認・設定"
+  - item: "[N-3] 営業時間スケジュール（曜日・時間帯）"
+    status: "NON-BLOCKER"
+    resolved: false
+    notes: "Gen2 プロンプトに営業時間記載なし。acceptance_times 配置ありで仮設定。詳細は Dr.JOY 管理画面で設定"
+  - item: "[N-4] 時間外アナウンス文言（Gen3 デフォルトで仮設定）"
+    status: "NON-BLOCKER"
+    resolved: false
+    notes: "Gen2 プロンプトに記載なし。Gen3 テンプレートデフォルト文言を採用。施設固有文言があれば差し替え"
+  - item: "[N-5] 非通知アナウンス文言（Gen3 デフォルトで仮設定）"
+    status: "NON-BLOCKER"
+    resolved: false
+    notes: "Gen2 プロンプトに記載なし。Gen3 テンプレートデフォルト文言を採用"
+  - item: "[N-6] SMS 送信文面（END_汎用終話 用、Dr.JOY 側で設定）"
+    status: "NON-BLOCKER"
+    resolved: false
+    notes: "フローJSON 側は saveCompletionFlag2db の smsFlag=1 のみ設定。SMS 本文は Dr.JOY 管理画面で設定"
+  - item: "[N-7] Gen2『否定でも次へ進む』復唱仕様を Gen3 標準『否定→再聴取』に変更することの許容確認"
+    status: "NON-BLOCKER"
+    resolved: false
+    notes: "共通_現在の予約日 の echo_back=true で Gen3 標準の否定→再聴取挙動を採用。Gen2 の『否定でも次へ』はフロー速度優先の仕様だが、Gen3 では精度優先で上書き"
+  - item: "[N-8] Gen2 smsFlag=0/2 を Gen3 で -1 に寄せる判断の確認"
+    status: "NON-BLOCKER"
+    resolved: false
+    notes: "Gen2 の smsFlag 値は 0/1/2 だが、Gen3 では smsFlag=-1（SMS 送信なし）/ 1（送信あり）の2値に簡素化。Dr.JOY 側 SMS テンプレート運用と整合するか確認推奨"
+  - item: "[N-9] キャンセル_再受診希望 と 問い合わせ_受付回答 の save_to=another の妥当性確認"
+    status: "NON-BLOCKER"
+    resolved: false
+    notes: "Gen2 yaml にはこの2箱の保存先指定がない。Gen3 では hearing の contextName 必須のため another（その他質問）フィールドを借用。再受診意思・回答要不要が another として Dr.JOY 側に現れる点の許容確認"
+  - item: "[N-10] 診察券番号サブフローの不要性確認"
+    status: "NON-BLOCKER"
+    resolved: false
+    notes: "Gen2 yaml には診察券番号聴取ステップなし（medicalCardNumber フィールドは function にあるが yaml フロー上は未使用）。Gen3 でもサブフロー登録しない方針"

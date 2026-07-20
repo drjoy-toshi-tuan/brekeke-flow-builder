@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>シナリオ仕様書 — 蘇生会総合病院</title>
+<style>
+  :root {
+    --primary: #2563eb; --primary-light: #eff6ff;
+    --success: #16a34a; --success-light: #f0fdf4;
+    --warning: #d97706; --warning-light: #fffbeb;
+    --danger: #dc2626; --danger-light: #fef2f2;
+    --gray-50: #f9fafb; --gray-100: #f3f4f6; --gray-200: #e5e7eb;
+    --gray-300: #d1d5db; --gray-500: #6b7280; --gray-700: #374151; --gray-900: #111827;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI','Hiragino Sans','Yu Gothic UI',sans-serif; background: var(--gray-50); color: var(--gray-900); line-height: 1.7; }
+  .header { background: linear-gradient(135deg, #1e40af, #3b82f6); color: white; padding: 2.5rem 2rem; text-align: center; }
+  .header h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 0.5rem; }
+  .header .meta { opacity: 0.85; font-size: 0.9rem; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+  /* 読み物セクション（テキスト主体）は読みやすさ優先で中幅に絞る */
+  .readable { max-width: 900px; margin-left: auto; margin-right: auto; }
+  .overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+  .overview-card { background: white; border-radius: 12px; padding: 1.2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); text-align: center; }
+  .overview-card .num { font-size: 2rem; font-weight: 700; color: var(--primary); }
+  .overview-card .label { font-size: 0.85rem; color: var(--gray-500); margin-top: 0.2rem; }
+  .flow-overview { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin: 1.5rem 0; }
+  .flow-chain { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.3rem; padding: 1rem 0; }
+  .flow-node { background: var(--primary-light); border: 2px solid var(--primary); border-radius: 8px; padding: 0.5rem 1rem; font-size: 0.85rem; font-weight: 600; color: var(--primary); white-space: nowrap; }
+  .flow-node.start { background: var(--success-light); border-color: var(--success); color: var(--success); }
+  .flow-node.end { background: var(--danger-light); border-color: var(--danger); color: var(--danger); }
+  .flow-node.branch { background: var(--warning-light); border-color: var(--warning); color: var(--warning); }
+  .flow-arrow { font-size: 1.2rem; color: var(--gray-300); }
+  .section { margin: 1.5rem 0; }
+  .section-title { font-size: 1.3rem; font-weight: 700; color: var(--gray-900); padding-bottom: 0.5rem; border-bottom: 2px solid var(--primary); margin-bottom: 1rem; }
+  .block { background: white; border-radius: 12px; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); overflow: hidden; }
+  .block-header { background: var(--gray-100); padding: 0.8rem 1.2rem; cursor: pointer; display: flex; align-items: center; gap: 0.8rem; user-select: none; transition: background 0.2s; }
+  .block-header:hover { background: var(--gray-200); }
+  .block-header .icon { font-size: 1.3rem; }
+  .block-header .title { font-weight: 600; flex: 1; }
+  .block-header .badge { font-size: 0.75rem; padding: 0.15rem 0.6rem; border-radius: 999px; font-weight: 600; }
+  .badge-blue { background: var(--primary-light); color: var(--primary); }
+  .badge-green { background: var(--success-light); color: var(--success); }
+  .badge-orange { background: var(--warning-light); color: var(--warning); }
+  .badge-red { background: var(--danger-light); color: var(--danger); }
+  .badge-purple { background: #f3e8ff; color: #7c3aed; }
+  .badge-gray { background: var(--gray-100); color: var(--gray-500); }
+  .block-header .chevron { transition: transform 0.3s; font-size: 0.8rem; color: var(--gray-500); }
+  .block.open .block-header .chevron { transform: rotate(90deg); }
+  .block-body { display: none; padding: 1.2rem; }
+  .block.open .block-body { display: block; }
+  .speech { background: var(--primary-light); border-left: 4px solid var(--primary); border-radius: 0 8px 8px 0; padding: 0.8rem 1rem; margin: 0.5rem 0 0.5rem 2rem; font-size: 0.9rem; position: relative; }
+  .speech::before { content: '\1F50A'; position: absolute; left: -2rem; top: 0.7rem; font-size: 1rem; }
+  .speech .label { font-size: 0.75rem; color: var(--gray-500); font-weight: 600; margin-bottom: 0.3rem; }
+  .branch-table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; font-size: 0.9rem; }
+  .branch-table th { background: var(--gray-100); padding: 0.5rem 0.8rem; text-align: left; font-weight: 600; font-size: 0.8rem; color: var(--gray-500); }
+  .branch-table td { padding: 0.5rem 0.8rem; border-bottom: 1px solid var(--gray-200); }
+  .steps { list-style: none; padding: 0; }
+  .steps li { padding: 0.6rem 0 0.6rem 2.5rem; position: relative; border-left: 2px solid var(--gray-200); margin-left: 0.8rem; }
+  .steps li::before { content: attr(data-num); position: absolute; left: -0.85rem; top: 0.5rem; width: 1.5rem; height: 1.5rem; border-radius: 50%; background: var(--primary); color: white; font-size: 0.75rem; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+  .steps li:last-child { border-left-color: transparent; }
+  .step-title { font-weight: 600; }
+  .step-desc { font-size: 0.85rem; color: var(--gray-500); margin-top: 0.2rem; }
+  .info-box { background: var(--warning-light); border-left: 4px solid var(--warning); padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-size: 0.85rem; }
+  .error-box { background: var(--danger-light); border-left: 4px solid var(--danger); padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.5rem 0; font-size: 0.85rem; }
+  .collect-table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; }
+  .collect-table th { background: var(--gray-100); padding: 0.6rem 1rem; text-align: left; font-size: 0.85rem; }
+  .collect-table td { padding: 0.6rem 1rem; border-bottom: 1px solid var(--gray-200); font-size: 0.9rem; }
+  .footer { text-align: center; color: var(--gray-500); font-size: 0.8rem; padding: 2rem 0; }
+  /* 縦型ツリー図 */
+  /* ツリーは複雑になりがち。コンテナ幅を超えてビューポートの広さを使えるよう breakout させる */
+  .tree-section {
+    background: white; border-radius: 12px; padding: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin: 1.5rem 0;
+    /* ビューポート幅までブレイクアウト（左右1rem の余白を残す） */
+    width: calc(100vw - 2rem);
+    max-width: 1600px;
+    position: relative;
+    left: 50%;
+    transform: translateX(-50%);
+    overflow-x: auto;
+  }
+  .vtree { display: flex; flex-direction: column; align-items: center; gap: 0; }
+  .vtree-node { background: var(--primary-light); border: 2px solid var(--primary); border-radius: 8px; padding: 0.35rem 0.9rem; font-size: 0.8rem; font-weight: 600; color: var(--primary); white-space: nowrap; text-align: center; min-width: 88px; }
+  .vtree-node.t-opening { background: var(--success-light); border-color: var(--success); color: var(--success); }
+  .vtree-node.t-announcement { background: #e0f2fe; border-color: #0284c7; color: #0284c7; }
+  .vtree-node.t-hearing { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
+  .vtree-node.t-subflow { background: #f3e8ff; border-color: #7c3aed; color: #7c3aed; }
+  .vtree-node.t-context_match_router, .vtree-node.t-script, .vtree-node.t-date_of_call_classifier { background: var(--warning-light); border-color: var(--warning); color: var(--warning); }
+  .vtree-node.t-call_transfer { background: #fce7f3; border-color: #db2777; color: #db2777; }
+  .vtree-node.t-termination { background: var(--danger-light); border-color: var(--danger); color: var(--danger); }
+  .vtree-arrow { color: var(--gray-300); font-size: 0.9rem; line-height: 1; text-align: center; padding: 2px 0; }
+  /* 分岐が多い場合は折り返して縦スクロールに切り替える（横スクロール回避） */
+  .vtree-branches { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; gap: 0.8rem; row-gap: 1rem; margin: 0.3rem 0; }
+  .vtree-branch { display: flex; flex-direction: column; align-items: center; gap: 0; border: 1px solid var(--gray-200); border-radius: 10px; padding: 0.5rem 0.6rem; background: var(--gray-50); min-width: 0; }
+  .vtree-branch-label { font-size: 0.7rem; font-weight: 700; color: var(--gray-500); background: white; border-radius: 4px; padding: 0.1rem 0.5rem; margin-bottom: 0.2rem; border: 1px solid var(--gray-200); }
+  .vtree-merge { text-align: center; font-size: 0.75rem; color: var(--gray-500); padding: 0.2rem 0; font-weight: 600; }
+  /* 要件別分岐（横並び折りたたみ） */
+  .vtree-branches.collapsible { gap: 0.6rem; row-gap: 0.8rem; align-items: flex-start; }
+  details.vtree-branch { padding: 0; border: 1px solid var(--gray-200); border-radius: 10px; background: var(--gray-50); overflow: hidden; flex: 0 1 auto; max-width: 100%; }
+  details.vtree-branch[open] { flex-basis: 280px; }
+  details.vtree-branch > summary { list-style: none; cursor: pointer; padding: 0.55rem 0.9rem; background: white; display: flex; align-items: center; gap: 0.45rem; font-weight: 700; font-size: 0.85rem; color: var(--gray-700); user-select: none; transition: background 0.15s; }
+  details.vtree-branch > summary:hover { background: var(--gray-100); }
+  details.vtree-branch > summary::-webkit-details-marker { display: none; }
+  details.vtree-branch > summary::before { content: '\25B6'; font-size: 0.65rem; color: var(--gray-500); transition: transform 0.25s; display: inline-block; }
+  details.vtree-branch[open] > summary::before { transform: rotate(90deg); }
+  details.vtree-branch > summary .req-badge { font-size: 0.72rem; background: var(--primary-light); color: var(--primary); padding: 0.1rem 0.5rem; border-radius: 999px; font-weight: 700; }
+  details.vtree-branch > .vtree-branch-body { padding: 0.8rem; display: flex; flex-direction: column; align-items: center; gap: 0; border-top: 1px solid var(--gray-200); background: var(--gray-50); }
+  /* 共通トランクに畳んだ分岐（vtree-branch-merged）はラベルのみ小さく表示 */
+  .vtree-branch-merged { display: inline-flex; flex-wrap: wrap; gap: 0.3rem; justify-content: center; margin: 0.2rem 0; }
+  .vtree-branch-merged .req-badge { font-size: 0.7rem; background: var(--gray-100); color: var(--gray-700); padding: 0.15rem 0.55rem; border-radius: 999px; font-weight: 600; border: 1px solid var(--gray-200); }
+  .vtree-branch-merged-note { font-size: 0.7rem; color: var(--gray-500); margin-right: 0.3rem; align-self: center; }
+  .vtree-expand-bar { display: flex; gap: 0.6rem; justify-content: flex-end; margin-bottom: 0.6rem; font-size: 0.8rem; }
+  .vtree-expand-bar button { background: white; border: 1px solid var(--gray-300); color: var(--gray-700); padding: 0.3rem 0.7rem; border-radius: 6px; cursor: pointer; font-size: 0.75rem; font-weight: 600; }
+  .vtree-expand-bar button:hover { background: var(--gray-100); }
+  /* タブレット以下: branches を縦積みに切り替えて見切れを回避 */
+  @media (max-width: 820px) {
+    .tree-section { width: calc(100vw - 1rem); padding: 1rem 0.75rem; }
+    .vtree-branches { flex-direction: column; align-items: stretch; }
+    .vtree-branch { align-items: center; }
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>シナリオ仕様書</h1>
+  <div class="meta">蘇生会総合病院 | 作成日: 2026年04月22日</div>
+</div>
+<div class="container">
+
+<div class="overview">
+  <div class="overview-card"><div class="num">30</div><div class="label">総ブロック数</div></div>
+  <div class="overview-card"><div class="num">0</div><div class="label">用件メニュー</div></div>
+  <div class="overview-card"><div class="num">4</div><div class="label">サブフロー</div></div>
+  <div class="overview-card"><div class="num">5</div><div class="label">分岐ブロック</div></div>
+  <div class="overview-card"><div class="num">7</div><div class="label">終話パターン</div></div>
+</div>
+
+<div class="tree-section">
+  <h3 style="margin-bottom:0.8rem;color:var(--gray-700);">通話の全体フロー（樹形図）</h3>
+  <div class="vtree-expand-bar"><button onclick="document.querySelectorAll('details.vtree-branch').forEach(d=>d.open=true)">全て展開</button><button onclick="document.querySelectorAll('details.vtree-branch').forEach(d=>d.open=false)">全て閉じる</button></div><div class="vtree"><div class="vtree-node t-opening">冒頭</div><div class="vtree-arrow">↓</div><div class="vtree-node t-announcement">冒頭_アナウンス</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">氏名聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">旧姓確認</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">診察券番号聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">生年月日聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-subflow">電話番号聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">診療科聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">診療科_受付可否判定</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-merged"><span class="vtree-branch-merged-note">共通:</span><span class="req-badge">救急科</span> <span class="req-badge">麻酔科</span> <span class="req-badge">三叉神経痛</span> <span class="req-badge">ロービジョン外来</span> <span class="req-badge">手術センター</span> <span class="req-badge">血液浄化センター</span> <span class="req-badge">脳血管内治療センター</span> <span class="req-badge">内視鏡センター</span> <span class="req-badge">放射線科</span></div><div class="vtree-node t-termination">END_代表電話案内_診療科対象外</div></div><div class="vtree-branch"><div class="vtree-branch-label">健康増進センター</div><div class="vtree-node t-termination">END_健康増進センター案内</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-hearing">用件聴取</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">予約</div><div class="vtree-node t-hearing">予約_受診歴確認</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">はい</div><div class="vtree-node t-script">予約_新規_分類保存</div><div class="vtree-arrow">↓</div><div class="vtree-branches collapsible"><details class="vtree-branch"><summary><span class="req-badge">default</span></summary><div class="vtree-branch-body"></div></details></div><div class="vtree-merge">↓ 合流</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約_紹介状確認</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約_症状1</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約_医師の指定</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">最後の問い合わせ_聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">最後の問い合わせ_分岐</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">キャンセル</div><div class="vtree-node t-termination">END_キャンセル</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-termination">END_汎用受付</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-merged"><span class="vtree-branch-merged-note">共通:</span><span class="req-badge">いいえ</span> <span class="req-badge">default</span></div><div class="vtree-node t-script">予約_再診_分類保存</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">default</div></div></div><div class="vtree-merge">↓ 合流</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">予約_症状2</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">最後の問い合わせ_聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">最後の問い合わせ_分岐</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">キャンセル</div><div class="vtree-node t-termination">END_キャンセル</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-termination">END_汎用受付</div></div></div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">変更</div><div class="vtree-node t-hearing">変更_予約日</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">変更_予約希望時期</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">変更_歯科判定</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">歯科</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-hearing">変更_残薬確認</div></div></div><div class="vtree-merge">↓ 合流</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">最後の問い合わせ_聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">最後の問い合わせ_分岐</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">キャンセル</div><div class="vtree-node t-termination">END_キャンセル</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-termination">END_汎用受付</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-label">キャンセル</div><div class="vtree-node t-hearing">キャンセル_予約日</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">キャンセル_理由</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">最後の問い合わせ_聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">最後の問い合わせ_分岐</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">キャンセル</div><div class="vtree-node t-termination">END_キャンセル</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-termination">END_汎用受付</div></div></div></div><div class="vtree-branch"><div class="vtree-branch-merged"><span class="vtree-branch-merged-note">共通:</span><span class="req-badge">確認</span> <span class="req-badge">default</span></div><div class="vtree-node t-hearing">確認_内容</div><div class="vtree-arrow">↓</div><div class="vtree-node t-hearing">最後の問い合わせ_聴取</div><div class="vtree-arrow">↓</div><div class="vtree-node t-context_match_router">最後の問い合わせ_分岐</div><div class="vtree-arrow">↓</div><div class="vtree-branches"><div class="vtree-branch"><div class="vtree-branch-label">キャンセル</div><div class="vtree-node t-termination">END_キャンセル</div></div><div class="vtree-branch"><div class="vtree-branch-label">default</div><div class="vtree-node t-termination">END_汎用受付</div></div></div></div></div></div></div></div>
+</div>
+
+<div style="background:white;border-radius:12px;padding:1rem 1.5rem;box-shadow:0 1px 3px rgba(0,0,0,0.08);margin:1.5rem 0;display:flex;flex-wrap:wrap;gap:1.5rem;align-items:center;">
+  <span style="font-weight:600;color:var(--gray-700);font-size:0.9rem;">処理方式の凡例:</span>
+  <span style="display:flex;align-items:center;gap:0.4rem;"><span class="badge badge-gray">音声認識のみ</span><span style="font-size:0.8rem;color:var(--gray-500);">患者の発話をそのまま記録</span></span>
+  <span style="display:flex;align-items:center;gap:0.4rem;"><span class="badge badge-purple">AI判定</span><span style="font-size:0.8rem;color:var(--gray-500);">AIが発話内容を分類・変換して分岐</span></span>
+</div>
+<div class="section">
+<div class="section-title">1. 着信～用件選択</div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F4DE;</span><span class="title">冒頭アナウンス</span><span class="badge badge-green">自動</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">AIが話す内容</div>お電話ありがとうございます。 蘇生会総合病院、診察予約専用、AI電話です。3診療日以内のお問い合わせの方や救急の方は代表電話へおかけなおしください。</div>
+<div class="info-box">&#9888;&#65039; <strong>非通知の場合</strong>: お電話ありがとうございます。蘇生会総合病院、診察予約専用、AI電話です。申し訳ございません。電話番号が非通知設定の場合、AI電話では受付できません。通知設定をし</div>
+<div class="info-box">&#x1F553; <strong>時間外の場合</strong>: お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</div>
+</div></div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F500;</span><span class="title">診療科聴取</span><span class="badge badge-orange">分岐</span><span class="badge badge-purple">AI判定</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">AIが話す内容</div>受診を希望される診療科をお話ください。分からない場合は分からないとお話ください。</div>
+<div class="error-box">&#x1F504; 聞き取れなかった場合: 最大<strong>2回</strong>再質問</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">2. 個人情報聴取（共通サブフロー）</div>
+<div class="block open"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F464;</span><span class="title">聴取する項目</span><span class="badge badge-blue">4項目</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th>順序</th><th>項目</th><th>入力方法</th></tr>
+<tr><td>1</td><td><strong>氏名聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>2</td><td><strong>生年月日聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>3</td><td><strong>電話番号聴取</strong></td><td>音声 / プッシュ</td></tr>
+<tr><td>4</td><td><strong>診察券番号聴取</strong></td><td>音声 / プッシュ</td></tr>
+</table>
+<div class="info-box">&#x1F4F1; <strong>携帯電話からの着信の場合</strong>: 電話番号は着信番号を復唱確認</div>
+<div class="error-box">&#x1F504; 各項目とも聞き取れなかった場合は最大<strong>2回</strong>再質問</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">3. ブロック構成（技術仕様）</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F9E9;</span><span class="title">全ブロック一覧（30ブロック）</span><span class="badge badge-blue">30件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th style="width:5%">#</th><th style="width:25%">ブロック名</th><th style="width:15%">タイプ</th><th style="width:25%">接続先</th><th style="width:30%">詳細</th></tr>
+<tr><td>1</td><td>&#x1F3E0; <strong>冒頭</strong></td><td><span class="badge badge-green">冒頭</span></td><td style="font-size:0.8rem">冒頭_アナウンス</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>2</td><td>&#x1F50A; <strong>冒頭_アナウンス</strong></td><td><span class="badge badge-blue">発話</span></td><td style="font-size:0.8rem">氏名聴取</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>3</td><td>&#x1F517; <strong>氏名聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">旧姓確認</td><td style="font-size:0.8rem">flow: 蘇生会総合病院$氏名聴取</td></tr>
+<tr><td>4</td><td>&#x1F3A4; <strong>旧姓確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">診察券番号聴取</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>5</td><td>&#x1F517; <strong>診察券番号聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">生年月日聴取</td><td style="font-size:0.8rem">flow: 蘇生会総合病院$診察券番号聴取</td></tr>
+<tr><td>6</td><td>&#x1F517; <strong>生年月日聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">電話番号聴取</td><td style="font-size:0.8rem">flow: 蘇生会総合病院$生年月日聴取</td></tr>
+<tr><td>7</td><td>&#x1F517; <strong>電話番号聴取</strong></td><td><span class="badge badge-purple">サブフロー</span></td><td style="font-size:0.8rem">診療科聴取</td><td style="font-size:0.8rem">flow: 蘇生会総合病院$電話番号聴取</td></tr>
+<tr><td>8</td><td>&#x1F3A4; <strong>診療科聴取</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">診療科_受付可否判定</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>9</td><td>&#x1F500; <strong>診療科_受付可否判定</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">END_代表電話案内_診療科対象外 / END_代表電話案内_診療科対象外 / END_代表電話案内_診療科対象外 / END_代表電話案内_診療科対象外 / END_代表電話案内_診療科対象外 / END_代表電話案内_診療科対象外 / END_代表電話案内_診療科対象外 / END_代表電話案内_診療科対象外 / END_代表電話案内_診療科対象外 / END_健康増進センター案内 / 用件聴取</td><td style="font-size:0.8rem">ref: clinicalDepartment</td></tr>
+<tr><td>10</td><td>&#x1F3A4; <strong>用件聴取</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">予約_受診歴確認 / 変更_予約日 / キャンセル_予約日 / 確認_内容 / 確認_内容</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>11</td><td>&#x1F3A4; <strong>予約_受診歴確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">予約_新規_分類保存 / 予約_再診_分類保存 / 予約_再診_分類保存</td><td style="font-size:0.8rem">format: enum</td></tr>
+<tr><td>12</td><td>&#x2699; <strong>予約_新規_分類保存</strong></td><td><span class="badge badge-orange">スクリプト</span></td><td style="font-size:0.8rem">予約_紹介状確認</td><td style="font-size:0.8rem">ref: OpenAI_予約_受診歴確認<br>template: custom</td></tr>
+<tr><td>13</td><td>&#x1F3A4; <strong>予約_紹介状確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">予約_症状1</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>14</td><td>&#x1F3A4; <strong>予約_症状1</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">予約_医師の指定</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>15</td><td>&#x1F3A4; <strong>予約_医師の指定</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">最後の問い合わせ_聴取</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>16</td><td>&#x2699; <strong>予約_再診_分類保存</strong></td><td><span class="badge badge-orange">スクリプト</span></td><td style="font-size:0.8rem">予約_症状2</td><td style="font-size:0.8rem">ref: OpenAI_予約_受診歴確認<br>template: custom</td></tr>
+<tr><td>17</td><td>&#x1F3A4; <strong>予約_症状2</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">最後の問い合わせ_聴取</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>18</td><td>&#x1F3A4; <strong>変更_予約日</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">変更_予約希望時期</td><td style="font-size:0.8rem">format: datetime</td></tr>
+<tr><td>19</td><td>&#x1F3A4; <strong>変更_予約希望時期</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">変更_歯科判定</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>20</td><td>&#x1F500; <strong>変更_歯科判定</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">最後の問い合わせ_聴取 / 変更_残薬確認</td><td style="font-size:0.8rem">ref: clinicalDepartment</td></tr>
+<tr><td>21</td><td>&#x1F3A4; <strong>変更_残薬確認</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">最後の問い合わせ_聴取</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>22</td><td>&#x1F3A4; <strong>キャンセル_予約日</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">キャンセル_理由</td><td style="font-size:0.8rem">format: datetime</td></tr>
+<tr><td>23</td><td>&#x1F3A4; <strong>キャンセル_理由</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">最後の問い合わせ_聴取</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>24</td><td>&#x1F3A4; <strong>確認_内容</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">最後の問い合わせ_聴取</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>25</td><td>&#x1F3A4; <strong>最後の問い合わせ_聴取</strong></td><td><span class="badge badge-blue">聴取</span></td><td style="font-size:0.8rem">最後の問い合わせ_分岐</td><td style="font-size:0.8rem">format: text</td></tr>
+<tr><td>26</td><td>&#x1F500; <strong>最後の問い合わせ_分岐</strong></td><td><span class="badge badge-orange">分岐</span></td><td style="font-size:0.8rem">END_キャンセル / END_汎用受付</td><td style="font-size:0.8rem">ref: classification</td></tr>
+<tr><td>27</td><td>&#x1F6D1; <strong>END_汎用受付</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_汎用受付</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>28</td><td>&#x1F6D1; <strong>END_キャンセル</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_キャンセル</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>29</td><td>&#x1F6D1; <strong>END_代表電話案内_診療科対象外</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_代表電話案内_診療科対象外</td><td style="font-size:0.8rem">—</td></tr>
+<tr><td>30</td><td>&#x1F6D1; <strong>END_健康増進センター案内</strong></td><td><span class="badge badge-red">終話</span></td><td style="font-size:0.8rem">END_健康増進センター案内</td><td style="font-size:0.8rem">—</td></tr>
+</table>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">4. エラー・例外時の挙動</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x26A0;&#xFE0F;</span><span class="title">エラー時の対応一覧</span><span class="badge badge-red">重要</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th>状況</th><th>対応</th></tr>
+<tr><td>非通知着信</td><td>お電話ありがとうございます。蘇生会総合病院、診察予約専用、AI電話です。申し訳ございません。電話番号が非通知設定の場合、AI電話では受付できません。通知設定をし</td></tr>
+<tr><td>受付時間外（use_acceptance_times=false のため通常は到達しない／将来時間制御追加時用）</td><td>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</td></tr>
+<tr><td>全 hearing のリトライ上限到達時</td><td>申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、祝日を除く、月曜から土曜の、9時00分から16時00分に、代表電話へおかけなおしくださ</td></tr>
+<tr><td>予約／変更／確認 の完了</td><td>かしこまりました。（予約/予約変更/予約確認）の申し込みを受付いたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、4診療日以内にショートメッセー</td></tr>
+<tr><td>キャンセル受付完了</td><td>かしこまりました。予約キャンセルの申し込みを受付いたしました。必要がある場合のみ、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。お電話あり</td></tr>
+<tr><td>救急科・麻酔科・三叉神経痛・ロービジョン外来・手術センター・血液浄化センター・脳血管内治療センター・内視鏡センター・放射線科のいずれか</td><td>申し訳ございません。（救急科/麻酔科/三叉神経痛(顔面痛)・片側顔面けいれん専門外来/ロービジョン外来/手術センター/血液浄化センター/脳血管内治療センター/内</td></tr>
+<tr><td>健康増進センター選択</td><td>申し訳ございません。健康増進センターについては、恐れ入りますが、健康増進センター、予約専用電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお</td></tr>
+</table>
+<div class="speech"><div class="label">聞き取り失敗時の切断アナウンス</div>申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、祝日を除く、月曜から土曜の、9時00分から16時00分に、代表電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。 分からない場合はご案内いたしますので、メモをご準備ください。電話番号は、075-621-3101です。繰り返します。電話番号は、075-621-3101です。繰り返します。電話番号は、075-621-3101です。お電話ありがとうございました。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">5. 終話パターン一覧</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F6AA;</span><span class="title">全終話パターンの発話テキスト</span><span class="badge badge-red">7件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><div class="speech"><div class="label">END_非通知</div>お電話ありがとうございます。蘇生会総合病院、診察予約専用、AI電話です。申し訳ございません。電話番号が非通知設定の場合、AI電話では受付できません。通知設定をしていただくか、先頭に数字の186を付けておかけなおしください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_時間外</div>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_聴取失敗</div>申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、祝日を除く、月曜から土曜の、9時00分から16時00分に、代表電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。 分からない場合はご案内いたしますので、メモをご準備ください。電話番号は、075-621-3101です。繰り返します。電話番号は、075-621-3101です。繰り返します。電話番号は、075-621-3101です。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_汎用受付</div>かしこまりました。（予約/予約変更/予約確認）の申し込みを受付いたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、4診療日以内にショートメッセージ、または折り返し電話でのご連絡後、確定となります。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_キャンセル</div>かしこまりました。予約キャンセルの申し込みを受付いたしました。必要がある場合のみ、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_代表電話案内_診療科対象外</div>申し訳ございません。（救急科/麻酔科/三叉神経痛(顔面痛)・片側顔面けいれん専門外来/ロービジョン外来/手術センター/血液浄化センター/脳血管内治療センター/内視鏡センター/放射線科）については、恐れ入りますが、祝日を除く、月曜から土曜の、9時00分から16時00分に、代表電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。 分からない場合はご案内いたしますので、メモをご準備ください。電話番号は、075-621-3101です。繰り返します。電話番号は、075-621-3101です。繰り返します。電話番号は、075-621-3101です。お電話ありがとうございました。</div>
+<div class="speech"><div class="label">END_健康増進センター案内</div>申し訳ございません。健康増進センターについては、恐れ入りますが、健康増進センター、予約専用電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。 分からない場合はご案内いたしますので、メモをご準備ください。電話番号は、050-1724-0765です。繰り返します。電話番号は、050-1724-0765です。繰り返します。電話番号は、050-1724-0765です。お電話ありがとうございました。</div>
+</div></div>
+</div>
+<div class="section">
+<div class="section-title">6. 発話テキスト全文一覧</div>
+<div class="block"><div class="block-header" onclick="this.parentElement.classList.toggle('open')"><span class="icon">&#x1F4DD;</span><span class="title">全発話テキスト（23件）</span><span class="badge badge-blue">23件</span><span class="chevron">&#9654;</span></div>
+<div class="block-body"><table class="collect-table">
+<tr><th style="width:30%">ステップ名</th><th>発話テキスト</th></tr>
+<tr><td><strong>冒頭_アナウンス</strong></td><td>お電話ありがとうございます。 蘇生会総合病院、診察予約専用、AI電話です。3診療日以内のお問い合わせの方や救急の方は代表電話へおかけなおしください。</td></tr>
+<tr><td><strong>旧姓確認</strong></td><td>旧姓での登録の可能性がある方は、旧姓をおっしゃってください。ない場合はない、とお話ください。</td></tr>
+<tr><td><strong>診療科聴取</strong></td><td>受診を希望される診療科をお話ください。分からない場合は分からないとお話ください。</td></tr>
+<tr><td><strong>用件聴取</strong></td><td>ご用件を、次の４つのうちの、いずれかでお話ください。『予約を取る』『変更する』『キャンセルする』『確認する』、 それでは、お話ください。</td></tr>
+<tr><td><strong>予約_受診歴確認</strong></td><td>当院でのご受診は初めてですか？はい、または、いいえ、でお話ください。</td></tr>
+<tr><td><strong>予約_紹介状確認</strong></td><td>紹介状はお持ちでしょうか？</td></tr>
+<tr><td><strong>予約_症状1</strong></td><td>現在の症状をお話しください。</td></tr>
+<tr><td><strong>予約_医師の指定</strong></td><td>医師の指定がある場合は医師名をお話ください。ない場合は、無いとお話ください。</td></tr>
+<tr><td><strong>予約_症状2</strong></td><td>前回と同じ症状でご受診ですか？はい、または、いいえ、でお話ください。</td></tr>
+<tr><td><strong>変更_予約日</strong></td><td>現在の予約日を4月1日のように、日付でお話ください。わからない場合は、わからないのようにお話下さい。</td></tr>
+<tr><td><strong>変更_予約希望時期</strong></td><td>予約希望時期を、来週や、今月下旬、のようにおっしゃってください</td></tr>
+<tr><td><strong>変更_残薬確認</strong></td><td>前回処方されたお薬は、次回の予約まで十分にありますか？はい、あります、いいえ、ありませんのようにお話ください。処方されていない場合は、ないとお話ください。</td></tr>
+<tr><td><strong>キャンセル_予約日</strong></td><td>現在の予約日を4月1日のように、日付でお話ください。わからない場合は、わからないのようにお話下さい。</td></tr>
+<tr><td><strong>キャンセル_理由</strong></td><td>キャンセル理由をおっしゃってください。</td></tr>
+<tr><td><strong>確認_内容</strong></td><td>確認内容をお話ください</td></tr>
+<tr><td><strong>最後の問い合わせ_聴取</strong></td><td>そのほかに何かお問い合わせは有りませんか？</td></tr>
+<tr><td><strong>END_汎用受付</strong></td><td>かしこまりました。（予約/予約変更/予約確認）の申し込みを受付いたしました。このお電話にてご連絡いただいた内容は、当院にて確認後、4診療日以内にショートメッセージ、または折り返し電話でのご連絡後、確定となります。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_キャンセル</strong></td><td>かしこまりました。予約キャンセルの申し込みを受付いたしました。必要がある場合のみ、担当者から折り返し電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_代表電話案内_診療科対象外</strong></td><td>申し訳ございません。（救急科/麻酔科/三叉神経痛(顔面痛)・片側顔面けいれん専門外来/ロービジョン外来/手術センター/血液浄化センター/脳血管内治療センター/内視鏡センター/放射線科）については、恐れ入りますが、祝日を除く、月曜から土曜の、9時00分から16時00分に、代表電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。 分からない場合はご案内いたしますので、メモをご準備ください。電話番号は、075-621-3101です。繰り返します。電話番号は、075-621-3101です。繰り返します。電話番号は、075-621-3101です。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_健康増進センター案内</strong></td><td>申し訳ございません。健康増進センターについては、恐れ入りますが、健康増進センター、予約専用電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。 分からない場合はご案内いたしますので、メモをご準備ください。電話番号は、050-1724-0765です。繰り返します。電話番号は、050-1724-0765です。繰り返します。電話番号は、050-1724-0765です。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_聴取失敗</strong></td><td>申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、祝日を除く、月曜から土曜の、9時00分から16時00分に、代表電話へおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。 分からない場合はご案内いたしますので、メモをご準備ください。電話番号は、075-621-3101です。繰り返します。電話番号は、075-621-3101です。繰り返します。電話番号は、075-621-3101です。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_非通知</strong></td><td>お電話ありがとうございます。蘇生会総合病院、診察予約専用、AI電話です。申し訳ございません。電話番号が非通知設定の場合、AI電話では受付できません。通知設定をしていただくか、先頭に数字の186を付けておかけなおしください。お電話ありがとうございました。</td></tr>
+<tr><td><strong>END_時間外</strong></td><td>お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。</td></tr>
+</table>
+</div></div>
+</div>
+
+</div>
+<div class="footer">自動生成: VoiceBot Flow Builder | 蘇生会総合病院 | 2026年04月22日</div>
+<script>
+document.querySelectorAll('.block-header').forEach(function(el){
+  el.addEventListener('click', function(){});
+});
+</script>
+</body>
+</html>

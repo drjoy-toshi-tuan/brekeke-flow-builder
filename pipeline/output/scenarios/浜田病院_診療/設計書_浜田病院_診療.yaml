@@ -1,0 +1,1891 @@
+# 設計書 — 医療法人愛賛会浜田病院 / 診療（新規作成）
+# 生成元: @director エージェント
+# 生成日: 2026-05-13
+# 入力資料:
+#   - docs/migration/浜田病院_診療.md（移管ノート）
+#   - docs/reference/customer_docs/浜田病院_診療_raw.md（5/12修正依頼分・元 PDF テキスト化、表崩れあり）
+#   - docs/reference/customer_docs/202649【診療】導入時説明資料_浜田病院御中.pdf（フロー図・アナウンス一覧。raw.md と併読）
+# 作業種別: Pattern 1 新規作成（Gen1/Gen2 起源ではないが既存 ロジック紙資料からの起草）
+# 確認レポート: output/scenarios/浜田病院_診療/確認レポート_浜田病院_診療_20260513.md
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "医療法人愛賛会浜田病院"
+  scenario_name: "診療"
+  group_name: "浜田病院"
+  flow_name: "浜田病院$診療"
+  target_facility: "医療法人愛賛会浜田病院（産科・婦人科クリニック、単一施設）"
+  office_id: "TODO_要確認"
+  phone_number: "TODO_要確認"               # 着信 ARS 番号（Brekeke 設定時に確定）
+  business_hours: "TODO_要確認"             # raw.md / 元 PDF に明示なし。要顧客確認
+  flow_type: "subflow"                      # 新規作成のためサブフロー分割型
+  work_type: "new"
+  environment: "demo"
+
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "浜田病院$診療"
+      role: "main"
+      description: |
+        メインフロー。冒頭 → 緊急性の判断（緊急→転送）→ 用件①（3 択）
+        → 用件②（診察予約・変更系の 3 択）or 用件③（分娩・産後ケア系の 3 択）or その他問い合わせ
+        → 用件別の追加 hearing（日付・産婦人科分岐・紹介状確認・発熱確認 等）
+        → 合流ステップ → 個人情報サブフロー連鎖（ID番号→氏名→生年月日→電話番号）
+        → 最後の問い合わせ → 終話分岐（用件で 4 系統に分岐）
+  subflows:
+    - name: "浜田病院$診察券番号聴取"
+      target: "診察券番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: |
+        raw.md L76「ＩＤ番号 | 有 | ＩＤ番号をお話しください。わからない場合はわからないとお話しください。」
+        標準の診察券番号聴取テンプレ（復唱あり）を流用。「わからない」許容の挙動が
+        標準テンプレ内で実装済みか要確認（confirmation_items に明記）。
+    - name: "浜田病院$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: |
+        raw.md L77「患者名 | 無 | 患者様のお名前を「名前ははまだたろうです」のようにお話しください。」
+        標準の氏名聴取テンプレ（復唱なし）を流用。TTS 文言の「名前は〜です」前置きを
+        properties で上書き設定。
+    - name: "浜田病院$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: |
+        raw.md L78「生年月日 | 有 | 生年月日をお話しください。」
+        標準の生年月日聴取テンプレ（復唱あり、DOB Re-confirmation 付き）を流用。
+    - name: "浜田病院$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: |
+        raw.md L80-83「連絡先電話番号は今おかけいただいている000-0000-0000で
+        よろしいでしょうか / 連絡先の電話番号を携帯番号もしくは市外局番からお話しください
+        / 今後病院から連絡事項があった際におかけして良い電話番号ですか。」
+        標準の電話番号聴取テンプレ（incoming-classifier + Phone Normalization + 復唱）を流用。
+        固定電話判定（おかけして良い番号か）の追加 hearing は標準テンプレ内で対応済み。
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  医療法人愛賛会浜田病院（産科・婦人科クリニック）の予約専用 AI 電話。
+  患者本人または家族からの着信を受け、以下の用件を受け付ける一次フロー:
+    - 診察予約: 新規予約（産科は妊娠週数による分岐、婦人科は発熱有無確認あり）/ 予約変更 / キャンセル
+    - 分娩・産後ケア: 分娩予約案内（予約不要・来院案内のみ）/ 無痛分娩（経産婦＋紹介状必須）/ 産後ケア案内（HP誘導）
+    - その他問い合わせ: 内容聴取 → 電話または SMS で折返し
+  陣痛・破水・出血・つわり悪化 等の緊急時は冒頭で判定し、有人回線（06-6708-7200）へ即時 Blind Transfer。
+  回線一杯で転送失敗時は同番号への掛け直し案内を発話して終話。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "浜田病院$診療"
+    diagram: |
+      冒頭(wait)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → 非通知_アナウンス → 完了フラグ_非通知 → 切断
+            └─ 通常 → [営業時間チェック(acceptance_times) ※稼働時間は Dr.JOY 側設定]
+                        ├─ 時間外 → 時間外_アナウンス → 完了フラグ_時間外 → 切断
+                        └─ 受付可 → 冒頭_アナウンス（施設名挨拶のみ）
+                                      → 緊急性の判断(hearing, enum)
+                                          ├─ 緊急 → 緊急転送_アナウンス → 担当者へ転送(call_transfer, Blind)
+                                          │              ├─ 成功(status=3) → 自動終話
+                                          │              └─ FAIL → END_転送失敗（掛け直し案内）
+                                          └─ other(非緊急) → 用件1(hearing, enum)
+                                              ├─ 診察予約・変更 → 用件2(hearing, enum)
+                                              │    ├─ 新規予約 → 産科_婦人科確認(hearing, enum)
+                                              │    │    ├─ 産科 → 16週確認(hearing, enum) → 受診希望日_産科(datetime) → 合流_新規予約
+                                              │    │    └─ other(婦人科) → 受診希望日_婦人科(datetime)
+                                              │    │                       → 発熱確認(hearing, enum)
+                                              │    │                          ├─ あり → 発熱案内_アナウンス → 合流_新規予約
+                                              │    │                          └─ other(なし) → 合流_新規予約
+                                              │    ├─ 予約変更 → 現在の予約日_変更(datetime)
+                                              │    │              → 希望予約日_変更(datetime)
+                                              │    │              → 体調不良確認(hearing, enum) → 合流_変更
+                                              │    └─ other(キャンセル) → 現在の予約日_キャンセル(datetime)
+                                              │                         → キャンセル理由(text) → 合流_キャンセル
+                                              ├─ 分娩・産後ケア → 用件3(hearing, enum)
+                                              │    ├─ 分娩予約 → 説明1_分娩(announcement) → END_分娩予約案内
+                                              │    ├─ 無痛分娩 → 説明2_無痛(announcement) → 紹介状確認(hearing, enum)
+                                              │    │              ├─ あり → 合流_無痛紹介状あり
+                                              │    │              └─ other(なし) → END_紹介状なし案内
+                                              │    └─ other(産後ケア) → 説明3_ケア(announcement) → END_産後ケア案内
+                                              └─ other(その他問い合わせ) → 内容確認(text)
+                                                                              → 電話SMS選択(hearing, enum)
+                                                                              → 合流_問い合わせ
+                                          [合流ステップ群]
+                                              合流_新規予約 / 合流_変更 / 合流_キャンセル
+                                              / 合流_無痛紹介状あり / 合流_問い合わせ
+                                            → 個人情報サブフロー連鎖（順序は raw.md L34-L40 準拠）
+                                              診察券番号聴取(subflow, ID番号)
+                                                → 氏名聴取(subflow)
+                                                  → 生年月日聴取(subflow)
+                                                    → 電話番号聴取(subflow)
+                                                      → 最後の問い合わせ(hearing, enum)
+                                                        → 終話分岐_用件1(context_match_router, reference_module=OpenAI_用件1)
+                                                            ├─ 診察予約・変更 → 終話分岐_用件2(reference_module=OpenAI_用件2)
+                                                            │    ├─ 新規予約 → END_新規予約受付完了
+                                                            │    ├─ 予約変更 → END_変更受付完了
+                                                            │    └─ other(キャンセル) → END_キャンセル受付完了
+                                                            ├─ 分娩・産後ケア → END_無痛受付完了
+                                                            │    ※ 分娩予約/産後ケアは合流前に終話するため
+                                                            │       実質ここを通るのは無痛紹介状ありルートのみ
+                                                            └─ other(その他問い合わせ) → END_問い合わせ受付完了
+    notes: |
+      個人情報サブフローの連鎖は全用件で共通（5 ルート全てが「合流」を経て同じ個人情報チェーンに入る）。
+      これにより subflow を 1 セットだけ呼び出す効率的な構成。
+      終話分岐は 2 段の context_match_router で classification を参照。
+      用件1 と用件2/用件3 がそれぞれ classification を順次上書き保存する設計
+      （Brekeke の context は最後に書き込んだ値が残る仕様を活用）。
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # ============================================================
+  # 1. 冒頭ブロック
+  # ============================================================
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+    notes: |
+      use_acceptance_times は raw.md / 元 PDF に時間外運用の記載がないため
+      暫定 true で配置（時間外アナウンスを自前で出す保険）。稼働時間は Dr.JOY 側設定。
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 緊急性の判断
+    notes: |
+      raw.md L45「お電話ありがとうございます。浜田病院受付AI電話です。」
+      （customer_doc にこの 1 文しかないため、これをそのまま使用）。
+
+  # ============================================================
+  # 2. 緊急性の判断（最優先分岐）
+  # ============================================================
+  - step: 緊急性の判断
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "緊急"
+        next: 緊急転送_アナウンス
+      - match: "other"        # = 非緊急
+        next: 用件1
+    notes: |
+      raw.md L47「陣痛・破水・出血・胎動が少ない・つわりがひどい・症状が急に重くなったなどの
+      緊急の状態ですか？」。緊急なら有人転送（06-6708-7200）、非緊急なら用件分岐へ。
+      "other" = 「いいえ・違います・大丈夫」等の否定発話を集約。
+
+  - step: 緊急転送_アナウンス
+    type: announcement
+    next: 担当者へ転送
+    notes: |
+      raw.md L50「緊急のご用件ですので有人電話へ転送いたします。このままお待ちください。」
+      Blind Transfer 直前の案内。
+
+  - step: 担当者へ転送
+    type: call_transfer
+    transfer_type: "Blind Transfer"
+    on_failure_announcement: ""
+    conditions:
+      - match: "FAIL"
+        next: END_転送失敗
+    notes: |
+      転送先 06-6708-7200（IVR プロパティで設定、params.number は空文字）。
+      成功時は scaffold が status=3 + END_転送成功 を自動補完。
+      FAIL（回線一杯）時は END_転送失敗 へ。tts は raw.md L53 を転記。
+
+  # ============================================================
+  # 3. 用件①（最上位 3 択）
+  # ============================================================
+  - step: 用件1
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "診察予約・変更"
+        next: 用件2
+      - match: "分娩・産後ケア"
+        next: 用件3
+      - match: "other"        # = その他問い合わせ
+        next: 内容確認
+    notes: |
+      raw.md L57「本日のご用件を次の３つのうちからお選びください。
+      「１、診療の予約・変更」「２、分娩・産後ケア」「３、その他問い合わせ」」
+      DTMF 1/2/3 と並行受付（stt_type: DTMF_AmiVoice）。
+      save_to: classification（後段の用件2/3 で上書きされる）。
+
+  # ============================================================
+  # 4. 用件②（診察予約・変更系の 3 択）
+  # ============================================================
+  - step: 用件2
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "新規予約"
+        next: 産科_婦人科確認
+      - match: "予約変更"
+        next: 現在の予約日_変更
+      - match: "other"        # = キャンセル
+        next: 現在の予約日_キャンセル
+    notes: |
+      raw.md L58「ご用件を次の３つのうちどちらでしょうか。
+      「１、新規予約」「２、日程の変更」「３、キャンセル」」
+      classification を「新規予約」「予約変更」「キャンセル」のいずれかに上書き。
+
+  # ============================================================
+  # 5a. 新規予約ルート: 産科 / 婦人科
+  # ============================================================
+  - step: 産科_婦人科確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "産科"
+        next: 16週確認
+      - match: "other"        # = 婦人科
+        next: 受診希望日_婦人科
+    notes: |
+      raw.md L61「診療を希望されるのは産科と婦人科どちらでしょうか。」
+      save_to: department（施設固有 context）。
+
+  - step: 16週確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "あり"          # = 16週以降
+        next: 受診希望日_産科
+      - match: "other"        # = 16週未満
+        next: 受診希望日_産科
+    notes: |
+      raw.md L62「妊娠週数は16週を超えていますか。」
+      raw.md L23 に「16週以降か」が分娩予約 / 無痛分娩のどこに接続するか
+      表崩れで曖昧。移管ノートの「16週判定は産科 新規予約ルート」推測に従い、
+      産科 新規予約の直後に配置。
+      output_labels は ["あり", "なし"] = ["16週以降", "16週未満"]。
+      分岐先は同じ（受診希望日_産科）。後段スタッフが週数で対応を変えるための情報保存目的。
+      save_to: week16OrLater。
+      ★確認事項: 元 PDF フロー図で接続元を確認。分娩予約/無痛分娩側に接続する可能性あり。
+
+  - step: 受診希望日_産科
+    type: hearing
+    output_format: datetime
+    next: 合流_新規予約
+    retry_failure: end_failure
+    notes: |
+      raw.md L63「受診を希望される日程をお話しください。」（産科ルート用）。
+      save_to: desiredReservationDate。
+
+  - step: 受診希望日_婦人科
+    type: hearing
+    output_format: datetime
+    next: 発熱確認
+    retry_failure: end_failure
+    notes: |
+      raw.md L63「受診を希望される日程をお話しください。」（婦人科ルート用）。
+      save_to: desiredReservationDate。
+
+  - step: 発熱確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "あり"
+        next: 発熱案内_アナウンス
+      - match: "other"        # = なし
+        next: 合流_新規予約
+    notes: |
+      raw.md L65「現在発熱はありますか。ある場合、熱が下がってから24時間後の
+      受診をお願いしております。」 ※TTS に既に注意喚起文を含むため、発熱ありの
+      場合の追加 announcement は最小限（合流ステップへの遷移のみ）。
+      save_to: feverPresence。
+
+  - step: 発熱案内_アナウンス
+    type: announcement
+    next: 合流_新規予約
+    notes: |
+      発熱ありの場合の追加アナウンス（接続用のみ。元資料に明示追加文言なし）。
+      properties で「承知いたしました。それでは続けてお伺いします。」程度の繋ぎ文言を設定予定。
+
+  - step: 合流_新規予約
+    type: announcement
+    next: 診察券番号聴取
+    notes: |
+      新規予約ルートの個人情報チェーンへの繋ぎ announcement。
+      TTS 例: 「それではご予約に必要な情報をお伺いします。」
+      ★properties で文言調整。元資料に明示なし。
+
+  # ============================================================
+  # 5b. 予約変更ルート
+  # ============================================================
+  - step: 現在の予約日_変更
+    type: hearing
+    output_format: datetime
+    next: 希望予約日_変更
+    retry_failure: end_failure
+    notes: |
+      raw.md L64「現在の診療予約日をお話しください。」
+      save_to: reservationDate。
+
+  - step: 希望予約日_変更
+    type: hearing
+    output_format: datetime
+    next: 体調不良確認
+    retry_failure: end_failure
+    notes: |
+      raw.md L66「変更後の受診を希望される日程をお話しください。」
+      save_to: desiredReservationDate。
+
+  - step: 体調不良確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "はい"
+        next: 合流_変更
+      - match: "other"        # = いいえ
+        next: 合流_変更
+    notes: |
+      raw.md L67「変更理由は体調不良ですか。」
+      output_labels は ["はい", "いいえ"]。yes/no の保存のみで分岐先は同じ。
+      save_to: illnessPresence。
+
+  - step: 合流_変更
+    type: announcement
+    next: 診察券番号聴取
+    notes: |
+      予約変更ルートの個人情報チェーンへの繋ぎ。
+      TTS 例: 「それでは変更内容を確認するための情報をお伺いします。」
+
+  # ============================================================
+  # 5c. キャンセルルート
+  # ============================================================
+  - step: 現在の予約日_キャンセル
+    type: hearing
+    output_format: datetime
+    next: キャンセル理由
+    retry_failure: end_failure
+    notes: |
+      raw.md L64「現在の診療予約日をお話しください。」（キャンセル用）。
+      save_to: reservationDate。
+
+  - step: キャンセル理由
+    type: hearing
+    output_format: text
+    next: 合流_キャンセル
+    retry_failure: end_failure
+    notes: |
+      raw.md L68「キャンセルを希望される理由をお話しください。」
+      自由テキスト保存。save_to: reason（標準フィールド）。
+
+  - step: 合流_キャンセル
+    type: announcement
+    next: 診察券番号聴取
+    notes: |
+      キャンセルルートの個人情報チェーンへの繋ぎ。
+
+  # ============================================================
+  # 6. 用件③（分娩・産後ケア系の 3 択）
+  # ============================================================
+  - step: 用件3
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "分娩予約"
+        next: 説明1_分娩
+      - match: "無痛分娩"
+        next: 説明2_無痛
+      - match: "other"        # = 産後ケア
+        next: 説明3_ケア
+    notes: |
+      raw.md L60「ご用件を次の3つのうちどちらでしょうか。
+      「１、分娩予約」「２、無痛分娩」「３、産後ケア」」
+      classification を上書き。
+
+  # --- 6a. 分娩予約（予約不要・来院案内のみで終話）---
+  - step: 説明1_分娩
+    type: announcement
+    next: END_分娩予約案内
+    notes: |
+      raw.md L90-91 + L92「分娩予約はは予約不要で来院にて受け付けています。
+      月曜から金曜の午前9時〜午後4時、土曜は午前9時〜正午にお越しください。
+      本人・ご家族どちらでも構いません。予約金として現金5万円のみご持参ください。
+      母子手帳や健康保険証などのお持ちいただく必要はありません。」
+      AI 電話側では聴取せずそのまま終話①へ。
+
+  # --- 6b. 無痛分娩（紹介状確認あり）---
+  - step: 説明2_無痛
+    type: announcement
+    next: 紹介状確認
+    notes: |
+      raw.md L94-99「診察については、小川産婦人科の患者様は16〜20週の間に1回
+      ご来院ください。全員、34週6日までには必ず診察を受けていただく必要が
+      ありますので、30週頃までにご予約をお取りいただくようお願いします。
+      無痛分娩は予約枠に限りがあり、枠が埋まっている場合はお受けできませんので、
+      まずはお早めにご来院ください。
+      初産婦の方は、当院での無痛分娩は出来かねます。
+      経産婦の方は、かかりつけ医からの紹介状をお持ちの上、早めに一度診察に
+      お越しください。38週の診察時に正式な分娩予約をお取りします。」
+
+  - step: 紹介状確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "あり"
+        next: 合流_無痛紹介状あり
+      - match: "other"        # = なし
+        next: END_紹介状なし案内
+    notes: |
+      raw.md L104「紹介状はお持ちでしょうか。」
+      save_to: introductionLetter。
+
+  - step: 合流_無痛紹介状あり
+    type: announcement
+    next: 診察券番号聴取
+    notes: |
+      無痛分娩紹介状ありルートの個人情報チェーンへの繋ぎ。
+      TTS 例: 「ありがとうございます。それでは診察予約に必要な情報をお伺いします。」
+
+  # --- 6c. 産後ケア（HP誘導のみで終話）---
+  - step: 説明3_ケア
+    type: announcement
+    next: END_産後ケア案内
+    notes: |
+      raw.md L100「産後ケアは産後2か月までの方が対象です。浜田病院のホームページより
+      予約ができるため、そちらから予約をお願いいたします。」
+      AI 電話側では予約取得せずそのまま終話③へ。
+
+  # ============================================================
+  # 7. その他問い合わせルート
+  # ============================================================
+  - step: 内容確認
+    type: hearing
+    output_format: text
+    next: 電話SMS選択
+    retry_failure: end_failure
+    notes: |
+      raw.md L70「お問い合わせ内容をお話しください。内容を確認してから担当者が
+      折り返しご連絡いたします。」自由テキスト保存。save_to: inquiryContent。
+
+  - step: 電話SMS選択
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "電話"
+        next: 合流_問い合わせ
+      - match: "other"        # = SMS
+        next: 合流_問い合わせ
+    notes: |
+      raw.md L72「折り返しのご連絡はお電話を希望されますか。
+      ショートメッセージを希望されますか。」save_to: callbackMethod。
+      分岐先は同じ（後段の smsFlag を sms_flag_routing で切り替える設計）。
+
+  - step: 合流_問い合わせ
+    type: announcement
+    next: 診察券番号聴取
+    notes: |
+      その他問い合わせルートの個人情報チェーンへの繋ぎ。
+      TTS 例: 「それでは折り返しのための情報をお伺いします。」
+
+  # ============================================================
+  # 8. 個人情報サブフロー連鎖（raw.md L34-L40 の順序: ID→患者名→生年月日→連絡先）
+  # ============================================================
+  - step: 診察券番号聴取
+    type: subflow
+    flowname: "浜田病院$診察券番号聴取"
+    next: 氏名聴取
+    notes: "raw.md L76 ID番号。復唱あり。「わからない」許容（要確認）。"
+
+  - step: 氏名聴取
+    type: subflow
+    flowname: "浜田病院$氏名聴取"
+    next: 生年月日聴取
+    notes: "raw.md L77 患者名。復唱なし。"
+
+  - step: 生年月日聴取
+    type: subflow
+    flowname: "浜田病院$生年月日聴取"
+    next: 電話番号聴取
+    notes: "raw.md L78 生年月日。復唱あり（DOB Re-confirmation）。"
+
+  - step: 電話番号聴取
+    type: subflow
+    flowname: "浜田病院$電話番号聴取"
+    next: 最後の問い合わせ
+    notes: |
+      raw.md L80-83 連絡先電話番号。標準テンプレ（incoming-classifier 経由で
+      携帯=着信番号復唱、固定=連絡先聴取＋復唱、固定電話の場合は「おかけして良い番号か」
+      の追加確認も標準実装）。
+
+  # ============================================================
+  # 9. 最後の問い合わせ + 終話分岐
+  # ============================================================
+  - step: 最後の問い合わせ
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "あり"
+        next: 終話分岐_用件1
+      - match: "other"        # = なし
+        next: 終話分岐_用件1
+    notes: |
+      raw.md L84「その他にお聞きしたいことはございますか。」
+      output_labels は ["あり", "なし"]。元資料では yes 時の挙動が表崩れで不明確のため、
+      暫定的に yes/no どちらも終話分岐へ進める。
+      ★確認事項: 「あり」の場合に用件①へループバックすべきか、追加 hearing が必要かを要確認。
+      save_to: finalInquiry。
+
+  - step: 終話分岐_用件1
+    type: context_match_router
+    reference_module: "OpenAI_用件1"
+    conditions:
+      - match: "診察予約・変更"
+        next: 終話分岐_用件2
+      - match: "分娩・産後ケア"
+        next: END_無痛受付完了
+      - match: "other"        # = その他問い合わせ
+        next: END_問い合わせ受付完了
+    notes: |
+      1 段目の終話分岐。用件①の値で 3 系統に分ける。
+      "分娩・産後ケア" は合流前に終話するパターン（分娩予約 / 産後ケア / 紹介状なし）
+      が大半のため、実質ここを通るのは「無痛分娩 紹介状あり」ルートのみ。
+
+  - step: 終話分岐_用件2
+    type: context_match_router
+    reference_module: "OpenAI_用件2"
+    conditions:
+      - match: "新規予約"
+        next: END_新規予約受付完了
+      - match: "予約変更"
+        next: END_変更受付完了
+      - match: "other"        # = キャンセル
+        next: END_キャンセル受付完了
+    notes: |
+      2 段目の終話分岐。用件②の値で 3 系統に細分化。
+
+  # ============================================================
+  # 10. 終話ブロック群
+  # ============================================================
+  - step: END_転送失敗
+    type: termination
+    termination_ref: "END_転送失敗"
+
+  - step: END_分娩予約案内
+    type: termination
+    termination_ref: "END_分娩予約案内"
+
+  - step: END_紹介状なし案内
+    type: termination
+    termination_ref: "END_紹介状なし案内"
+
+  - step: END_産後ケア案内
+    type: termination
+    termination_ref: "END_産後ケア案内"
+
+  - step: END_新規予約受付完了
+    type: termination
+    termination_ref: "END_新規予約受付完了"
+
+  - step: END_変更受付完了
+    type: termination
+    termination_ref: "END_変更受付完了"
+
+  - step: END_キャンセル受付完了
+    type: termination
+    termination_ref: "END_キャンセル受付完了"
+
+  - step: END_無痛受付完了
+    type: termination
+    termination_ref: "END_無痛受付完了"
+
+  - step: END_問い合わせ受付完了
+    type: termination
+    termination_ref: "END_問い合わせ受付完了"
+
+# --- セクション5: コンテキストフィールド一覧 ---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - { id: "1", order: "1", value: "新規予約" }
+      - { id: "2", order: "2", value: "予約変更" }
+      - { id: "3", order: "3", value: "キャンセル" }
+      - { id: "4", order: "4", value: "分娩予約" }
+      - { id: "5", order: "5", value: "無痛分娩" }
+      - { id: "6", order: "6", value: "産後ケア" }
+      - { id: "7", order: "7", value: "その他問い合わせ" }
+    item_default: true
+    editable: true
+    deletable: false
+    notes: |
+      用件①と用件②/③で順次上書き保存。最終値は最も詳細な用件種別。
+      ※用件①のみ通過した場合（緊急時 等）は classification 未設定または用件①の値のままになる。
+
+  - context_name: "patientName"
+    context_name_jp: "患者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "サブフロー（氏名聴取）で保存"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "ID番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: |
+      raw.md L76 の「ＩＤ番号」を診察券番号フィールドに割り当て。
+      「わからない」回答時は空保存（標準テンプレ仕様確認要）。
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values:
+      - { id: "1", order: "1", value: "産科" }
+      - { id: "2", order: "2", value: "婦人科" }
+    item_default: true
+    editable: true
+    deletable: false
+    notes: |
+      産科 / 婦人科の 2 値。新規予約ルートでのみ設定される。
+      その他ルートでは空のまま（変更/キャンセル等の場合は診療科聴取なし）。
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日(和暦)"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "サブフロー（生年月日聴取）で保存。復唱あり"
+
+  - context_name: "reason"
+    context_name_jp: "理由"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "キャンセル理由を格納（raw.md L68）"
+
+  - context_name: "reservationDate"
+    context_name_jp: "現在の予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "予約変更/キャンセル時の現在の予約日（raw.md L64）"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "サブフロー（電話番号聴取）で保存。復唱あり、固定電話確認あり"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - { id: "1", order: "1", value: "未処理" }
+      - { id: "2", order: "2", value: "代表案内" }
+      - { id: "3", order: "3", value: "転送" }
+      - { id: "6", order: "6", value: "時間外" }
+      - { id: "9", order: "9", value: "転送失敗" }
+    item_default: true
+    editable: true
+    deletable: false
+    notes: |
+      1=未処理（新規/変更/キャンセル/問い合わせ/無痛 等の受付完了）
+      2=代表案内（非通知 / 番号案内系終話）
+      3=転送（緊急 Blind Transfer 成功）
+      6=時間外（acceptance_times 時間外）
+      9=転送失敗（Blind Transfer 回線一杯）
+      ★各終話の status 番号は元 PDF に明示なし。本設計は推測値。確認事項に明記。
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: ""
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値"
+
+  # --- 施設固有フィールド ---
+  - context_name: "emergencyFlag"
+    context_name_jp: "緊急性"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "緊急性の判断結果。「緊急」=有人転送発動、「非緊急」=通常フロー"
+
+  - context_name: "department"
+    context_name_jp: "産科/婦人科"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: |
+      新規予約時の産科 / 婦人科選択。clinicalDepartment と内容は同じだが、
+      Dr.JOY 画面表示用途で別フィールドとする（必要なら統合可能）。
+      ★確認事項: clinicalDepartment と統合するか別フィールドとして残すか要相談。
+
+  - context_name: "week16OrLater"
+    context_name_jp: "妊娠週数16週以降か"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "産科 新規予約ルートの 16週以降フラグ。あり/なし"
+
+  - context_name: "feverPresence"
+    context_name_jp: "発熱の有無"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "婦人科 新規予約ルートの発熱有無。あり/なし"
+
+  - context_name: "illnessPresence"
+    context_name_jp: "体調不良の有無"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "予約変更ルートの体調不良フラグ。はい/いいえ"
+
+  - context_name: "introductionLetter"
+    context_name_jp: "紹介状有無"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "無痛分娩ルートの紹介状有無。あり/なし"
+
+  - context_name: "desiredReservationDate"
+    context_name_jp: "希望予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: |
+      受診希望日（産科/婦人科 新規予約）と変更後の希望予約日を共用。
+      datetime 正規化 (YYYY-MM-DD HH:MM) で保存。
+
+  - context_name: "inquiryContent"
+    context_name_jp: "問い合わせ内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "その他問い合わせルートの内容（raw.md L70 自由テキスト）"
+
+  - context_name: "callbackMethod"
+    context_name_jp: "折返し方法"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: |
+      その他問い合わせルートの折返し方法選択。電話 / SMS。
+      smsFlag の sms_flag_routing 分岐に使用。
+
+  - context_name: "finalInquiry"
+    context_name_jp: "最後の追加質問有無"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "raw.md L84「その他にお聞きしたいことはございますか。」の回答（あり/なし）"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "緊急性の判断"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "emergencyFlag"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "緊急"
+      - "非緊急"
+    notes: |
+      raw.md L47 の質問。陣痛・破水・出血・胎動が少ない・つわりがひどい・症状が急に
+      重くなった のいずれかに該当するかを判定。緊急時は即時転送。
+
+  - order: 2
+    name: "用件1"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "診察予約・変更"
+      - "分娩・産後ケア"
+      - "その他問い合わせ"
+    notes: |
+      DTMF 1=診察予約・変更, 2=分娩・産後ケア, 3=その他問い合わせ。
+      raw.md L57 の選択肢。
+
+  - order: 3
+    name: "用件2"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "新規予約"
+      - "予約変更"
+      - "キャンセル"
+    notes: |
+      DTMF 1=新規予約, 2=予約変更, 3=キャンセル。
+      raw.md L58 の選択肢。classification を上書き。
+
+  - order: 4
+    name: "用件3"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "分娩予約"
+      - "無痛分娩"
+      - "産後ケア"
+    notes: |
+      DTMF 1=分娩予約, 2=無痛分娩, 3=産後ケア。
+      raw.md L60 の選択肢。classification を上書き。
+
+  - order: 5
+    name: "産科_婦人科確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "department"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "産科"
+      - "婦人科"
+    notes: "raw.md L61 産科/婦人科選択"
+
+  - order: 6
+    name: "16週確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "week16OrLater"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "あり"
+      - "なし"
+    notes: "raw.md L62 妊娠週数16週超か。あり=16週以降"
+
+  - order: 7
+    name: "受診希望日_産科"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "desiredReservationDate"
+    openai_processing: "convert"
+    output_format: "datetime"
+    output_labels: []
+    notes: "raw.md L63 受診希望日（産科ルート）。datetime 正規化"
+
+  - order: 8
+    name: "受診希望日_婦人科"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "desiredReservationDate"
+    openai_processing: "convert"
+    output_format: "datetime"
+    output_labels: []
+    notes: "raw.md L63 受診希望日（婦人科ルート）"
+
+  - order: 9
+    name: "発熱確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "feverPresence"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "あり"
+      - "なし"
+    notes: "raw.md L65 発熱有無"
+
+  - order: 10
+    name: "現在の予約日_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "convert"
+    output_format: "datetime"
+    output_labels: []
+    notes: "raw.md L64 現在の予約日（変更ルート）"
+
+  - order: 11
+    name: "希望予約日_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "desiredReservationDate"
+    openai_processing: "convert"
+    output_format: "datetime"
+    output_labels: []
+    notes: "raw.md L66 変更後の希望日"
+
+  - order: 12
+    name: "体調不良確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "illnessPresence"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "raw.md L67 変更理由が体調不良か"
+
+  - order: 13
+    name: "現在の予約日_キャンセル"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "convert"
+    output_format: "datetime"
+    output_labels: []
+    notes: "raw.md L64 現在の予約日（キャンセルルート）"
+
+  - order: 14
+    name: "キャンセル理由"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: "raw.md L68 自由テキスト"
+
+  - order: 15
+    name: "紹介状確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "introductionLetter"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "あり"
+      - "なし"
+    notes: "raw.md L104 紹介状有無"
+
+  - order: 16
+    name: "内容確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "inquiryContent"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: "raw.md L70 お問い合わせ内容（自由テキスト）"
+
+  - order: 17
+    name: "電話SMS選択"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "callbackMethod"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "電話"
+      - "SMS"
+    notes: |
+      DTMF 1=電話, 2=SMS。raw.md L72。
+      sms_flag_routing で smsFlag を切り替える。
+
+  - order: 18
+    name: "最後の問い合わせ"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "finalInquiry"
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - "あり"
+      - "なし"
+    notes: "raw.md L84 追加質問の有無。あり/なし両方とも終話分岐へ"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "緊急性の判断"
+    tts_announcement: |
+      陣痛・破水・出血・胎動が少ない・つわりがひどい・症状が急に重くなったなどの
+      緊急の状態ですか？
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["緊急", "非緊急"]
+      mapping:
+        - input: "はい, そうです, 緊急, 陣痛, 破水, 出血 等"
+          output: "緊急"
+        - input: "いいえ, 違います, 大丈夫, 緊急ではない 等"
+          output: "非緊急"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "emergencyFlag"
+    next_step: "（conditions で分岐）"
+    retry_failure: "end_failure"
+
+  - step_name: "用件1"
+    tts_announcement: |
+      本日のご用件を次の３つのうちからお選びください。
+      「１、診療の予約・変更」「２、分娩・産後ケア」「３、その他問い合わせ」
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["診察予約・変更", "分娩・産後ケア", "その他問い合わせ"]
+      mapping:
+        - input: "DTMF 1, 一番, 予約, 変更, キャンセル, 診療 等"
+          output: "診察予約・変更"
+        - input: "DTMF 2, 二番, 分娩, 産後, ケア, 出産 等"
+          output: "分娩・産後ケア"
+        - input: "DTMF 3, 三番, 問い合わせ, 質問, その他 等"
+          output: "その他問い合わせ"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "classification"
+    next_step: "（conditions で分岐）"
+    retry_failure: "end_failure"
+
+  - step_name: "用件2"
+    tts_announcement: |
+      ご用件を次の３つのうちどちらでしょうか。
+      「１、新規予約」「２、日程の変更」「３、キャンセル」
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["新規予約", "予約変更", "キャンセル"]
+      mapping:
+        - input: "DTMF 1, 新規, 予約 等"
+          output: "新規予約"
+        - input: "DTMF 2, 変更, 日程変更 等"
+          output: "予約変更"
+        - input: "DTMF 3, キャンセル, 取り消し 等"
+          output: "キャンセル"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "classification"
+    next_step: "（conditions で分岐）"
+    retry_failure: "end_failure"
+
+  - step_name: "用件3"
+    tts_announcement: |
+      ご用件を次の3つのうちどちらでしょうか。
+      「１、分娩予約」「２、無痛分娩」「３、産後ケア」
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["分娩予約", "無痛分娩", "産後ケア"]
+      mapping:
+        - input: "DTMF 1, 分娩, 分娩予約, お産 等"
+          output: "分娩予約"
+        - input: "DTMF 2, 無痛, 無痛分娩 等"
+          output: "無痛分娩"
+        - input: "DTMF 3, 産後, 産後ケア, ケア 等"
+          output: "産後ケア"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "classification"
+    next_step: "（conditions で分岐）"
+    retry_failure: "end_failure"
+
+  - step_name: "産科_婦人科確認"
+    tts_announcement: "診療を希望されるのは産科と婦人科どちらでしょうか。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["産科", "婦人科"]
+      mapping:
+        - input: "産科, 産婦人科の産科 等"
+          output: "産科"
+        - input: "婦人科, 婦人 等"
+          output: "婦人科"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "department"
+    next_step: "（conditions で分岐）"
+    retry_failure: "end_failure"
+
+  - step_name: "16週確認"
+    tts_announcement: "妊娠週数は16週を超えていますか。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["あり", "なし"]
+      mapping:
+        - input: "はい, 超えています, あります, 16週以降 等"
+          output: "あり"
+        - input: "いいえ, まだです, 超えていません 等"
+          output: "なし"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "week16OrLater"
+    next_step: "受診希望日_産科"
+    retry_failure: "end_failure"
+
+  - step_name: "受診希望日_産科"
+    tts_announcement: "受診を希望される日程をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["YYYY-MM-DD HH:MM"]
+      mapping:
+        - input: "音声認識結果（日付・時刻表現）"
+          output: "YYYY-MM-DD HH:MM 形式に正規化"
+      no_result_condition: "認識不可・日付として解釈不能"
+    save_to: "desiredReservationDate"
+    next_step: "合流_新規予約"
+    retry_failure: "end_failure"
+
+  - step_name: "受診希望日_婦人科"
+    tts_announcement: "受診を希望される日程をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["YYYY-MM-DD HH:MM"]
+      mapping:
+        - input: "音声認識結果（日付・時刻表現）"
+          output: "YYYY-MM-DD HH:MM 形式に正規化"
+      no_result_condition: "認識不可・日付として解釈不能"
+    save_to: "desiredReservationDate"
+    next_step: "発熱確認"
+    retry_failure: "end_failure"
+
+  - step_name: "発熱確認"
+    tts_announcement: |
+      現在発熱はありますか。ある場合、熱が下がってから24時間後の受診をお願いしております。
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["あり", "なし"]
+      mapping:
+        - input: "はい, あります, 発熱しています 等"
+          output: "あり"
+        - input: "いいえ, ありません, ないです 等"
+          output: "なし"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "feverPresence"
+    next_step: "（conditions で分岐: あり=発熱案内, other=合流_新規予約）"
+    retry_failure: "end_failure"
+
+  - step_name: "現在の予約日_変更"
+    tts_announcement: "現在の診療予約日をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["YYYY-MM-DD HH:MM"]
+      mapping:
+        - input: "音声認識結果（日付・時刻表現）"
+          output: "YYYY-MM-DD HH:MM 形式に正規化"
+      no_result_condition: "認識不可・日付として解釈不能"
+    save_to: "reservationDate"
+    next_step: "希望予約日_変更"
+    retry_failure: "end_failure"
+
+  - step_name: "希望予約日_変更"
+    tts_announcement: "変更後の受診を希望される日程をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["YYYY-MM-DD HH:MM"]
+      mapping:
+        - input: "音声認識結果（日付・時刻表現）"
+          output: "YYYY-MM-DD HH:MM 形式に正規化"
+      no_result_condition: "認識不可・日付として解釈不能"
+    save_to: "desiredReservationDate"
+    next_step: "体調不良確認"
+    retry_failure: "end_failure"
+
+  - step_name: "体調不良確認"
+    tts_announcement: "変更理由は体調不良ですか。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["はい", "いいえ"]
+      mapping:
+        - input: "はい, そうです, 体調不良 等"
+          output: "はい"
+        - input: "いいえ, 違います, 体調は問題ない 等"
+          output: "いいえ"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "illnessPresence"
+    next_step: "合流_変更"
+    retry_failure: "end_failure"
+
+  - step_name: "現在の予約日_キャンセル"
+    tts_announcement: "現在の診療予約日をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["YYYY-MM-DD HH:MM"]
+      mapping:
+        - input: "音声認識結果（日付・時刻表現）"
+          output: "YYYY-MM-DD HH:MM 形式に正規化"
+      no_result_condition: "認識不可・日付として解釈不能"
+    save_to: "reservationDate"
+    next_step: "キャンセル理由"
+    retry_failure: "end_failure"
+
+  - step_name: "キャンセル理由"
+    tts_announcement: "キャンセルを希望される理由をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["理由テキスト"]
+      mapping:
+        - input: "音声認識結果"
+          output: "理由テキスト（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "reason"
+    next_step: "合流_キャンセル"
+    retry_failure: "end_failure"
+
+  - step_name: "紹介状確認"
+    tts_announcement: "紹介状はお持ちでしょうか。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["あり", "なし"]
+      mapping:
+        - input: "はい, あります, 持っています 等"
+          output: "あり"
+        - input: "いいえ, ありません, 持っていません 等"
+          output: "なし"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "introductionLetter"
+    next_step: "（conditions で分岐）"
+    retry_failure: "end_failure"
+
+  - step_name: "内容確認"
+    tts_announcement: |
+      お問い合わせ内容をお話しください。内容を確認してから担当者が折り返しご連絡いたします。
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["問い合わせ内容テキスト"]
+      mapping:
+        - input: "音声認識結果"
+          output: "問い合わせ内容テキスト（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "inquiryContent"
+    next_step: "電話SMS選択"
+    retry_failure: "end_failure"
+
+  - step_name: "電話SMS選択"
+    tts_announcement: |
+      折り返しのご連絡はお電話を希望されますか。ショートメッセージを希望されますか。
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: ["電話", "SMS"]
+      mapping:
+        - input: "DTMF 1, 電話, お電話 等"
+          output: "電話"
+        - input: "DTMF 2, SMS, ショートメッセージ, メール 等"
+          output: "SMS"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "callbackMethod"
+    next_step: "合流_問い合わせ"
+    retry_failure: "end_failure"
+
+  - step_name: "最後の問い合わせ"
+    tts_announcement: "その他にお聞きしたいことはございますか。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["あり", "なし"]
+      mapping:
+        - input: "はい, あります, 質問があります 等"
+          output: "あり"
+        - input: "いいえ, ありません, 大丈夫です 等"
+          output: "なし"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "finalInquiry"
+    next_step: "終話分岐_用件1"
+    retry_failure: "end_failure"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: |
+      恐れ入りますが、電話番号を通知しておかけ直しください。
+      お電話ありがとうございました。
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外（acceptance_times 使用時）"
+    tts_announcement: |
+      お電話ありがとうございます。ただいまの時間は受付時間外です。
+      受付時間内におかけ直しください。お電話ありがとうございました。
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: |
+      申し訳ございません。ご回答を正しく聞き取ることができませんでした。
+      恐れ入りますが、おかけ直しください。お電話ありがとうございました。
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 転送関連 ---
+  - name: "END_転送失敗"
+    condition: "緊急 Blind Transfer 失敗（回線一杯）"
+    tts_announcement: |
+      大変申し訳ございません。有人電話番号の回線が埋まっており転送が出来ませんでした。
+      大変お手数ですが06-6708-7200へおかけ直しいただきますよう、お願いいたします。
+      お電話ありがとうございました。失礼いたします。
+    status: "9"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_転送失敗"
+
+  # --- 分娩・産後ケア系の即時終話 ---
+  - name: "END_分娩予約案内"
+    condition: "用件3=分娩予約"
+    tts_announcement: |
+      分娩予約は予約不要で来院にて受け付けています。
+      月曜から金曜の午前9時から午後4時、土曜は午前9時から正午にお越しください。
+      本人・ご家族どちらでも構いません。予約金として現金5万円のみご持参ください。
+      母子手帳や健康保険証などのお持ちいただく必要はありません。
+      それではご来院をお待ちしております。お気をつけてお越しくださいませ。
+      お電話ありがとうございました。それでは失礼いたします。
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_分娩予約案内"
+
+  - name: "END_紹介状なし案内"
+    condition: "無痛分娩=紹介状なし"
+    tts_announcement: |
+      紹介状をお持ちでない場合、お手数ですが紹介状をご用意のうえ、ご予約をお願いいたします。
+      お電話ありがとうございました。それでは失礼いたします。
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_紹介状なし案内"
+
+  - name: "END_産後ケア案内"
+    condition: "用件3=産後ケア"
+    tts_announcement: |
+      産後ケアは産後2か月までの方が対象です。
+      浜田病院のホームページより予約ができるため、そちらから予約をお願いいたします。
+      お電話ありがとうございました。それでは失礼いたします。
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_産後ケア案内"
+
+  # --- 個人情報聴取後の受付完了系（status / sms_flag は推測値・要確認）---
+  - name: "END_新規予約受付完了"
+    condition: "新規予約の全聴取完了"
+    tts_announcement: |
+      ご予約内容を承りました。改めて当院よりお電話またはショートメッセージにて
+      ご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_新規予約受付完了"
+
+  - name: "END_変更受付完了"
+    condition: "予約変更の全聴取完了"
+    tts_announcement: |
+      ご変更の内容を承りました。改めて当院よりお電話またはショートメッセージにて
+      ご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_変更受付完了"
+
+  - name: "END_キャンセル受付完了"
+    condition: "キャンセルの全聴取完了"
+    tts_announcement: |
+      キャンセルを承りました。確認のため当院よりご連絡をさせていただくことがございます。
+      あらかじめご了承くださいませ。お電話ありがとうございました。それでは失礼いたします。
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_キャンセル受付完了"
+
+  - name: "END_無痛受付完了"
+    condition: "無痛分娩 紹介状ありの全聴取完了"
+    tts_announcement: |
+      ご予約内容を承りました。改めて当院よりお電話またはショートメッセージにて
+      ご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_無痛受付完了"
+
+  - name: "END_問い合わせ受付完了"
+    condition: "その他問い合わせの全聴取完了"
+    tts_announcement: |
+      お問い合わせ内容を承りました。改めて担当者よりご連絡いたします。
+      お電話ありがとうございました。それでは失礼いたします。
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_問い合わせ受付完了"
+
+# smsFlag 分岐設計
+sms_flag_routing:
+  enabled: true
+  routing_keys: ["callbackMethod"]
+  patterns:
+    - condition: "callbackMethod=電話"
+      sms_flag: "0"
+      notes: "電話折返し希望時。SMS は送信しない（プレースホルダー扱い）"
+    - condition: "callbackMethod=SMS / または callbackMethod 未設定（予約系ルート）"
+      sms_flag: "1"
+      notes: "SMS 折返し / または通常の予約受付完了 SMS（テンプレ番号は要確認）"
+  # ★sms_flag の具体値（"1" / "2" / "3" 等のテンプレ番号割当）は元 PDF に未記載のため
+  #   confirmation_items で確認必須。本設計は暫定値（電話折返し=0、それ以外=1）。
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+  # raw.md / 元 PDF に FAQ 検索や HP 参照等の RAG 的要素の明示なし。
+  # 「最後の問い合わせ」hearing は独立した hearing として配置（RAG 不使用）。
+  # 将来の RAG 統合は別途要件として確認。
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "施設名挨拶"
+    announcement: "お電話ありがとうございます。浜田病院受付AI電話です。"
+
+  - module_name: "緊急性の判断"
+    purpose: "緊急性判定アナウンス"
+    announcement: |
+      陣痛・破水・出血・胎動が少ない・つわりがひどい・症状が急に重くなったなどの
+      緊急の状態ですか？
+
+  - module_name: "緊急転送_アナウンス"
+    purpose: "緊急転送直前の案内"
+    announcement: "緊急のご用件ですので有人電話へ転送いたします。このままお待ちください。"
+
+  - module_name: "用件1"
+    purpose: "用件①（3 択）"
+    announcement: |
+      本日のご用件を次の３つのうちからお選びください。
+      「１、診療の予約・変更」「２、分娩・産後ケア」「３、その他問い合わせ」
+
+  - module_name: "用件2"
+    purpose: "用件②（診察予約・変更系の 3 択）"
+    announcement: |
+      ご用件を次の３つのうちどちらでしょうか。
+      「１、新規予約」「２、日程の変更」「３、キャンセル」
+
+  - module_name: "用件3"
+    purpose: "用件③（分娩・産後ケア系の 3 択）"
+    announcement: |
+      ご用件を次の3つのうちどちらでしょうか。
+      「１、分娩予約」「２、無痛分娩」「３、産後ケア」
+
+  - module_name: "産科_婦人科確認"
+    purpose: "産科/婦人科分岐"
+    announcement: "診療を希望されるのは産科と婦人科どちらでしょうか。"
+
+  - module_name: "16週確認"
+    purpose: "妊娠週数確認"
+    announcement: "妊娠週数は16週を超えていますか。"
+
+  - module_name: "受診希望日_産科"
+    purpose: "受診希望日聴取（産科）"
+    announcement: "受診を希望される日程をお話しください。"
+
+  - module_name: "受診希望日_婦人科"
+    purpose: "受診希望日聴取（婦人科）"
+    announcement: "受診を希望される日程をお話しください。"
+
+  - module_name: "発熱確認"
+    purpose: "発熱有無確認"
+    announcement: |
+      現在発熱はありますか。ある場合、熱が下がってから24時間後の受診をお願いしております。
+
+  - module_name: "発熱案内_アナウンス"
+    purpose: "発熱ありの場合の繋ぎ"
+    announcement: "承知いたしました。それでは続けてお伺いします。"
+
+  - module_name: "合流_新規予約"
+    purpose: "新規予約ルートの個人情報チェーンへの繋ぎ"
+    announcement: "それではご予約に必要な情報をお伺いします。"
+
+  - module_name: "現在の予約日_変更"
+    purpose: "現在の予約日聴取（変更）"
+    announcement: "現在の診療予約日をお話しください。"
+
+  - module_name: "希望予約日_変更"
+    purpose: "希望日聴取（変更）"
+    announcement: "変更後の受診を希望される日程をお話しください。"
+
+  - module_name: "体調不良確認"
+    purpose: "変更理由が体調不良か確認"
+    announcement: "変更理由は体調不良ですか。"
+
+  - module_name: "合流_変更"
+    purpose: "変更ルートの個人情報チェーンへの繋ぎ"
+    announcement: "それでは変更内容を確認するための情報をお伺いします。"
+
+  - module_name: "現在の予約日_キャンセル"
+    purpose: "現在の予約日聴取（キャンセル）"
+    announcement: "現在の診療予約日をお話しください。"
+
+  - module_name: "キャンセル理由"
+    purpose: "キャンセル理由聴取"
+    announcement: "キャンセルを希望される理由をお話しください。"
+
+  - module_name: "合流_キャンセル"
+    purpose: "キャンセルルートの個人情報チェーンへの繋ぎ"
+    announcement: "それではキャンセルの確認のための情報をお伺いします。"
+
+  - module_name: "説明1_分娩"
+    purpose: "分娩予約案内（用件3=分娩予約のみ通る）"
+    announcement: |
+      分娩予約は予約不要で来院にて受け付けています。
+      月曜から金曜の午前9時から午後4時、土曜は午前9時から正午にお越しください。
+      本人・ご家族どちらでも構いません。予約金として現金5万円のみご持参ください。
+      母子手帳や健康保険証などのお持ちいただく必要はありません。
+
+  - module_name: "説明2_無痛"
+    purpose: "無痛分娩案内"
+    announcement: |
+      診察については、小川産婦人科の患者様は16週から20週の間に1回ご来院ください。
+      全員、34週6日までには必ず診察を受けていただく必要がありますので、
+      30週頃までにご予約をお取りいただくようお願いします。
+      無痛分娩は予約枠に限りがあり、枠が埋まっている場合はお受けできませんので、
+      まずはお早めにご来院ください。
+      初産婦の方は、当院での無痛分娩は出来かねます。
+      経産婦の方は、かかりつけ医からの紹介状をお持ちの上、早めに一度診察にお越しください。
+      38週の診察時に正式な分娩予約をお取りします。
+
+  - module_name: "紹介状確認"
+    purpose: "紹介状有無確認"
+    announcement: "紹介状はお持ちでしょうか。"
+
+  - module_name: "合流_無痛紹介状あり"
+    purpose: "無痛分娩紹介状ありルートの個人情報チェーンへの繋ぎ"
+    announcement: "ありがとうございます。それでは診察予約に必要な情報をお伺いします。"
+
+  - module_name: "説明3_ケア"
+    purpose: "産後ケア案内"
+    announcement: |
+      産後ケアは産後2か月までの方が対象です。
+      浜田病院のホームページより予約ができるため、そちらから予約をお願いいたします。
+
+  - module_name: "内容確認"
+    purpose: "問い合わせ内容聴取"
+    announcement: |
+      お問い合わせ内容をお話しください。
+      内容を確認してから担当者が折り返しご連絡いたします。
+
+  - module_name: "電話SMS選択"
+    purpose: "折返し方法選択"
+    announcement: |
+      折り返しのご連絡はお電話を希望されますか。
+      ショートメッセージを希望されますか。
+
+  - module_name: "合流_問い合わせ"
+    purpose: "問い合わせルートの個人情報チェーンへの繋ぎ"
+    announcement: "それでは折り返しのための情報をお伺いします。"
+
+  - module_name: "最後の問い合わせ"
+    purpose: "追加質問の有無確認"
+    announcement: "その他にお聞きしたいことはございますか。"
+
+  # --- 終話アナウンス ---
+  - module_name: "END_非通知"
+    purpose: "非通知着信"
+    announcement: |
+      恐れ入りますが、電話番号を通知しておかけ直しください。
+      お電話ありがとうございました。
+
+  - module_name: "END_時間外"
+    purpose: "受付時間外案内"
+    announcement: |
+      お電話ありがとうございます。ただいまの時間は受付時間外です。
+      受付時間内におかけ直しください。お電話ありがとうございました。
+
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ上限到達"
+    announcement: |
+      申し訳ございません。ご回答を正しく聞き取ることができませんでした。
+      恐れ入りますが、おかけ直しください。お電話ありがとうございました。
+
+  - module_name: "END_転送失敗"
+    purpose: "緊急 Blind Transfer 失敗"
+    announcement: |
+      大変申し訳ございません。有人電話番号の回線が埋まっており転送が出来ませんでした。
+      大変お手数ですが06-6708-7200へおかけ直しいただきますよう、お願いいたします。
+      お電話ありがとうございました。失礼いたします。
+
+  - module_name: "END_分娩予約案内"
+    purpose: "分娩予約案内（来院誘導のみ）"
+    announcement: |
+      分娩予約は予約不要で来院にて受け付けています。
+      月曜から金曜の午前9時から午後4時、土曜は午前9時から正午にお越しください。
+      本人・ご家族どちらでも構いません。予約金として現金5万円のみご持参ください。
+      母子手帳や健康保険証などのお持ちいただく必要はありません。
+      それではご来院をお待ちしております。お気をつけてお越しくださいませ。
+      お電話ありがとうございました。それでは失礼いたします。
+
+  - module_name: "END_紹介状なし案内"
+    purpose: "無痛分娩紹介状なし"
+    announcement: |
+      紹介状をお持ちでない場合、お手数ですが紹介状をご用意のうえ、ご予約をお願いいたします。
+      お電話ありがとうございました。それでは失礼いたします。
+
+  - module_name: "END_産後ケア案内"
+    purpose: "産後ケア HP 誘導"
+    announcement: |
+      産後ケアは産後2か月までの方が対象です。
+      浜田病院のホームページより予約ができるため、そちらから予約をお願いいたします。
+      お電話ありがとうございました。それでは失礼いたします。
+
+  - module_name: "END_新規予約受付完了"
+    purpose: "新規予約受付完了"
+    announcement: |
+      ご予約内容を承りました。改めて当院よりお電話またはショートメッセージにて
+      ご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+
+  - module_name: "END_変更受付完了"
+    purpose: "予約変更受付完了"
+    announcement: |
+      ご変更の内容を承りました。改めて当院よりお電話またはショートメッセージにて
+      ご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+
+  - module_name: "END_キャンセル受付完了"
+    purpose: "キャンセル受付完了"
+    announcement: |
+      キャンセルを承りました。確認のため当院よりご連絡をさせていただくことがございます。
+      あらかじめご了承くださいませ。お電話ありがとうございました。それでは失礼いたします。
+
+  - module_name: "END_無痛受付完了"
+    purpose: "無痛分娩紹介状あり受付完了"
+    announcement: |
+      ご予約内容を承りました。改めて当院よりお電話またはショートメッセージにて
+      ご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+
+  - module_name: "END_問い合わせ受付完了"
+    purpose: "その他問い合わせ受付完了"
+    announcement: |
+      お問い合わせ内容を承りました。改めて担当者よりご連絡いたします。
+      お電話ありがとうございました。それでは失礼いたします。
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "緊急性の判断"
+    words: |
+      陣痛 じんつう
+      破水 はすい
+      出血 しゅっけつ
+      胎動 たいどう
+      つわり つわり
+      緊急 きんきゅう
+
+  - step_name: "用件1"
+    words: |
+      診療 しんりょう
+      予約 よやく
+      変更 へんこう
+      キャンセル きゃんせる
+      分娩 ぶんべん
+      産後 さんご
+      ケア けあ
+      問い合わせ といあわせ
+      その他 そのた
+
+  - step_name: "用件2"
+    words: |
+      新規 しんき
+      予約 よやく
+      日程 にってい
+      変更 へんこう
+      キャンセル きゃんせる
+      取り消し とりけし
+
+  - step_name: "用件3"
+    words: |
+      分娩 ぶんべん
+      分娩予約 ぶんべんよやく
+      無痛 むつう
+      無痛分娩 むつうぶんべん
+      産後 さんご
+      産後ケア さんごけあ
+
+  - step_name: "産科_婦人科確認"
+    words: |
+      産科 さんか
+      婦人科 ふじんか
+      産婦人科 さんふじんか
+
+  - step_name: "16週確認"
+    words: |
+      週 しゅう
+      妊娠 にんしん
+      16週 じゅうろくしゅう
+      超えています こえています
+
+  - step_name: "発熱確認"
+    words: |
+      発熱 はつねつ
+      熱 ねつ
+      ある ある
+      ない ない
+
+  - step_name: "体調不良確認"
+    words: |
+      体調 たいちょう
+      体調不良 たいちょうふりょう
+      具合 ぐあい
+
+  - step_name: "紹介状確認"
+    words: |
+      紹介状 しょうかいじょう
+
+  - step_name: "電話SMS選択"
+    words: |
+      電話 でんわ
+      ショートメッセージ しょーとめっせーじ
+      SMS えすえむえす
+      メール めーる
+
+  # 日付系の聴取項目は和暦辞書 + month/day 辞書を別途設定（標準テンプレ）
+  - step_name: "受診希望日_産科"
+    words: |
+      （和暦辞書 + month辞書 + day辞書を設定）
+  - step_name: "受診希望日_婦人科"
+    words: |
+      （和暦辞書 + month辞書 + day辞書を設定）
+  - step_name: "現在の予約日_変更"
+    words: |
+      （和暦辞書 + month辞書 + day辞書を設定）
+  - step_name: "希望予約日_変更"
+    words: |
+      （和暦辞書 + month辞書 + day辞書を設定）
+  - step_name: "現在の予約日_キャンセル"
+    words: |
+      （和暦辞書 + month辞書 + day辞書を設定）
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "Pattern 1 新規作成案件。元資料: docs/reference/customer_docs/浜田病院_診療_raw.md (5/12修正依頼分) + 元 PDF (202649【診療】導入時説明資料_浜田病院御中.pdf)"
+  - "緊急性の判断を最優先分岐として配置（陣痛・破水・出血・胎動・つわり悪化等 → Blind Transfer to 06-6708-7200）"
+  - "用件①→用件②/③の階層分岐。classification は順次上書きされ、最終的に最も詳細な用件種別が残る"
+  - "個人情報サブフロー連鎖の順序は raw.md L34-L40 準拠: ID番号 → 患者名 → 生年月日 → 連絡先電話番号"
+  - "raw.md L76「ID番号」は診察券番号サブフロー（標準テンプレ）を流用。「わからない」許容の挙動は標準テンプレ仕様確認要"
+  - "復唱有無: ID番号(あり) / 患者名(なし) / 生年月日(あり) / 電話番号(あり、固定電話確認ロジック含む)"
+  - "分娩予約・産後ケアは聴取せず即時終話（来院案内・HP誘導のみ）"
+  - "無痛分娩は経産婦＋紹介状必須。紹介状なしは END_紹介状なし案内 で終話。紹介状ありは個人情報チェーンへ進み END_無痛受付完了 で終話"
+  - "予約金 5 万円・転送先 06-6708-7200・浜田病院 HP 等の施設固有数値・名詞は prompter で改変禁止（properties 側で固定文言として記述）"
+  - "終話の status 番号は元資料に未記載。本設計は status=1（受付完了）/2（案内系）/3（転送成功）/6（時間外）/9（転送失敗）の推測値で記載。確認事項あり"
+  - 'sms_flag のテンプレ番号割当（"1" / "2" / "3" 等）は元 PDF に未記載。本設計は暫定値（電話折返し=0、それ以外=1）。Dr.JOY 画面側 SMS テンプレ仕様で要確認'
+  - "SMS 追加項目（出産予定日 / 出産経験 / 帝王切開 or 普通分娩 / 住所 / 身長 / 体重 / 無痛分娩希望 / 女性医師希望）は AI 電話側で聴取せず、SMS で別途回収する設計（raw.md L112-120）。SMS 文言・送信タイミングは Dr.JOY 側設定"
+  - "16週確認の配置（産科 新規予約ルート vs 無痛分娩ルート）は raw.md 表崩れで曖昧。本設計は移管ノートの推測に従い産科ルートに配置。元 PDF フロー図で要確認"
+  - "「最後の問い合わせ」hearing の yes 時の挙動（用件①ループバック or 追加 hearing）は不明。暫定的に yes/no 両方とも終話分岐へ進める設計"
+  - "Dr.JOY 側設定事項: 営業時間スケジュール詳細（acceptance_times）、SMS 送信文面、認証設定（生年月日・診察券番号・電話番号の優先順位）、Dr.JOY 画面の表示設定"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  # === BLOCKER（フローJSON 生成に必須・暫定埋め込み済み・確認後に差し替え）===
+  - item: "office_id（Dr.JOY 管理画面で確認）"
+    resolved: false
+  - item: "対応電話番号（着信 ARS 番号 — Brekeke 設定時に確定）"
+    resolved: false
+  - item: "稼働時間（acceptance_times の business_hours — 月〜金 9-17 等。Dr.JOY 側設定でも可だが、フロー側でも基本設定必要）"
+    resolved: false
+  - item: "全終話パターンの status 番号確定（1=受付完了 / 2=代表案内 / 3=転送 / 6=時間外 / 9=転送失敗。元 PDF に明示なし。本設計は推測値）"
+    resolved: false
+  - item: "全終話パターンの sms_flag テンプレ番号確定（電話折返し=0 / その他=1 で暫定設定。Dr.JOY 画面 SMS テンプレ仕様で実テンプレ番号要確認）"
+    resolved: false
+  - item: "SMS 追加項目（出産予定日・出産経験・帝王切開/普通分娩・住所・身長・体重・無痛分娩希望・女性医師希望）の SMS テンプレ番号と送信タイミング"
+    resolved: false
+
+  # === NON-BLOCKER（暫定設計で動作可、確認推奨）===
+  - item: "16週確認の配置は産科 新規予約ルート（本設計）で正しいか、無痛分娩ルートに移すべきか元 PDF フロー図で確認"
+    resolved: false
+  - item: "「最後の問い合わせ」hearing で「あり」と回答された場合の挙動（用件①ループバック / 追加 hearing / そのまま終話）"
+    resolved: false
+  - item: "発熱確認で「あり」回答時の追加アナウンス文言（暫定: 「承知いたしました。それでは続けてお伺いします。」）"
+    resolved: false
+  - item: "各「合流_*」アナウンスの繋ぎ文言（暫定: 用件別の標準的な繋ぎ文言を properties で設定）"
+    resolved: false
+  - item: "ID番号（診察券番号）聴取で「わからない」と回答された場合の挙動（標準サブフローテンプレが「わからない」許容実装済みか）"
+    resolved: false
+  - item: "clinicalDepartment と department（産科/婦人科）を統合するか別フィールドとして残すか"
+    resolved: false
+  - item: "受付完了系終話（新規予約 / 変更 / キャンセル / 無痛 / 問い合わせ）の TTS 文言。本設計は標準的な「改めてご連絡」テンプレ。施設固有の言い回しがあれば反映"
+    resolved: false
+  - item: "産科 16週未満 / 16週以降での後続フロー差異（本設計は同じ分岐先。週数で対応を変える必要があれば設計修正）"
+    resolved: false
+  - item: "「体調不良か」回答後の追加処理（はい=体調不良時の追加案内 / 緊急性再判定 等）の有無"
+    resolved: false
+  - item: "緊急 Blind Transfer の timeout 設定値（標準 30000ms で問題ないか）"
+    resolved: false
+  - item: "対象環境（demo / prod）の最終確認"
+    resolved: false

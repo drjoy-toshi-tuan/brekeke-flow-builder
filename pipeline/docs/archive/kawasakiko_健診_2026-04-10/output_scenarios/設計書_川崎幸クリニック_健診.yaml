@@ -1,0 +1,1062 @@
+# 設計書: 川崎幸クリニック 健診
+# 生成元: @director エージェント
+# 生成日: 2026/04/10
+# 確認レポート: docs/designs/確認レポート_川崎幸クリニック_健診_20260410.md
+# 入力資料: docs/migration/gen2_川崎幸クリニック_健診.md（本番20260323版 + 旧版20251218版）
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "川崎幸クリニック"
+  group_name: "川崎幸クリニック"
+  flow_name: "川崎幸クリニック$健診_20260410"
+  target_facility: "川崎幸クリニック"
+  office_id: "TODO_要確認"
+  phone_number: "044-541-5210"
+  business_hours: "祝日除く月〜金 8:30〜17:00、土 8:30〜12:30"
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "demo"
+
+# --- セクション2: フロー構成 ---
+# 個人情報聴取は用件確認の前に実施（Gen2順序を踏襲）。
+# 全サブフローは return 型（終話チェーンはメインフロー側に配置）。
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "川崎幸クリニック$健診_20260410"
+      role: "main"
+      description: "冒頭チェーン → 個人情報4サブフロー → 用件4択 → 用件別聴取 → RAG → 終話ルーティング"
+  subflows:
+    - name: "川崎幸クリニック$氏名聴取_20260410"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9準拠。静的JSONコピー"
+    - name: "川崎幸クリニック$生年月日聴取_20260410"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9準拠。静的JSONコピー。復唱あり版を使用"
+    - name: "川崎幸クリニック$電話番号聴取_20260410"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9/10準拠。静的JSONコピー。復唱あり版。returnでメインフローに戻り、メインフロー側で携帯/固定の終話TTS分岐を行う。電話番号聴取3回失敗時はサブフロー内から失敗コードで返却→メインフロー側でEND_代表案内へ分岐"
+    - name: "川崎幸クリニック$診察券番号聴取_20260410"
+      target: "診察券番号聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9準拠。静的JSONコピー。「分からない」分岐あり"
+    - name: "川崎幸クリニック$RAG検索_20260410"
+      target: "RAG検索"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 16準拠。パターン2: 全終話前に配置。静的JSONコピー"
+
+# --- セクション3: フローの目的 ---
+purpose: >
+  川崎幸クリニック健診予約専用ダイヤルのAI電話受付。
+  受診者名・生年月日・連絡先電話番号・診察券番号を聴取した後、
+  用件4択（予約/変更/キャンセル/問い合わせ）に分岐。
+  予約ルートは更に健診種類3択（川崎市/健保組合/その他）に分岐し種類別に聴取。
+  全ルート終話前にFAQ対応（RAGサブフロー）を実施。
+  終話TTSは用件 x 電話種別（携帯/固定）で分岐し、川崎市予約のみ特定健診受診券案内を追加。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "川崎幸クリニック$健診_20260410"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → 完了フラグ_非通知(status=2,smsFlag=-1) → END_非通知(TTS) → 切断
+            └─ 通常/携帯/固定 → acceptance_times
+                ├─ 時間外/ERROR/TIMEOUT → 完了フラグ_時間外(status=6,smsFlag=-1) → END_時間外(TTS) → 切断
+                └─ 受付可(true) → 冒頭_アナウンス(TTS)
+                    → ジャンプ_氏名聴取(Custom Jump to Flow) → [返却:.*→次へ]
+                    → ジャンプ_生年月日聴取(Custom Jump to Flow) → [返却:.*→次へ]
+                    → ジャンプ_電話番号聴取(Custom Jump to Flow)
+                        ├─ 返却:1(携帯)/2(その他) → ジャンプ_診察券番号聴取へ
+                        └─ 返却:失敗 → 完了フラグ_代表案内(status=2,smsFlag=-1) → END_代表案内(TTS) → 切断
+                    → ジャンプ_診察券番号聴取(Custom Jump to Flow) → [返却:.*→次へ]
+                    → 用件_選択(TTS)
+                    → 入力_用件(DTMF AmiVoice STT, max_dtmf_length=1)
+                    → OpenAI_用件(generate_by_OpenAI)
+                    → リトライ_用件(Retry: No more→完了フラグ_聴取失敗)
+                        ├─ 予約 → 予約_健診種類(TTS)
+                        │    → 入力_予約_健診種類(DTMF, max_dtmf_length=1)
+                        │    → OpenAI_予約_健診種類 → リトライ_予約_健診種類(No more→その他_希望検査)
+                        │       ├─ 川崎市 → 川崎市_受診内容(TTS)
+                        │       │    → 入力_川崎市_受診内容(STT) → OpenAI_川崎市_受診内容 → リトライ_川崎市_受診内容
+                        │       │    → 共通_人数受診時期(TTS)
+                        │       │    → 入力_共通_人数受診時期(STT) → OpenAI_共通_人数受診時期 → リトライ_共通_人数受診時期
+                        │       │    → ジャンプ_RAG
+                        │       ├─ 健保組合 → 健保_会社名(TTS)
+                        │       │    → 入力_健保_会社名(STT) → OpenAI_健保_会社名 → リトライ_健保_会社名
+                        │       │    → 健保_コース(TTS)
+                        │       │    → 入力_健保_コース(STT) → OpenAI_健保_コース → リトライ_健保_コース
+                        │       │    → 健保_オプション(TTS)
+                        │       │    → 入力_健保_オプション(STT) → OpenAI_健保_オプション → リトライ_健保_オプション
+                        │       │    → 共通_人数受診時期(TTS) → ... → ジャンプ_RAG
+                        │       └─ その他 → その他_希望検査(TTS)
+                        │            → 入力_その他_希望検査(STT) → OpenAI_その他_希望検査 → リトライ_その他_希望検査
+                        │            → ジャンプ_RAG
+                        ├─ 変更 → 変更_予約日(TTS)
+                        │    → 入力_変更_予約日(STT) → OpenAI_変更_予約日 → リトライ_変更_予約日
+                        │    → 変更_変更項目(TTS)
+                        │    → 入力_変更_変更項目(STT) → OpenAI_変更_変更項目 → リトライ_変更_変更項目
+                        │    → ジャンプ_RAG
+                        ├─ キャンセル → キャンセル_予約日(TTS)
+                        │    → 入力_キャンセル_予約日(STT) → OpenAI_キャンセル_予約日 → リトライ_キャンセル_予約日
+                        │    → キャンセル_受診内容(TTS)
+                        │    → 入力_キャンセル_受診内容(STT) → OpenAI_キャンセル_受診内容 → リトライ_キャンセル_受診内容
+                        │    → ジャンプ_RAG
+                        └─ 問い合わせ → 問い合わせ_確認内容(TTS)
+                             → 入力_問い合わせ_確認内容(STT) → OpenAI_問い合わせ_確認内容 → リトライ_問い合わせ_確認内容
+                             → ジャンプ_RAG
+
+                    [RAGサブフロー返却後]
+                    → 終話ルーティング
+                        ├─ キャンセル → 完了フラグ_キャンセル(status=1,smsFlag=2) → END_キャンセル(TTS) → 切断
+                        ├─ 予約 x 川崎市 x 携帯 → 完了フラグ(status=1,smsFlag=1) → END_予約_川崎_携帯(TTS) → 切断
+                        ├─ 予約 x 川崎市 x 固定 → 完了フラグ(status=1,smsFlag=1) → END_予約_川崎_固定(TTS) → 切断
+                        ├─ 予約 x 健保/その他 x 携帯 → 完了フラグ(status=1,smsFlag=1) → END_予約_健保_携帯(TTS) → 切断
+                        ├─ 予約 x 健保/その他 x 固定 → 完了フラグ(status=1,smsFlag=1) → END_予約_健保_固定(TTS) → 切断
+                        ├─ 変更 x 携帯 → 完了フラグ(status=1,smsFlag=1) → END_変更_携帯(TTS) → 切断
+                        ├─ 変更 x 固定 → 完了フラグ(status=1,smsFlag=1) → END_変更_固定(TTS) → 切断
+                        ├─ 問い合わせ x 携帯 → 完了フラグ(status=1,smsFlag=1) → END_問合せ_携帯(TTS) → 切断
+                        └─ 問い合わせ x 固定 → 完了フラグ(status=1,smsFlag=1) → END_問合せ_固定(TTS) → 切断
+
+      ─── 終話ルーティング実装方針 ───
+      1. ContextMatchRouter(classification)
+         ├─ キャンセル → 直接 END_キャンセル チェーン
+         ├─ 予約 → ContextMatchRouter(OpenAI_予約_健診種類)
+         │    ├─ 川崎市 → ContextMatchRouter(phoneType) → 携帯/固定
+         │    └─ 健保組合/その他/default → ContextMatchRouter(phoneType) → 携帯/固定
+         ├─ 変更 → ContextMatchRouter(phoneType) → 携帯/固定
+         └─ 問い合わせ/default → ContextMatchRouter(phoneType) → 携帯/固定
+      ※ phoneTypeは電話番号聴取サブフロー内のsaveContext2DBで保存済み
+
+      ─── リトライ失敗時 ───
+      用件リトライ超過 → 完了フラグ_聴取失敗(status=3,smsFlag=-1) → END_聴取失敗(TTS) → 切断
+      健診種類リトライ超過 → その他_希望検査へスキップ（Gen2デフォルト: その他にフォールバック）
+      その他聴取項目リトライ超過 → 次ステップへスキップ（Gen2準拠: 不明確でも次へ）
+    notes: |
+      冒頭チェーン: wait → saveContextModel2DB → incoming-classifier → acceptance_times → 冒頭_アナウンス
+      個人情報は用件確認の前に聴取（Gen2順序踏襲）。全サブフロー return 型。
+      RAGはパターン2: 全ルート終話前に「そのほかに何かお問い合わせはございますか？」
+      共通_人数受診時期は川崎市/健保組合の2ルートで共用（同一TTS・同一保存先・同一Retry先）。
+      変更_予約日とキャンセル_予約日は別モジュール（Retry先が異なるため）。
+
+  - flow_name: "川崎幸クリニック$氏名聴取_20260410"
+    diagram: |
+      CLAUDE.md Rule 9: docs/reference/bivr/samples/json/氏名聴取.json を完全コピー。
+      フロー名プレフィックスのみ「川崎幸クリニック$」に置換。構造変更不可。
+    notes: "静的JSONコピー。Rule 9/11準拠"
+
+  - flow_name: "川崎幸クリニック$生年月日聴取_20260410"
+    diagram: |
+      CLAUDE.md Rule 9: docs/reference/bivr/samples/json/生年月日聴取_復唱あり.json を完全コピー。
+      フロー名プレフィックスのみ「川崎幸クリニック$」に置換。構造変更不可。
+    notes: "静的JSONコピー。復唱あり版。Rule 9/11準拠"
+
+  - flow_name: "川崎幸クリニック$電話番号聴取_20260410"
+    diagram: |
+      CLAUDE.md Rule 9/10: docs/reference/bivr/samples/json/電話番号聴取_復唱あり.json を完全コピー。
+      フロー名プレフィックスのみ「川崎幸クリニック$」に置換。構造変更不可。
+      サブフロー内でphoneType（携帯/その他）をsaveContext2DBで保存済み。
+      3回失敗時は失敗コードで返却→メインフロー側でEND_代表案内へ分岐。
+    notes: "静的JSONコピー。復唱あり版。Rule 9/10/11準拠。termination=return"
+
+  - flow_name: "川崎幸クリニック$診察券番号聴取_20260410"
+    diagram: |
+      CLAUDE.md Rule 9: docs/reference/bivr/samples/json/診察券番号聴取.json を完全コピー。
+      フロー名プレフィックスのみ「川崎幸クリニック$」に置換。構造変更不可。
+    notes: "静的JSONコピー。「分からない」分岐あり。Rule 9/11準拠"
+
+  - flow_name: "川崎幸クリニック$RAG検索_20260410"
+    diagram: |
+      CLAUDE.md Rule 16: docs/reference/bivr/samples/json/RAG検索.json を完全コピー。
+      フロー名プレフィックスのみ「川崎幸クリニック$」に置換。構造変更不可。
+      初回TTS（プロパティ設定）: 「そのほかに何かお問い合わせはございますか？」
+      ループTTS（プロパティ設定）: 「その他に何かご質問はございますか？ない場合は「ありません」のようにお話しください。」
+    notes: "静的JSONコピー。パターン2。TTS文言はプロパティで設定（JSON内は空文字）。Rule 16準拠"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+# endpoint / smsFlag は saveContextModel2DB に含めない（saveCompletionFlag2db パラメータ）。
+# Preferred_date / question は不採用（確認レポート N-3, N-4 参照）。
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "予約"
+      - id: "2"
+        order: "2"
+        value: "変更"
+      - id: "3"
+        order: "3"
+        value: "キャンセル"
+      - id: "4"
+        order: "4"
+        value: "問い合わせ"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "用件区分。DTMF 1=予約, 2=変更, 3=キャンセル, 4=問い合わせ"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "受診者名。氏名聴取サブフローで聴取"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "ID番号/登録番号。診察券番号聴取サブフローで聴取。「分からない」の場合は空"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "受診者の生年月日。生年月日聴取サブフローで聴取"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "電話番号聴取サブフローで聴取"
+
+  - context_name: "menu"
+    context_name_jp: "健診種類"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約ルートのみ。川崎市/健保組合/その他。終話TTS分岐キーとしても使用"
+
+  - context_name: "companyname"
+    context_name_jp: "健保/仲介会社名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約-健保組合ルートのみ"
+
+  - context_name: "option"
+    context_name_jp: "オプション検査"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約-健保組合ルートのみ。追加オプション名（複数は読点区切り）。「ない」の場合は空"
+
+  - context_name: "reservationDate"
+    context_name_jp: "予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "変更/キャンセルルートのみ。現在の予約日（yyyy-MM-dd形式）"
+
+  - context_name: "reason"
+    context_name_jp: "聴取内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "多目的フィールド。予約-川崎市:受診内容 / 予約-健保:コース名 / 予約-その他:希望検査 / 変更:変更項目 / キャンセル:受診内容 / 問い合わせ:確認内容"
+
+  - context_name: "detail"
+    context_name_jp: "人数/受診時期"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約-川崎市/健保組合ルートのみ。受診希望日や人数のフリーテキスト"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "聴取失敗"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "1=未処理(正常完了) 2=代表案内(電話番号3回失敗/非通知) 3=聴取失敗(用件リトライ超過) 6=時間外"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+# --- セクション6: 聴取項目一覧 ---
+# サブフロー内の聴取項目（氏名・生年月日・電話番号・診察券番号）は静的JSONコピーのため省略。
+# 以下はメインフロー内の聴取項目のみ。
+hearing_items:
+  - order: 1
+    name: "用件確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "予約"
+      - "変更"
+      - "キャンセル"
+      - "問い合わせ"
+    notes: "DTMF 1=予約, 2=変更, 3=キャンセル, 4=問い合わせ。分類不可時はNO_RESULT。リトライ超過→END_聴取失敗"
+
+  - order: 2
+    name: "予約_健診種類"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: false
+    save_to: "menu"
+    openai_processing: "classify"
+    output_format: "label"
+    output_labels:
+      - "川崎市"
+      - "健保組合"
+      - "その他"
+    notes: "DTMF 1=川崎市, 2=健保組合, 3=その他。予約ルートのみ。リトライ超過→その他にフォールバック"
+
+  - order: 3
+    name: "川崎市_受診内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "予約-川崎市ルート。特定健診/がん検診/オプション。フリーテキスト保存。スキップ可"
+
+  - order: 4
+    name: "共通_人数受診時期"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "detail"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "予約-川崎市/健保組合ルート共用。受診希望日・人数。「決まっていない」も許容。スキップ可"
+
+  - order: 5
+    name: "健保_会社名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "companyname"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "予約-健保組合ルート。健保組合名または仲介会社名。スキップ可"
+
+  - order: 6
+    name: "健保_コース"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "予約-健保組合ルート。受診希望コース名。スキップ可"
+
+  - order: 7
+    name: "健保_オプション"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "option"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "予約-健保組合ルート。追加オプション検査名。「ない」の場合は空保存。スキップ可"
+
+  - order: 8
+    name: "その他_希望検査"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "予約-その他ルート。希望検査内容。スキップ可"
+
+  - order: 9
+    name: "変更_予約日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "convert"
+    output_format: "date_text"
+    output_labels: []
+    notes: "変更ルート。現在の予約日（yyyy-MM-dd形式に変換）。「分からない」も許容。スキップ可"
+
+  - order: 10
+    name: "変更_変更項目"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "変更ルート。変更希望内容。スキップ可"
+
+  - order: 11
+    name: "キャンセル_予約日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "convert"
+    output_format: "date_text"
+    output_labels: []
+    notes: "キャンセルルート。現在の予約日。「分からない」も許容。スキップ可。変更_予約日とは別モジュール（Retry先が異なる）"
+
+  - order: 12
+    name: "キャンセル_受診内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "キャンセルルート。受診内容。スキップ可"
+
+  - order: 13
+    name: "問い合わせ_確認内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "問い合わせルート。問い合わせ内容。スキップ可"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "用件確認"
+    tts_announcement: "ご用件を、次の4つのうちの、いずれかでお話しください。予約を取る場合は1、予約を変更する場合は2、予約をキャンセルする場合は3、その他お問い合わせは4、それでは、お話しください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "予約"
+        - "変更"
+        - "キャンセル"
+        - "問い合わせ"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「予約」「薬」「集約」を含む"
+          output: "予約"
+        - input: "DTMF 2 または「変更」「取り直し」「変えたい」を含む"
+          output: "変更"
+        - input: "DTMF 3 または「キャンセル」「やめる」「取り消し」を含む"
+          output: "キャンセル"
+        - input: "DTMF 4 または「問い合わせ」「確認」「質問」を含む"
+          output: "問い合わせ"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "classification"
+    next_step: "予約→予約_健診種類 / 変更→変更_予約日 / キャンセル→キャンセル_予約日 / 問い合わせ→問い合わせ_確認内容"
+    retry_failure: "end_failure"
+
+  - step_name: "予約_健診種類"
+    tts_announcement: "今回受診を希望される健診の種類を、以下の3つのうちいずれかでお話しください。川崎市の健診の方は1、健康保険組合の健診の方は2、その他の健診の方は3。それでは、お話しください。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "川崎市"
+        - "健保組合"
+        - "その他"
+        - "NO_RESULT"
+      mapping:
+        - input: "DTMF 1 または「川崎市」「市の健診」「特定健診」を含む"
+          output: "川崎市"
+        - input: "DTMF 2 または「健保」「健康保険」「組合」「会社」を含む"
+          output: "健保組合"
+        - input: "DTMF 3 または「その他」「ドック」「人間ドック」「雇用」を含む"
+          output: "その他"
+      no_result_condition: "上記いずれにも該当しない"
+    save_to: "menu"
+    next_step: "川崎市→川崎市_受診内容 / 健保組合→健保_会社名 / その他→その他_希望検査"
+    retry_failure: "skip"
+
+  - step_name: "川崎市_受診内容"
+    tts_announcement: "特定健診か、市のがん検診か、また、オプションがある場合は項目名をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "reason"
+    next_step: "共通_人数受診時期"
+    retry_failure: "skip"
+
+  - step_name: "共通_人数受診時期"
+    tts_announcement: "それでは、受診を希望されている日や、人数をお話しください。決まっていない場合は、決まっていないとお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "detail"
+    next_step: "ジャンプ_RAG"
+    retry_failure: "skip"
+
+  - step_name: "健保_会社名"
+    tts_announcement: "健保組合名、または仲介会社名をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "companyname"
+    next_step: "健保_コース"
+    retry_failure: "skip"
+
+  - step_name: "健保_コース"
+    tts_announcement: "それでは、受診を希望されるコースや内容をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "reason"
+    next_step: "健保_オプション"
+    retry_failure: "skip"
+
+  - step_name: "健保_オプション"
+    tts_announcement: "オプション検査を追加される方は、検査名をお話しください。追加されない方は、ないとお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "音声認識結果（「ない」も含む）"
+          output: "フリーテキスト（そのまま保存。「ない」の場合は空文字）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "option"
+    next_step: "共通_人数受診時期"
+    retry_failure: "skip"
+
+  - step_name: "その他_希望検査"
+    tts_announcement: "今回希望される検査内容をお伝えください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "reason"
+    next_step: "ジャンプ_RAG"
+    retry_failure: "skip"
+
+  - step_name: "変更_予約日"
+    tts_announcement: "それでは、現在の予約日を4月1日のように日付でお話しください。わからない場合は、分からないとお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "日付テキスト（yyyy-MM-dd形式）"
+        - "分からない"
+      mapping:
+        - input: "日付として認識できる発話"
+          output: "yyyy-MM-dd形式に変換"
+        - input: "「分からない」「不明」等"
+          output: "分からない"
+      no_result_condition: "日付として不正かつ「分からない」でもない"
+    save_to: "reservationDate"
+    next_step: "変更_変更項目"
+    retry_failure: "skip"
+
+  - step_name: "変更_変更項目"
+    tts_announcement: "変更希望の内容をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "reason"
+    next_step: "ジャンプ_RAG"
+    retry_failure: "skip"
+
+  - step_name: "キャンセル_予約日"
+    tts_announcement: "それでは、現在の予約日を4月1日のように日付でお話しください。わからない場合は、分からないとお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "日付テキスト（yyyy-MM-dd形式）"
+        - "分からない"
+      mapping:
+        - input: "日付として認識できる発話"
+          output: "yyyy-MM-dd形式に変換"
+        - input: "「分からない」「不明」等"
+          output: "分からない"
+      no_result_condition: "日付として不正かつ「分からない」でもない"
+    save_to: "reservationDate"
+    next_step: "キャンセル_受診内容"
+    retry_failure: "skip"
+
+  - step_name: "キャンセル_受診内容"
+    tts_announcement: "それでは、受診内容をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "reason"
+    next_step: "ジャンプ_RAG"
+    retry_failure: "skip"
+
+  - step_name: "問い合わせ_確認内容"
+    tts_announcement: "お問い合わせの内容をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "フリーテキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "フリーテキスト（そのまま保存）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "reason"
+    next_step: "ジャンプ_RAG"
+    retry_failure: "skip"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須） ---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "用件リトライ上限到達"
+    tts_announcement: "申し訳ございません。こちらのお電話で回答ができませんので別途ご連絡させていただきます。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  - name: "END_代表案内"
+    condition: "電話番号聴取3回失敗（電話番号サブフロー失敗返却時）"
+    tts_announcement: "申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、祝日を除く、月曜から金曜の8時30分から17時00分、土曜の8時30分から12時30分に、健診センターへおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますのでメモをご準備ください。電話番号は044-541-5210、です。繰り返します。電話番号は044-541-5210、です。繰り返します。電話番号は044-541-5210、です。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_代表案内"
+
+  # --- 正常系: キャンセル（電話種別で分岐しない） ---
+  - name: "END_キャンセル"
+    condition: "classification=キャンセル（電話種別不問）"
+    tts_announcement: "予約キャンセルの申し込みを受付いたしました。必要がある場合のみ、担当者よりご連絡させていただきます。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "2"
+    completion_flag_name: "完了フラグ_キャンセル"
+
+  # --- 正常系: 予約-川崎市 ---
+  - name: "END_予約_川崎_携帯"
+    condition: "classification=予約 かつ menu=川崎市 かつ phoneType=携帯"
+    tts_announcement: "予約の申し込みを受付いたしました。日曜、祝日を除く、翌営業日以内に、担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。特定健診受診の方には、後ほど受診券に記載の、自己負担金額について確認させていただきます。受診券に印字されている自己負担金額の欄に無料の文字の横にアスタリスクマークが印字されているかどうかをご確認の上お待ちください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約_川崎_携帯"
+
+  - name: "END_予約_川崎_固定"
+    condition: "classification=予約 かつ menu=川崎市 かつ phoneType=その他"
+    tts_announcement: "予約の申し込みを受付いたしました。日曜、祝日を除く、翌営業日以内に、担当者から折り返し電話にてご連絡いたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。特定健診受診の方には、後ほど受診券に記載の、自己負担金額について確認させていただきます。受診券に印字されている、自己負担金額の欄に無料、と記載があるか、または無料とアスタリスクマークのどちらが記載されているかをご確認の上お待ちください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約_川崎_固定"
+
+  # --- 正常系: 予約-健保組合/その他 ---
+  - name: "END_予約_健保_携帯"
+    condition: "classification=予約 かつ menu=健保組合またはその他 かつ phoneType=携帯"
+    tts_announcement: "予約についてのご要望を承りました。日曜、祝日を除く、翌営業日以内に、担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約_健保_携帯"
+
+  - name: "END_予約_健保_固定"
+    condition: "classification=予約 かつ menu=健保組合またはその他 かつ phoneType=その他"
+    tts_announcement: "予約の申し込みを受付いたしました。日曜、祝日を除く、翌営業日以内に、担当者から折り返し電話にてご連絡いたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約_健保_固定"
+
+  # --- 正常系: 変更 ---
+  - name: "END_変更_携帯"
+    condition: "classification=変更 かつ phoneType=携帯"
+    tts_announcement: "予約変更についてのご要望を承りました。日曜、祝日を除く、翌営業日以内に、担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_変更_携帯"
+
+  - name: "END_変更_固定"
+    condition: "classification=変更 かつ phoneType=その他"
+    tts_announcement: "予約変更の申し込みを受付いたしました。日曜、祝日を除く、翌営業日以内に、担当者から折り返し電話にてご連絡いたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_変更_固定"
+
+  # --- 正常系: 問い合わせ ---
+  - name: "END_問合せ_携帯"
+    condition: "classification=問い合わせ かつ phoneType=携帯"
+    tts_announcement: "予約確認についてのご要望を承りました。日曜、祝日を除く、翌営業日以内に、担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_問合せ_携帯"
+
+  - name: "END_問合せ_固定"
+    condition: "classification=問い合わせ かつ phoneType=その他"
+    tts_announcement: "予約確認の申し込みを受付いたしました。日曜、祝日を除く、翌営業日以内に、担当者から折り返し電話にてご連絡いたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_問合せ_固定"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: true
+  routing_keys: ["classification"]
+  patterns:
+    - condition: "キャンセル"
+      sms_flag: "2"
+      notes: "キャンセル完了時のみ smsFlag=2"
+    - condition: "予約/変更/問い合わせ（全正常終話）"
+      sms_flag: "1"
+      notes: "キャンセル以外の正常終話は全て smsFlag=1"
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "2"
+  inquiry_insertion_point: ""
+  pre_termination: true
+  # パターン2: 全ルートの終話前に「そのほかに何かお問い合わせはございますか？」RAGサブフローを配置。
+  # Gen2の「最後の問い合わせ」（全ルート合流点）をRAGサブフローで代替。
+  # Gen2→Gen3デフォルトはパターン3だが、本フローでは全ルートが「最後の問い合わせ」に合流する構造のため、
+  # パターン2（全終話前のみ）が適切（確認レポート N-5 参照）。
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  # --- 冒頭チェーン ---
+  - module_name: "冒頭_アナウンス"
+    purpose: "施設案内"
+    announcement: "お電話ありがとうございます。川崎幸クリニックの、健診予約専用ダイヤルです。"
+
+  # --- 用件確認 ---
+  - module_name: "用件_選択"
+    purpose: "用件DTMF案内"
+    announcement: "ご用件を、次の4つのうちの、いずれかでお話しください。予約を取る場合は1、予約を変更する場合は2、予約をキャンセルする場合は3、その他お問い合わせは4、それでは、お話しください。"
+
+  # --- 予約ルート ---
+  - module_name: "予約_健診種類"
+    purpose: "健診種類DTMF案内"
+    announcement: "今回受診を希望される健診の種類を、以下の3つのうちいずれかでお話しください。川崎市の健診の方は1、健康保険組合の健診の方は2、その他の健診の方は3。それでは、お話しください。"
+
+  - module_name: "川崎市_受診内容"
+    purpose: "川崎市受診内容聴取"
+    announcement: "特定健診か、市のがん検診か、また、オプションがある場合は項目名をお話しください。"
+
+  - module_name: "共通_人数受診時期"
+    purpose: "人数受診時期聴取（川崎市/健保共用）"
+    announcement: "それでは、受診を希望されている日や、人数をお話しください。決まっていない場合は、決まっていないとお話しください。"
+
+  - module_name: "健保_会社名"
+    purpose: "健保組合名聴取"
+    announcement: "健保組合名、または仲介会社名をお話しください。"
+
+  - module_name: "健保_コース"
+    purpose: "受診希望コース聴取"
+    announcement: "それでは、受診を希望されるコースや内容をお話しください。"
+
+  - module_name: "健保_オプション"
+    purpose: "オプション検査聴取"
+    announcement: "オプション検査を追加される方は、検査名をお話しください。追加されない方は、ないとお話しください。"
+
+  - module_name: "その他_希望検査"
+    purpose: "希望検査聴取"
+    announcement: "今回希望される検査内容をお伝えください。"
+
+  # --- 変更ルート ---
+  - module_name: "変更_予約日"
+    purpose: "変更対象予約日聴取"
+    announcement: "それでは、現在の予約日を4月1日のように日付でお話しください。わからない場合は、分からないとお話しください。"
+
+  - module_name: "変更_変更項目"
+    purpose: "変更内容聴取"
+    announcement: "変更希望の内容をお話しください。"
+
+  # --- キャンセルルート ---
+  - module_name: "キャンセル_予約日"
+    purpose: "キャンセル対象予約日聴取"
+    announcement: "それでは、現在の予約日を4月1日のように日付でお話しください。わからない場合は、分からないとお話しください。"
+
+  - module_name: "キャンセル_受診内容"
+    purpose: "キャンセル対象受診内容聴取"
+    announcement: "それでは、受診内容をお話しください。"
+
+  # --- 問い合わせルート ---
+  - module_name: "問い合わせ_確認内容"
+    purpose: "問い合わせ内容聴取"
+    announcement: "お問い合わせの内容をお話しください。"
+
+  # --- 異常系終話 ---
+  - module_name: "END_非通知"
+    purpose: "非通知案内"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_時間外"
+    purpose: "時間外案内"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "用件リトライ超過"
+    announcement: "申し訳ございません。こちらのお電話で回答ができませんので別途ご連絡させていただきます。お電話ありがとうございました。"
+
+  - module_name: "END_代表案内"
+    purpose: "電話番号聴取失敗→健診センター直通案内"
+    announcement: "申し訳ございません。うまく聞き取ることができませんでした。恐れ入りますが、祝日を除く、月曜から金曜の8時30分から17時00分、土曜の8時30分から12時30分に、健診センターへおかけなおしください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますのでメモをご準備ください。電話番号は044-541-5210、です。繰り返します。電話番号は044-541-5210、です。繰り返します。電話番号は044-541-5210、です。それでは失礼いたします。"
+
+  # --- 正常系終話 ---
+  - module_name: "END_キャンセル"
+    purpose: "キャンセル完了"
+    announcement: "予約キャンセルの申し込みを受付いたしました。必要がある場合のみ、担当者よりご連絡させていただきます。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_予約_川崎_携帯"
+    purpose: "予約完了（川崎市/携帯）"
+    announcement: "予約の申し込みを受付いたしました。日曜、祝日を除く、翌営業日以内に、担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。特定健診受診の方には、後ほど受診券に記載の、自己負担金額について確認させていただきます。受診券に印字されている自己負担金額の欄に無料の文字の横にアスタリスクマークが印字されているかどうかをご確認の上お待ちください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_予約_川崎_固定"
+    purpose: "予約完了（川崎市/固定）"
+    announcement: "予約の申し込みを受付いたしました。日曜、祝日を除く、翌営業日以内に、担当者から折り返し電話にてご連絡いたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。特定健診受診の方には、後ほど受診券に記載の、自己負担金額について確認させていただきます。受診券に印字されている、自己負担金額の欄に無料、と記載があるか、または無料とアスタリスクマークのどちらが記載されているかをご確認の上お待ちください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_予約_健保_携帯"
+    purpose: "予約完了（健保/その他/携帯）"
+    announcement: "予約についてのご要望を承りました。日曜、祝日を除く、翌営業日以内に、担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_予約_健保_固定"
+    purpose: "予約完了（健保/その他/固定）"
+    announcement: "予約の申し込みを受付いたしました。日曜、祝日を除く、翌営業日以内に、担当者から折り返し電話にてご連絡いたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_変更_携帯"
+    purpose: "変更完了（携帯）"
+    announcement: "予約変更についてのご要望を承りました。日曜、祝日を除く、翌営業日以内に、担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_変更_固定"
+    purpose: "変更完了（固定）"
+    announcement: "予約変更の申し込みを受付いたしました。日曜、祝日を除く、翌営業日以内に、担当者から折り返し電話にてご連絡いたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_問合せ_携帯"
+    purpose: "問い合わせ完了（携帯）"
+    announcement: "予約確認についてのご要望を承りました。日曜、祝日を除く、翌営業日以内に、担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_問合せ_固定"
+    purpose: "問い合わせ完了（固定）"
+    announcement: "予約確認の申し込みを受付いたしました。日曜、祝日を除く、翌営業日以内に、担当者から折り返し電話にてご連絡いたします。担当者からのご連絡後に確定となりますのでしばらくお待ちくださいませ。お電話ありがとうございました。それでは失礼いたします。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "用件確認"
+    words: |
+      予約 よやく
+      変更 へんこう
+      キャンセル きゃんせる
+      問い合わせ といあわせ
+      取り消し とりけし
+      取り直し とりなおし
+
+  - step_name: "予約_健診種類"
+    words: |
+      川崎市 かわさきし
+      健保組合 けんぽくみあい
+      健康保険 けんこうほけん
+      その他 そのた
+      人間ドック にんげんどっく
+
+  - step_name: "川崎市_受診内容"
+    words: |
+      特定健診 とくていけんしん
+      がん検診 がんけんしん
+      大腸がん だいちょうがん
+      子宮がん しきゅうがん
+      胃がん いがん
+      乳がん にゅうがん
+      前立腺がん ぜんりつせんがん
+      肝炎 かんえん
+      オプション おぷしょん
+
+  - step_name: "健保_コース"
+    words: |
+      人間ドック にんげんどっく
+      生活習慣病 せいかつしゅうかんびょう
+      定期健康診断 ていきけんこうしんだん
+      雇用時健診 こようじけんしん
+      特定健診 とくていけんしん
+      Aコース えーこーす
+      ABコース えーびーこーす
+
+  - step_name: "健保_オプション"
+    words: |
+      腹部超音波 ふくぶちょうおんぱ
+      胸部CT きょうぶしーてぃー
+      肺ドック はいどっく
+      肺機能検査 はいきのうけんさ
+      胃部内視鏡 いぶないしきょう
+      子宮頸がん しきゅうけいがん
+      乳がん検診 にゅうがんけんしん
+      経腟超音波 けいちつちょうおんぱ
+      甲状腺検査 こうじょうせんけんさ
+      アレルギー検査 あれるぎーけんさ
+      腫瘍マーカー しゅようまーかー
+      セデーション せでーしょん
+      ABC検診 えーびーしーけんしん
+      ペプシノゲン ぺぷしのげん
+      骨密度 こつみつど
+
+  - step_name: "変更_予約日"
+    words: |
+      分からない わからない
+      不明 ふめい
+
+  - step_name: "キャンセル_予約日"
+    words: |
+      分からない わからない
+      不明 ふめい
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "個人情報聴取（氏名→生年月日→電話番号→診察券番号）を用件確認の前に実施する（Gen2順序を踏襲）。通常フローでは用件確認が先だが、本フローは顧客の意図的な設計のため変更しない"
+  - "共通_人数受診時期モジュールは川崎市ルートと健保組合ルートの2経路から参照される共用モジュール。同一TTS・同一保存先（detail）・同一Retry先（RAG）のため共用可能"
+  - "変更_予約日とキャンセル_予約日は同一TTS文言だが別モジュール。Retry No more先が異なる（変更→変更_変更項目、キャンセル→キャンセル_受診内容）ため共用不可"
+  - "reasonフィールドは多目的フィールドとして共用（Gen2準拠）。ルートごとに異なる内容を保存する"
+  - "終話TTSは classification x phoneType x menu の3軸ルーティング。川崎市予約のみ特定健診受診券案内が追加される。携帯/固定で冒頭表現（承りました/受付いたしました）と連絡方法（SMS言及有無）が異なる"
+  - "電話番号聴取サブフローのtermination=returnのため、メインフロー側でEND_代表案内チェーンを配置する。電話番号サブフローの施設固有代表案内TTS（044-541-5210）はメインフロー内のTTSモジュールで発話する"
+  - "Gen2のstatus=0はGen3では使用禁止。途中切断時はsaveCompletionFlag2dbを呼ばずデフォルト状態とする"
+  - "Gen2のendpointフィールドとsmsFlagフィールドはsaveContextModel2DBに含めない（saveCompletionFlag2dbパラメータで制御）"
+
+# --- セクション12: 要確認事項 ---
+# 詳細は確認レポート（docs/designs/確認レポート_川崎幸クリニック_健診_20260410.md）を参照。
+confirmation_items:
+  - item: "office_id（施設ID）— Dr.JOY管理画面で確認"
+    resolved: false
+  - item: "対象環境（demo/prod）— 仮値: demo"
+    resolved: false
+  - item: "Preferred_dateフィールド不採用 — detailで代替（問題あれば追加可能）"
+    resolved: false
+  - item: "questionフィールド不採用 — RAGサブフローで代替（問題あれば追加可能）"
+    resolved: false
+  - item: "RAGパターン2採用 — 全終話前にRAG配置（Gen2→Gen3デフォルトのパターン3ではない）"
+    resolved: false
+  - item: "川崎市予約の終話TTS分離採用 — 計9正常終話パターン"
+    resolved: false
+  - item: "営業時間（祝日除く月〜金 8:30-17:00、土 8:30-12:30）— 代表案内テキストから推定。Dr.JOY側で正式設定"
+    resolved: false

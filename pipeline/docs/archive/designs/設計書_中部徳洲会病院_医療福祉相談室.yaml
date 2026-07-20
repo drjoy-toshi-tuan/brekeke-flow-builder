@@ -1,0 +1,675 @@
+# 設計書 -- 中部徳洲会病院 医療福祉相談室
+# 生成元: @director エージェント
+# 生成日: 2026/04/27
+# 確認レポート: docs/designs/確認レポート_中部徳洲会病院_医療福祉相談室_20260427.md
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "中部徳洲会病院"
+  scenario_name: "医療福祉相談室"
+  group_name: "中部徳洲会病院"
+  flow_name: "中部徳洲会病院$医療福祉相談室"
+  target_facility: "中部徳洲会病院（医療福祉相談室）"
+  office_id: "TODO_要確認"
+  phone_number: "TODO_要確認"          # 着信用 050 番号は IVR プロパティで設定
+  business_hours: "祝日除く月〜金 8:30〜17:00 / 土 8:30〜12:30（年末年始 12/31〜1/4 休業）"
+  flow_type: "1flow"                   # 個人情報聴取サブフローは使用しない（問合せ/相談窓口のため）
+  work_type: "gen1_migration"
+  environment: "prod"
+
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+# 問合せ/相談窓口のため、患者氏名・生年月日・電話番号・診察券番号の聴取は一切行わない。
+# 個人情報サブフロー（PatientName / DOB / Phone / MedicalCard）は使用しない。
+# RAG 検索サブフローも使用しない（FAQ ではなく担当者直接転送が主機能のため）。
+flow_structure:
+  type: "1flow"
+  flows:
+    - name: "中部徳洲会病院$医療福祉相談室"
+      role: "main"
+      description: "冒頭挨拶 → 受付時間判定 → 担当者名聴取（5 ルート分岐） → 担当者個別/看護師/代表電話のいずれかへ転送"
+  subflows: []
+
+# --- セクション3: フローの目的 ---
+purpose: "中部徳洲会病院 医療福祉相談室の問合せ専用 AI 電話。受付時間を判定したうえで担当者名（大城/下地/山城/その他/わからない）を聴取し、特定担当者または看護師窓口、医療福祉相談室固定電話（098-923-2647）に転送する。患者属性聴取・予約 API 連携・SMS 送信は行わない。"
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "中部徳洲会病院$医療福祉相談室"
+    diagram: |
+      wait(2000ms)
+        → saveContextModel2DB
+        → incoming-classifier
+            ├─ 非通知 → 非通知_アナウンス(TTS) → 完了フラグ_非通知(status=2) → 切断
+            └─ 通常/携帯/固定 → acceptance_times
+                                  ├─ 時間外 → 時間外_アナウンス(TTS) → 完了フラグ_時間外(status=6) → 切断
+                                  └─ 受付可 → 冒頭_アナウンス(TTS)
+                                                → 担当者案内(TTS)
+                                                → 担当者名聴取(TTS+AmiVoice STT+OpenAI[enum 5値])
+                                                    ├─ 大城 → 大城聞き取り(TTS+STT+OpenAI[大城実/大城尚幸])
+                                                    │            └─ → 担当者種別判定(ContextMatchRouter on staffName)
+                                                    ├─ 下地 → 下地聞き取り(TTS+STT+OpenAI[下地光太郎/下地碧生])
+                                                    │            └─ → 担当者種別判定
+                                                    ├─ 山城 → 山城聞き取り(TTS+STT+OpenAI[山城碧生/山城諒子])
+                                                    │            └─ → 担当者種別判定
+                                                    ├─ わからない → 代表転送案内(TTS) → 代表電話へ転送(call_transfer)
+                                                    │                                       ├─ 成功 → 完了フラグ_転送成功(status=3) → END_転送成功
+                                                    │                                       └─ 失敗 → 完了フラグ_転送失敗(status=9) → END_転送失敗
+                                                    └─ default(その他担当者) → 担当者読み取得(TTS+STT, output_format=text)
+                                                                                  └─ → 担当者種別判定
+
+      担当者種別判定(ContextMatchRouter on staffName)
+        ├─ "山城諒子" → 看護師窓口へ転送(call_transfer)
+        │                  ├─ 成功 → 完了フラグ_転送成功(status=3) → END_転送成功
+        │                  └─ 失敗 → 完了フラグ_転送失敗(status=9) → END_転送失敗
+        └─ default → 担当者へ転送(call_transfer)
+                       ├─ 成功 → 完了フラグ_転送成功(status=3) → END_転送成功
+                       └─ 失敗 → 完了フラグ_転送失敗(status=9) → END_転送失敗
+    notes: |
+      - 個人情報聴取（氏名/生年月日/電話番号/診察券番号）は一切行わない
+      - 担当者の最終復唱（「担当者は〇〇でよろしいですか？」）は Gen3 簡素化のため省略（要件確認は NON-BLOCKER N-1）
+      - 転送失敗時の Gen1 多段フォールバック（担当者→代表→『混みあっている』）は END_転送失敗 単段に統一（NON-BLOCKER N-2）
+      - 年末年始固有文言は END_時間外 で兼用（NON-BLOCKER N-4）
+      - 担当者個別番号は「担当者へ転送」call_transfer 1 本に集約（IVR プロパティで番号設定、NON-BLOCKER N-3）
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭ブロック ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 担当者案内
+
+  - step: 担当者案内
+    type: announcement
+    next: 担当者名聴取
+
+  # --- 担当者名聴取（メイン分岐: 大城/下地/山城/わからない/その他）---
+  - step: 担当者名聴取
+    type: hearing
+    output_format: enum
+    save_to: staffType
+    retry_failure: end_failure
+    conditions:
+      - match: "大城"
+        next: 大城聞き取り
+      - match: "下地"
+        next: 下地聞き取り
+      - match: "山城"
+        next: 山城聞き取り
+      - match: "わからない"
+        next: 代表転送案内
+      - match: "default"
+        next: 担当者読み取得
+
+  # --- 大城聞き取り（大城実 / 大城尚幸 の 2 択）---
+  - step: 大城聞き取り
+    type: hearing
+    output_format: enum
+    save_to: staffName
+    retry_failure: end_failure
+    conditions:
+      - match: "大城実"
+        next: 担当者種別判定
+      - match: "大城尚幸"
+        next: 担当者種別判定
+
+  # --- 下地聞き取り（下地光太郎 / 下地碧生 の 2 択）---
+  - step: 下地聞き取り
+    type: hearing
+    output_format: enum
+    save_to: staffName
+    retry_failure: end_failure
+    conditions:
+      - match: "下地光太郎"
+        next: 担当者種別判定
+      - match: "下地碧生"
+        next: 担当者種別判定
+
+  # --- 山城聞き取り（山城碧生 / 看護師の山城諒子 の 2 択）---
+  - step: 山城聞き取り
+    type: hearing
+    output_format: enum
+    save_to: staffName
+    retry_failure: end_failure
+    conditions:
+      - match: "山城碧生"
+        next: 担当者種別判定
+      - match: "山城諒子"
+        next: 担当者種別判定
+
+  # --- その他担当者の自由聴取（読み仮名取得）---
+  - step: 担当者読み取得
+    type: hearing
+    output_format: text
+    save_to: staffName
+    retry_failure: end_failure
+    next: 担当者種別判定
+
+  # --- 担当者種別判定（staffName を見て看護師ルート / 担当者ルートに分岐）---
+  - step: 担当者種別判定
+    type: context_match_router
+    reference_module: staffName
+    conditions:
+      - match: "山城諒子"
+        next: 看護師窓口へ転送
+      - match: "default"
+        next: 担当者へ転送
+
+  # --- 「わからない」ルートの代表転送ガイダンス ---
+  - step: 代表転送案内
+    type: announcement
+    next: 代表電話へ転送
+
+  # --- 転送ブロック群（番号は IVR プロパティ側で設定）---
+  # 各 call_transfer は成功時 → END_転送成功(status=3) / 失敗時 → END_転送失敗(status=9) に明示接続
+  - step: 担当者へ転送
+    type: call_transfer
+    transfer_type: "Blind Transfer"
+    conditions:
+      - match: "success"
+        next: END_転送成功
+      - match: "failure"
+        next: END_転送失敗
+
+  - step: 看護師窓口へ転送
+    type: call_transfer
+    transfer_type: "Blind Transfer"
+    conditions:
+      - match: "success"
+        next: END_転送成功
+      - match: "failure"
+        next: END_転送失敗
+
+  - step: 代表電話へ転送
+    type: call_transfer
+    transfer_type: "Blind Transfer"
+    conditions:
+      - match: "success"
+        next: END_転送成功
+      - match: "failure"
+        next: END_転送失敗
+
+  # --- 終話ステップ（call_transfer の next 参照解決用）---
+  - step: END_転送成功
+    type: termination
+    termination_ref: END_転送成功
+
+  - step: END_転送失敗
+    type: termination
+    termination_ref: END_転送失敗
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+# 標準フィールド（patientName / patientDateOfBirth / medicalCardNumber / clinicalDepartment 等）は
+# 使用しないため Dr.JOY 標準セットから抜く。Dr.JOY 管理画面の表示も簡素化される。
+# 残すのは telephoneNumber（着信元自動取得）/ dateOfCall（自動取得）/ status / classification（標準, 値は固定）/ callId と、
+# 案件固有の staffType / staffName。
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "問い合わせ"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本フローは問い合わせ専用のため固定値『問い合わせ』のみ"
+
+  - context_name: "staffType"
+    context_name_jp: "担当者カテゴリ"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "大城"
+      - id: "2"
+        order: "2"
+        value: "下地"
+      - id: "3"
+        order: "3"
+        value: "山城"
+      - id: "4"
+        order: "4"
+        value: "わからない"
+      - id: "5"
+        order: "5"
+        value: "その他担当者"
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "担当者名聴取で判定された大分類。施設固有フィールド"
+
+  - context_name: "staffName"
+    context_name_jp: "担当者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "個別担当者名（大城実/大城尚幸/下地光太郎/下地碧生/山城碧生/山城諒子/その他自由聴取）。施設固有フィールド"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "転送"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+      - id: "9"
+        order: "9"
+        value: "転送失敗"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=未処理 2=代表案内 3=転送成功 6=時間外 9=転送失敗"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "システム自動取得"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "担当者名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "staffType"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "大城"
+      - "下地"
+      - "山城"
+      - "わからない"
+    notes: "5 値分類。「大城/下地/山城/わからない」のいずれにも該当しない場合は default で『その他担当者』として担当者読み取得ステップへ。Gen1 では DTMF 入力なし → 音声のみ"
+
+  - order: 2
+    name: "大城聞き取り"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "staffName"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "大城実"
+      - "大城尚幸"
+    notes: "大城ルート。OpenAI 分類で担当者氏名を確定し staffName に保存。default 時はリトライ"
+
+  - order: 3
+    name: "下地聞き取り"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "staffName"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "下地光太郎"
+      - "下地碧生"
+    notes: "下地ルート"
+
+  - order: 4
+    name: "山城聞き取り"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "staffName"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "山城碧生"
+      - "山城諒子"
+    notes: "山城ルート。「山城諒子」は看護師窓口へ、「山城碧生」は担当者へ転送（後段の context_match_router で staffName を参照）"
+
+  - order: 5
+    name: "担当者読み取得"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 3
+    echo_back: false
+    save_to: "staffName"
+    openai_processing: "normalize"
+    output_format: "text"
+    output_labels: []
+    notes: "default ルート（その他担当者）。OpenAI で読み仮名込みのテキスト化を行い staffName に保存。担当者名はフリーテキストとして Dr.JOY に渡す"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "担当者名聴取"
+    tts_announcement: "担当の名前を仰ってください。分からない場合には、分からないとお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "大城"
+        - "下地"
+        - "山城"
+        - "わからない"
+        - "NO_RESULT"
+      mapping:
+        - input: "大城を含む発話（おおしろ／大城実／大城尚幸／大城さん／オオシロ）"
+          output: "大城"
+        - input: "下地を含む発話（しもじ／下地光太郎／下地碧生／下地さん／シモジ）"
+          output: "下地"
+        - input: "山城を含む発話（やましろ／山城碧生／山城諒子／山城さん／ヤマシロ／看護師の山城）"
+          output: "山城"
+        - input: "わからない／分からない／不明／知らない／担当が分からない／教えてもらってない"
+          output: "わからない"
+      no_result_condition: "上記いずれにも該当しない／全く別の氏名（例: 田中、佐藤、鈴木 等）。default ルート（その他担当者）として担当者読み取得へ進めるため、OpenAI 出力は『該当なし扱い』だが、ここではフロー上 default 分岐で担当者読み取得に遷移する"
+    save_to: "staffType"
+    next_step: "（条件分岐: 大城聞き取り / 下地聞き取り / 山城聞き取り / 代表転送案内 / 担当者読み取得）"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "大城聞き取り"
+    tts_announcement: "大城、ですね。大城実と、大城尚幸、どちらの担当者でしょうか。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "大城実"
+        - "大城尚幸"
+        - "NO_RESULT"
+      mapping:
+        - input: "実（みのる）／大城実／みのる／OOSHIRO MINORU"
+          output: "大城実"
+        - input: "尚幸（なおゆき）／大城尚幸／なおゆき／OOSHIRO NAOYUKI"
+          output: "大城尚幸"
+      no_result_condition: "上記いずれにも該当しない／別人名・否定発話（聞き直し）"
+    save_to: "staffName"
+    next_step: "担当者種別判定"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "下地聞き取り"
+    tts_announcement: "下地、ですね。下地光太郎と、下地碧生、どちらの担当者でしょうか。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "下地光太郎"
+        - "下地碧生"
+        - "NO_RESULT"
+      mapping:
+        - input: "光太郎（こうたろう）／下地光太郎／こうたろう"
+          output: "下地光太郎"
+        - input: "碧生（あおい）／下地碧生／あおい"
+          output: "下地碧生"
+      no_result_condition: "上記いずれにも該当しない／別人名・否定発話"
+    save_to: "staffName"
+    next_step: "担当者種別判定"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "山城聞き取り"
+    tts_announcement: "山城、ですね。山城碧生と、看護師の山城諒子、どちらでしょうか。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "山城碧生"
+        - "山城諒子"
+        - "NO_RESULT"
+      mapping:
+        - input: "碧生（あおい）／山城碧生／あおい"
+          output: "山城碧生"
+        - input: "諒子（りょうこ）／山城諒子／看護師／看護師の山城／看護師さん／りょうこ"
+          output: "山城諒子"
+      no_result_condition: "上記いずれにも該当しない／別人名"
+    save_to: "staffName"
+    next_step: "担当者種別判定"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+  - step_name: "担当者読み取得"
+    tts_announcement: "担当者のお名前を、もう一度ゆっくりお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "（聴取テキストをそのまま正規化して保存）"
+      mapping:
+        - input: "発話テキスト（漢字交じり）"
+          output: "正規化後の担当者名（漢字+読み）"
+      no_result_condition: "発話なし／聞き取り不能"
+    save_to: "staffName"
+    next_step: "担当者種別判定"
+    retry_failure: "end_failure"
+    retry_failure_announcement: ""
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須） ---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外（年末年始 12/31〜1/4 を含む）"
+    tts_announcement: "申し訳ございませんが、ただいまの時間は受付時間外となっております。受付時間は、日曜祝日、年末年始を除く、月曜日から金曜日の8時30分から17時、土曜日は8時30分から12時30分となっております。恐れ入りますが、受付時間内におかけなおしください。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達（担当者名聴取・大城/下地/山城聞き取り・担当者読み取得 のいずれかで 3 回失敗）"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系（call_transfer の自動補完で生成される）---
+  - name: "END_転送成功"
+    condition: "担当者へ転送 / 看護師窓口へ転送 / 代表電話へ転送 のいずれかが成功"
+    tts_announcement: ""
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_転送成功"
+
+  - name: "END_転送失敗"
+    condition: "担当者へ転送 / 看護師窓口へ転送 / 代表電話へ転送 のいずれかが失敗"
+    tts_announcement: "お電話をお繋ぎできませんでした。只今お電話が混みあっている為、お繋ぎできませんでした。恐れ入りますが、しばらく経ってから、おかけなおし下さい。失礼いたします。"
+    status: "9"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_転送失敗"
+
+# smsFlag 分岐は不要（SMS 送信なし）
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+# 担当者直接転送が主機能のため RAG なし
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "施設案内"
+    announcement: "お電話ありがとうございます。こちらは、中部徳洲会病院医療福祉相談室です。"
+
+  - module_name: "担当者案内"
+    purpose: "担当者名聴取の前置き"
+    announcement: "それでは、担当者へ転送いたしますので、担当の名前を仰ってください。分からない場合には、分からないとお話ください。"
+
+  - module_name: "担当者名聴取"
+    purpose: "担当者名聴取の質問（最初）"
+    announcement: "担当の名前を仰ってください。分からない場合には、分からないとお話ください。"
+
+  - module_name: "大城聞き取り"
+    purpose: "大城ルートの個別聴取"
+    announcement: "大城、ですね。大城実と、大城尚幸、どちらの担当者でしょうか。"
+
+  - module_name: "下地聞き取り"
+    purpose: "下地ルートの個別聴取"
+    announcement: "下地、ですね。下地光太郎と、下地碧生、どちらの担当者でしょうか。"
+
+  - module_name: "山城聞き取り"
+    purpose: "山城ルートの個別聴取（担当者 vs 看護師）"
+    announcement: "山城、ですね。山城碧生と、看護師の山城諒子、どちらでしょうか。"
+
+  - module_name: "担当者読み取得"
+    purpose: "default ルートの自由聴取（読み仮名取得）"
+    announcement: "担当者のお名前を、もう一度ゆっくりお話しください。"
+
+  - module_name: "代表転送案内"
+    purpose: "わからないルートの代表電話転送案内"
+    announcement: "かしこまりました。それでは、医療福祉相談室の窓口へ転送いたしますので、少々お待ちください。"
+
+  - module_name: "担当者へ転送"
+    purpose: "担当者個別番号への転送ガイダンス"
+    announcement: "担当者へ転送いたします。少々お待ちください。"
+
+  - module_name: "看護師窓口へ転送"
+    purpose: "看護師窓口への転送ガイダンス"
+    announcement: "それでは、看護師の窓口へ転送いたします。少々お待ちください。"
+
+  - module_name: "代表電話へ転送"
+    purpose: "医療福祉相談室固定電話 098-923-2647 への転送ガイダンス"
+    announcement: "医療福祉相談室窓口へお繋ぎいたします。少々お待ちください。"
+
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知着信の終話"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "時間外_アナウンス"
+    purpose: "受付時間外の終話（年末年始も兼用）"
+    announcement: "申し訳ございませんが、ただいまの時間は受付時間外となっております。受付時間は、日曜祝日、年末年始を除く、月曜日から金曜日の8時30分から17時、土曜日は8時30分から12時30分となっております。恐れ入りますが、受付時間内におかけなおしください。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ上限到達の終話"
+    announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_転送失敗"
+    purpose: "転送失敗時の終話（混雑案内）"
+    announcement: "お電話をお繋ぎできませんでした。只今お電話が混みあっている為、お繋ぎできませんでした。恐れ入りますが、しばらく経ってから、おかけなおし下さい。失礼いたします。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "担当者名聴取"
+    words: |
+      大城 おおしろ
+      下地 しもじ
+      山城 やましろ
+      わからない わからない
+      分からない わからない
+      看護師 かんごし
+      医療福祉相談室 いりょうふくしそうだんしつ
+
+  - step_name: "大城聞き取り"
+    words: |
+      大城 おおしろ
+      大城実 おおしろみのる
+      大城尚幸 おおしろなおゆき
+      実 みのる
+      尚幸 なおゆき
+
+  - step_name: "下地聞き取り"
+    words: |
+      下地 しもじ
+      下地光太郎 しもじこうたろう
+      下地碧生 しもじあおい
+      光太郎 こうたろう
+      碧生 あおい
+
+  - step_name: "山城聞き取り"
+    words: |
+      山城 やましろ
+      山城碧生 やましろあおい
+      山城諒子 やましろりょうこ
+      碧生 あおい
+      諒子 りょうこ
+      看護師 かんごし
+
+  - step_name: "担当者読み取得"
+    words: |
+      担当 たんとう
+      担当者 たんとうしゃ
+      医療福祉相談室 いりょうふくしそうだんしつ
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "問合せ/相談窓口専用フロー。患者氏名・生年月日・電話番号・診察券番号の聴取は一切行わない。Dr.JOY 予約 API 連携も行わない（API_DRJOY はコンテキスト設定用途のみ）"
+  - "担当者個別番号（大城実/大城尚幸/下地光太郎/下地碧生/山城碧生 の 5 名）は『担当者へ転送』call_transfer ブロックに集約。Brekeke IVR UI 側で staffName コンテキストを参照して個別番号に分岐させる、または共通転送番号で運用する判断が必要（NON-BLOCKER N-3）"
+  - "看護師窓口への転送は『看護師窓口へ転送』call_transfer。staffName == '山城諒子' のときに担当者種別判定（context_match_router）から分岐"
+  - "医療福祉相談室固定電話 098-923-2647 への転送は『代表電話へ転送』call_transfer。担当者名聴取で『わからない』と答えたケースのみ到達"
+  - "受付時間カレンダー（月〜金 8:30〜17:00 / 土 8:30〜12:30、日祝・年末年始 12/31〜1/4 休業）は Dr.JOY 管理画面の acceptance_times スケジュールで設定。フローでは acceptance_times モジュールの配置のみ"
+  - "Gen1 にあった『担当者は〇〇でよろしいですか？』の最終復唱は Gen3 では省略している（NON-BLOCKER N-1）"
+  - "Gen1 にあった転送失敗時の多段フォールバック（担当者→代表→『混みあっている』案内）は Gen3 では END_転送失敗 単段に統一（NON-BLOCKER N-2）"
+  - "Gen1 にあった年末年始固有文言（『1月5日の8時30分より開始いたします』）は END_時間外 で兼用（NON-BLOCKER N-4）"
+  - "Gen1 にあった聴取失敗時の代表電話フォールバック（3 回失敗で 098-923-2647 へ転送）は Gen3 では END_聴取失敗 で切断（NON-BLOCKER N-6）"
+  - "DTMF 入力対応なし（Gen1 から踏襲）。すべて AmiVoice STT 音声入力"
+  - "リトライ回数は全聴取ステップ 3 回上限（Gen1 の count再質問_1〜_6 を踏襲）"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "office_id（Dr.JOY 管理画面で確認）"
+    resolved: false
+  - item: "着信用 050 番号（IVR プロパティで設定。設計書には不要）"
+    resolved: false
+  - item: "担当者個別転送先番号（大城実/大城尚幸/下地光太郎/下地碧生/山城碧生 の 5 名分）"
+    resolved: false
+  - item: "看護師窓口の転送先番号"
+    resolved: false
+  - item: "代表電話 098-923-2647 への転送設定（call_transfer『代表電話へ転送』の number パラメータ）"
+    resolved: false
+  - item: "Gen1 の担当者最終復唱（『担当者は〇〇でよろしいですか？』）を Gen3 でも残すか、省略するか（NON-BLOCKER N-1）"
+    resolved: false
+  - item: "Gen1 の転送失敗多段フォールバック（担当者→代表→『混みあっている』）を Gen3 でも残すか、END_転送失敗 単段で良いか（NON-BLOCKER N-2）"
+    resolved: false
+  - item: "担当者個別番号への分岐実装（複数 call_transfer 配置 vs IVR プロパティで動的決定）の判断（NON-BLOCKER N-3）"
+    resolved: false
+  - item: "年末年始固有アナウンス（『1月5日の8時30分より開始』）を専用 termination として作るか、END_時間外 兼用で良いか（NON-BLOCKER N-4）"
+    resolved: false
+  - item: "聴取失敗時の代表電話フォールバック（Gen1 では 3 回失敗で 098-923-2647 転送）を Gen3 でも残すか、END_聴取失敗 で切断で良いか（NON-BLOCKER N-6）"
+    resolved: false

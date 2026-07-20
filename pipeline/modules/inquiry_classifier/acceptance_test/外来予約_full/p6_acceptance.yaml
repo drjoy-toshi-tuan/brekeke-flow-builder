@@ -1,0 +1,119 @@
+# Pattern 6 (テストフロー) — inquiry_classifier 用件分類 単体受入テスト（spec: 外来予約FULL）
+#
+# 検証対象: modules/inquiry_classifier/acceptance_test/外来予約_full/script.js
+#   = 正本テンプレ modules/inquiry_classifier/script.js を factory-v2 composer(compose_spec.py) で
+#     プロファイル FULL（予約/予約変更/予約キャンセル/予約確認/その他問合せ）に充填した具体版。
+#     engine は正本と同一（engine_hash 15104253 一致で部品種別=inquiry_classifier 認定）。
+#     spec（@spec ブロック=RULES/NO_QUESTION/FILLER_ONLY）= 外来予約FULL データ（spec_hash 78919c7b）。
+#   {{INPUT_MODULE}} は P6 matrix が case ごとに充填。CONTEXT_NAME/DISPLAY_TYPE は wiring ゆえ
+#     placeholder 据置（亀田総合相談室 spec の P6 と同一手順・分類結果 setResult には無影響）。
+#
+# 狙い: composer 生成の外来予約FULL spec を Brekeke 実機(Nashorn/ES5)で単体実行し、オラクル↔実機
+#   パリティを確証（test_compose.py 36/36 PASS と同一ケース）。cert protocol の P6 実機 PASS 段。
+#
+# 実機判定: 通話後 Brekeke ログを grep "[TEST FAIL]" で 0 件なら全 PASS。末尾 "[TEST DONE]" で全 36 完走。
+# 実行回数 ≈ 3 + 36×4 + 2 ≈ 149（<900 安全）。
+#
+# 生成: python3 tools/build_part_acceptance_bivr.py inquiry_classifier \
+#         --spec modules/inquiry_classifier/acceptance_test/外来予約_full/p6_acceptance.yaml \
+#         --out  output/acceptance/inquiry_classifier/inquiry_classifier_p6_外来予約FULL.bivr
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$用件分類外来予約FULL"
+  flow_name: "テスト$用件分類外来予約FULL"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$用件分類外来予約FULL"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] inquiry_classifier 用件分類 単体受入 (外来予約FULL spec, 36 ケース)");
+      $runner.getLogger().info("対象: acceptance_test/外来予約_full/script.js / オラクル(test_compose) 36/36 PASS 済");
+      $runner.getLogger().info("grep [TEST FAIL] = 0 なら実機も全 PASS");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: matrix
+
+  - step: matrix
+    type: script_test_matrix
+    script_file: "./script.js"
+    input_placeholder: "{{INPUT_MODULE}}"
+    final_next: ログ_終了
+    cases:
+      # --- 予約（新規）---
+      - {id: q01, input: "予約をお願いします", expected: "予約"}
+      - {id: q02, input: "診察の予約を取りたいです", expected: "予約"}
+      - {id: q03, input: "受診したいのですが", expected: "予約"}
+      - {id: q04, input: "外来を予約したい", expected: "予約"}
+      - {id: q05, input: "初めて受診します", expected: "予約"}
+      - {id: q06, input: "診てもらいたいです", expected: "予約"}
+      - {id: q07, input: "かかりたいんですけど", expected: "予約"}
+      # --- 予約変更 ---
+      - {id: q08, input: "予約を変更したいです", expected: "予約変更"}
+      - {id: q09, input: "予約の日にちを変えたい", expected: "予約変更"}
+      - {id: q10, input: "予約をずらしたいのですが", expected: "予約変更"}
+      - {id: q11, input: "別の日にしたいです", expected: "予約変更"}
+      - {id: q12, input: "予約の時間を変更してください", expected: "予約変更"}
+      - {id: q13, input: "予約を繰り上げたい", expected: "予約変更"}
+      # --- 予約キャンセル ---
+      - {id: q14, input: "予約をキャンセルしたいです", expected: "予約キャンセル"}
+      - {id: q15, input: "予約を取り消したい", expected: "予約キャンセル"}
+      - {id: q16, input: "予約をやめたいのですが", expected: "予約キャンセル"}
+      - {id: q17, input: "受診を中止したいです", expected: "予約キャンセル"}
+      - {id: q18, input: "キャンセルでお願いします", expected: "予約キャンセル"}
+      - {id: q19, input: "予約の取りやめをお願いします", expected: "予約キャンセル"}
+      # --- 予約確認 ---
+      - {id: q20, input: "予約を確認したいです", expected: "予約確認"}
+      - {id: q21, input: "予約が取れているか確認したい", expected: "予約確認"}
+      - {id: q22, input: "予約状況を知りたいです", expected: "予約確認"}
+      - {id: q23, input: "ちゃんと予約できてますか", expected: "予約確認"}
+      - {id: q24, input: "予約が入ってるか見てほしい", expected: "予約確認"}
+      - {id: q25, input: "いつ予約できますか", expected: "予約確認"}
+      - {id: q26, input: "予約はいつでしたか", expected: "予約確認"}
+      # --- その他問合せ ---
+      - {id: q27, input: "駐車場はありますか", expected: "その他問合せ"}
+      - {id: q28, input: "診療時間を教えてください", expected: "その他問合せ"}
+      - {id: q29, input: "今日はやっていますか", expected: "その他問合せ"}
+      - {id: q30, input: "紹介状は必要ですか", expected: "その他問合せ"}
+      - {id: q31, input: "検査の費用について聞きたい", expected: "その他問合せ"}
+      - {id: q32, input: "先生は何人いますか", expected: "その他問合せ"}
+      # --- NO_RESULT（用件なし/フィラー/数字のみ）---
+      - {id: q33, input: "特にありません", expected: "NO_RESULT"}
+      - {id: q34, input: "えーっと", expected: "NO_RESULT"}
+      - {id: q35, input: "うーん", expected: "NO_RESULT"}
+      - {id: q36, input: "12345", expected: "NO_RESULT"}
+
+  - step: ログ_終了
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST DONE] inquiry_classifier 外来予約FULL spec 単体受入 全 36 ケース完走");
+      $runner.setResult("done");
+    next: 終了
+
+  - step: 終了
+    type: termination
+    termination_ref: "END_テスト終了"
+
+termination_patterns:
+  - name: "END_テスト終了"
+    condition: "テスト完走"
+    tts_announcement: "テストを終了します。"
+    status: "1"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_テスト終了"

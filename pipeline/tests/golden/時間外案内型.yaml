@@ -1,0 +1,164 @@
+# テストベクター — 時間外案内型
+# 営業時間判定(acceptance_times)を使用するフローパターンをテスト
+# incoming-classifier→acceptance_times→冒頭アナウンス/時間外アナウンスの分岐を検証
+pattern: "時間外案内型"
+description: >
+  営業時間判定(acceptance_times)を使用するフローパターンのテスト。
+  営業時間内→通常受付、営業時間外→時間外アナウンス→切断、
+  非通知→非通知アナウンス→切断の各ルートを検証する。
+  海老名総合病院はacceptance_times不使用だが、
+  一般的な時間外案内型フローの構造に基づくテストベクター。
+
+test_vectors:
+  # --- happy_path ---
+
+  - name: "happy_path_受付可"
+    description: >
+      営業時間内→incoming-classifier→acceptance_times(受付可)→
+      冒頭アナウンス→受付案内→END
+    category: "happy_path"
+    preconditions:
+      telephoneNumber: "09012345678"
+      currentTime: "2026-04-01T10:00:00+09:00"
+    inputs:
+      - module: "acceptance_times"
+        type: "stt_result"
+        value: ""
+        expected_openai_output: "受付可"
+      - module: "入力_用件確認"
+        type: "dtmf"
+        value: "1"
+        expected_openai_output: "予約変更"
+    expected_path:
+      - "saveContextModel2DB"
+      - "incoming-classifier"
+      - "acceptance_times"
+      - "冒頭_アナウンス"
+      - "用件確認"
+      - "入力_用件確認"
+      - "OpenAI_用件確認"
+      - "saveContext_classification"
+    expected_terminal: "用件確認以降の通常フロー"
+    expected_context:
+      classification: "予約変更"
+    expected_status: ""
+    expected_sms_flag: ""
+    notes: >
+      受付可の場合、冒頭アナウンス以降は予約管理型/本人確認型のフローに合流する。
+      このテストではacceptance_timesの判定のみを検証対象とする。
+
+  - name: "happy_path_時間外"
+    description: >
+      営業時間外→incoming-classifier→acceptance_times(時間外)→
+      時間外アナウンス→完了フラグ→切断
+    category: "happy_path"
+    preconditions:
+      telephoneNumber: "09012345678"
+      currentTime: "2026-04-01T22:00:00+09:00"
+    inputs:
+      - module: "acceptance_times"
+        type: "stt_result"
+        value: ""
+        expected_openai_output: "時間外"
+    expected_path:
+      - "saveContextModel2DB"
+      - "incoming-classifier"
+      - "acceptance_times"
+      - "時間外_アナウンス"
+      - "完了フラグ_時間外"
+      - "Disconnect"
+    expected_terminal: "時間外_アナウンス"
+    expected_context: {}
+    expected_status: "6"
+    expected_sms_flag: "0"
+
+  # --- edge_case ---
+
+  - name: "edge_case_非通知"
+    description: >
+      非通知着信→incoming-classifier(非通知検出)→非通知アナウンス→
+      完了フラグ→切断。acceptance_timesに到達する前に切断される。
+    category: "edge_case"
+    preconditions:
+      telephoneNumber: ""
+      currentTime: "2026-04-01T10:00:00+09:00"
+    inputs: []
+    expected_path:
+      - "saveContextModel2DB"
+      - "incoming-classifier"
+      - "非通知_アナウンス"
+      - "完了フラグ_非通知"
+      - "Disconnect"
+    expected_terminal: "非通知_アナウンス"
+    expected_context: {}
+    expected_status: "2"
+    expected_sms_flag: "0"
+
+  - name: "edge_case_海外"
+    description: >
+      海外番号(+81以外のプレフィックス)着信→incoming-classifierで国際番号と判定→
+      通常処理(国際番号は携帯/固定の判別不能のため手動聴取ルートへ)
+    category: "edge_case"
+    preconditions:
+      telephoneNumber: "+14155551234"
+      currentTime: "2026-04-01T14:00:00+09:00"
+    inputs:
+      - module: "acceptance_times"
+        type: "stt_result"
+        value: ""
+        expected_openai_output: "受付可"
+      - module: "入力_用件確認"
+        type: "dtmf"
+        value: "3"
+        expected_openai_output: "予約確認"
+    expected_path:
+      - "saveContextModel2DB"
+      - "incoming-classifier"
+      - "acceptance_times"
+      - "冒頭_アナウンス"
+      - "用件確認"
+      - "入力_用件確認"
+      - "OpenAI_用件確認"
+      - "saveContext_classification"
+    expected_terminal: "用件確認以降の通常フロー"
+    expected_context:
+      classification: "予約確認"
+    expected_status: ""
+    expected_sms_flag: ""
+    notes: >
+      海外番号は incoming-classifier で特別な分岐はされず通常ルートを通過する。
+      ただし電話番号聴取ステップで着信番号が携帯と判定されないため、
+      手動聴取ルートに遷移する。
+
+  # --- context ---
+
+  - name: "context_status"
+    description: >
+      各終話パターンの status 値を検証。
+      時間外=status:6, 非通知=status:2, 正常完了=status:1
+    category: "context"
+    preconditions:
+      telephoneNumber: "09012345678"
+      currentTime: "2026-04-01T22:00:00+09:00"
+    inputs:
+      - module: "acceptance_times"
+        type: "stt_result"
+        value: ""
+        expected_openai_output: "時間外"
+    expected_path:
+      - "saveContextModel2DB"
+      - "incoming-classifier"
+      - "acceptance_times"
+      - "時間外_アナウンス"
+      - "完了フラグ_時間外"
+      - "Disconnect"
+    expected_terminal: "時間外_アナウンス"
+    expected_context: {}
+    expected_status: "6"
+    expected_sms_flag: "0"
+    notes: >
+      status一覧:
+        0 = 途中切断(ユーザーが途中で電話を切った場合、デフォルト)
+        1 = 未処理(正常完了: END_受付完了, END_電話番号聴取失敗)
+        2 = 代表案内(非通知, 予約希望, 診療科予約不可, 直近キャンセル不可, 受付時間外案内)
+        6 = 時間外(acceptance_timesによる時間外判定)

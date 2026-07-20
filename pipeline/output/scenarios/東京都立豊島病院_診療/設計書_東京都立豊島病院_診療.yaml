@@ -1,0 +1,251 @@
+# 設計書 — 東京都立豊島病院 診療（Pattern 2 再構築）
+#
+# 由来: export_FAQ追加_用件Scripts_20260709.bivr（手組み・6フロー・255モジュール）を
+# scaffold_extractor で逆抽出し、壁打ちで標準ブロック語彙に正規化したもの。
+# 元 bivr からの意図的な差分（正規化判断）は 確認レポート_再構築差分.md を参照。
+version: '2.0'
+basic_info:
+  facility_name: 東京都立豊島病院
+  group_name: と）東京都立豊島_20260712
+  flow_name: と）東京都立豊島_20260712$M｜診療
+  scenario_name: M｜診療
+  office_id: TODO_要確認
+  work_type: modify
+  flow_type: 1flow
+flow_structure:
+  type: 1flow
+  flows:
+  - name: と）東京都立豊島_20260712$M｜診療
+    role: main
+    description: 診療 予約/変更/キャンセル/お問い合わせ 統合フロー（再構築）
+  subflows:
+  - name: drjoy^と）東京都立豊島_20260712$sub｜予約
+    target: sub｜予約
+    recitation: なし
+    transition_module: drjoy^Custom Module$Custom Jump to Flow
+    termination: return
+    notes: 元 bivr の sub｜予約 を新グループへ改名コピー
+  - name: drjoy^と）東京都立豊島_20260712$sub｜変更
+    target: sub｜変更
+    recitation: なし
+    transition_module: drjoy^Custom Module$Custom Jump to Flow
+    termination: return
+    notes: 元 bivr の sub｜変更 を新グループへ改名コピー
+  - name: drjoy^と）東京都立豊島_20260712$sub｜キャンセル
+    target: sub｜キャンセル
+    recitation: なし
+    transition_module: drjoy^Custom Module$Custom Jump to Flow
+    termination: return
+    notes: 元 bivr の sub｜キャンセル を新グループへ改名コピー
+  - name: drjoy^と）東京都立豊島_20260712$sub｜お問い合わせ
+    target: sub｜お問い合わせ
+    recitation: なし
+    transition_module: drjoy^Custom Module$Custom Jump to Flow
+    termination: return
+    notes: 元 bivr の sub｜お問い合わせ を新グループへ改名コピー
+  - name: drjoy^と）東京都立豊島_20260712$sub｜情報
+    target: sub｜情報
+    recitation: なし
+    transition_module: drjoy^Custom Module$Custom Jump to Flow
+    termination: return
+    notes: 元 bivr の sub｜情報（個人情報聴取一式）を新グループへ改名コピー
+purpose: 診療の予約・変更・キャンセル・お問い合わせを受け付け、用件別サブフローと個人情報聴取を経て折返し対応につなぐ
+flow_diagrams: []
+context_fields:
+- context_name: classification
+  context_name_jp: 用件分類
+  display_type: CLASSIFICATION
+- context_name: lastDetails
+  context_name_jp: 最後の問い合わせ内容
+  display_type: TEXT
+hearing_items:
+- name: 追加の質問
+  output_format: text
+  retry_count: 3
+  save_to: lastDetails
+scenario_flow:
+- step: 冒頭
+  type: opening
+  next: 冒頭_アナウンス
+- step: 冒頭_アナウンス
+  type: announcement
+  next: 用件確認
+- step: 用件確認
+  type: intent
+  save_to: classification
+  retry_count: 3
+  options:
+  - number: 1
+    label: 予約
+    strong: true
+    keywords: [予約, よやく]
+  - number: 2
+    label: 変更
+    strong: true
+    keywords: [変更, へんこう, かえる, 変え]
+  - number: 3
+    label: キャンセル
+    strong: true
+    keywords: [キャンセル, 取り消し, とりけし]
+  - number: 4
+    label: お問い合わせ
+    strong: false
+    keywords: [お問い合わせ, 問い合わせ, といあわせ, 質問, 聞きたい, 相談]
+  conditions:
+  - match: 予約
+    next: jump-予約
+  - match: 変更
+    next: jump-変更
+  - match: キャンセル
+    next: jump-キャンセル
+  - match: お問い合わせ
+    next: jump-確認
+- step: jump-予約
+  type: subflow
+  flowname: drjoy^と）東京都立豊島_20260712$sub｜予約
+  next: jump-個人情報
+- step: jump-変更
+  type: subflow
+  flowname: drjoy^と）東京都立豊島_20260712$sub｜変更
+  next: jump-個人情報
+- step: jump-キャンセル
+  type: subflow
+  flowname: drjoy^と）東京都立豊島_20260712$sub｜キャンセル
+  next: jump-個人情報
+- step: jump-確認
+  type: subflow
+  flowname: drjoy^と）東京都立豊島_20260712$sub｜お問い合わせ
+  next: jump-個人情報
+- step: jump-個人情報
+  type: subflow
+  flowname: drjoy^と）東京都立豊島_20260712$sub｜情報
+  next: 追加の質問
+- step: 追加の質問
+  type: faq
+  method: script
+  retry_count: 3
+  conditions:
+  - match: ANSWER
+    next: FAQ回答
+  - match: NO_RESULT
+    next: FAQ失敗案内
+- step: FAQ回答
+  type: announcement
+  next: 分岐_用件
+- step: FAQ失敗案内
+  type: announcement
+  next: 分岐_用件
+- step: 分岐_用件
+  type: context_match_router
+  reference_module: script_用件確認
+  conditions:
+  - match: 予約
+    next: 予約受付完了
+  - match: 変更
+    next: 変更受付完了
+  - match: キャンセル
+    next: キャンセル受付完了
+  - match: お問い合わせ
+    next: 問い合わせ受付完了
+  - match: other
+    next: 問い合わせ受付完了
+- step: 予約受付完了
+  type: termination
+  termination_ref: 予約受付完了
+- step: 変更受付完了
+  type: termination
+  termination_ref: 変更受付完了
+- step: キャンセル受付完了
+  type: termination
+  termination_ref: キャンセル受付完了
+- step: 問い合わせ受付完了
+  type: termination
+  termination_ref: 問い合わせ受付完了
+step_details:
+- step_name: 用件確認
+  type: intent
+  retry_count: 3
+  retry_failure: end_failure
+- step_name: 追加の質問
+  type: faq
+  retry_count: 3
+  retry_failure: end_failure
+termination_patterns:
+- name: 予約受付完了
+  status: '1'
+  completion_flag_name: 完了フラグ_予約
+  tts_announcement: かしこまりました。ご予約の申し込みを受付いたしました。内容を確認のうえ、スタッフから折り返しご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+- name: 変更受付完了
+  status: '1'
+  completion_flag_name: 完了フラグ_変更
+  tts_announcement: かしこまりました。ご予約変更の申し込みを受付いたしました。内容を確認のうえ、スタッフから折り返しご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+- name: キャンセル受付完了
+  status: '1'
+  completion_flag_name: 完了フラグ_キャンセル
+  tts_announcement: かしこまりました。ご予約キャンセルの申し込みを受付いたしました。内容を確認のうえ、スタッフから折り返しご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+- name: 問い合わせ受付完了
+  status: '1'
+  completion_flag_name: 完了フラグ_確認
+  tts_announcement: かしこまりました。お問い合わせ内容を受付いたしました。内容を確認のうえ、スタッフから折り返しご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+- name: 聴取失敗
+  status: '6'
+  completion_flag_name: 完了フラグ_聴取失敗
+  tts_announcement: 申し訳ございません。うまくお聞き取りできませんでした。恐れ入りますが、しばらくたってからおかけ直しください。それでは失礼いたします。
+- name: 非通知
+  status: '6'
+  completion_flag_name: 完了フラグ_非通知
+  tts_announcement: お客様のお電話は非通知のため、折り返しのご連絡ができません。恐れ入りますが、電話番号を通知の上おかけ直しください。それでは失礼いたします。
+- name: 時間外
+  status: '6'
+  completion_flag_name: 完了フラグ_時間外
+  tts_announcement: ただいまの時間は受付時間外です。恐れ入りますが、受付時間内におかけ直しください。それでは失礼いたします。
+tts_modules:
+- module_name: 冒頭_アナウンス
+  announcement: お電話ありがとうございます。東京都立豊島病院、AI電話受付です。
+  note: 要確認（本番文言は Brekeke プロパティが正。プロパティ優先のため本値は既定値）
+- module_name: 用件確認
+  announcement: ご用件をお伺いします。ご予約は1番を、変更は2番を、キャンセルは3番を、その他のお問い合わせは4番と、お話しいただくか番号をプッシュしてください。
+  note: 要確認（同上）
+- module_name: 追加の質問
+  announcement: 最後に、その他ご質問はございますか。ご質問がある場合はお話しください。無い場合は「ないです」とお話しいただくか、1番をプッシュしてください。
+  note: 要確認（同上）
+- module_name: FAQ回答
+  announcement: <%scripts-faq%>
+  note: FAQ 回答の動的差込（元 bivr の TTS_FAQ回答_最後の質問 と同方式）
+- module_name: FAQ失敗案内
+  announcement: 承知いたしました。お問い合わせの内容は、後ほどスタッフよりお電話の際にお伺いいたします。
+  note: 要確認（同上）
+# 終話系 TTS（termination_patterns と同文言の転記。gen_properties は tts_modules /
+# step_details のみ読み termination_patterns は読まないため、ここに無いと TODO 化する）
+- module_name: 予約受付完了
+  announcement: かしこまりました。ご予約の申し込みを受付いたしました。内容を確認のうえ、スタッフから折り返しご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+  note: 要確認（本番文言は Brekeke プロパティが正）
+- module_name: 変更受付完了
+  announcement: かしこまりました。ご予約変更の申し込みを受付いたしました。内容を確認のうえ、スタッフから折り返しご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+  note: 要確認（同上）
+- module_name: キャンセル受付完了
+  announcement: かしこまりました。ご予約キャンセルの申し込みを受付いたしました。内容を確認のうえ、スタッフから折り返しご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+  note: 要確認（同上）
+- module_name: 問い合わせ受付完了
+  announcement: かしこまりました。お問い合わせ内容を受付いたしました。内容を確認のうえ、スタッフから折り返しご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+  note: 要確認（同上）
+- module_name: 聴取失敗
+  announcement: 申し訳ございません。うまくお聞き取りできませんでした。恐れ入りますが、しばらくたってからおかけ直しください。それでは失礼いたします。
+  note: 要確認（同上）
+- module_name: 非通知
+  announcement: お客様のお電話は非通知のため、折り返しのご連絡ができません。恐れ入りますが、電話番号を通知の上おかけ直しください。それでは失礼いたします。
+  note: 要確認（同上）
+amivoice_dictionary: []
+special_notes:
+- 元 bivr の TTS prompt は全て空（IVR プロパティ駆動）。本設計書の announcement は
+  properties 生成用の既定値であり、本番文言は Brekeke 側プロパティで上書きされる前提。
+- 元 bivr の Entity Classifier 残骸チェーン（Entity_予約/変更/キャンセル/問い合わせ・
+  NTT_yes/no・復唱_用件系）と TEST モジュールは死コードのため再構築に含めない。
+- 元 bivr は start が 冒頭_アナウンス 直指しで営業時間チェックを迂回していた
+  （テスト用変更の可能性）。再構築では標準 opening（非通知判定＋受付時間判定）を経由する。
+confirmation_items:
+- item: office_id の確定（TODO_要確認）
+- item: 全 TTS 文言を Brekeke 本番プロパティと突合（tts_modules は既定値）
+- item: 用件確認の語彙は元 Scripts_用件 のミラー。OpenAI 2段目フォールバックは廃止したため、
+    認識率が要件を満たすか P7/P6 で確認（不足時はキーワード拡充 or preset 化を壁打ちで決定）
+- item: FAQ 回答の動的差込（<%scripts-faq%>）が再構築後も機能するか実機確認

@@ -1,0 +1,110 @@
+# Pattern 6 (テストフロー) — triage_router (受診相談 決定論トリアージ) 単体受入テスト
+#
+# 検証対象: docs/brekeke/script_templates/triage_router.js（このモジュールの正本テンプレート）
+#   script_test_matrix が JS をそのまま読み込み、input_placeholder "{{COMPLAINT_MODULE}}" を
+#   case ごとの <id>_in に置換する。triage_router は主訴(COMPLAINT)＋症状詳細(DETAIL)の 2 入力だが、
+#   走査は両者の連結テキストに対して行い分類は COMPLAINT を起点とするため、wiring で
+#   "{{DETAIL_MODULE}}" → "{{COMPLAINT_MODULE}}" に寄せ、1 本の注入発話を主訴・詳細の両方として読ませる
+#   （all_free = 入力 + " " + 入力 ＝ キーワード走査・分類とも単一入力と同結果）。ロジックは 1 文字も変えない。
+#
+# 狙い: Python オラクル (test_oracle.py 39/39) のうち **abcd（閉じた ABCD）非依存の自由発話ケース** を
+#   Brekeke 実機 (Nashorn/ES5.1) で単体実行し、オラクル↔実機のパリティを確証する。
+#   ※ VFB フローは閉じた ABCD 4 問を持たない設計（実データ=患者86%自由発話・純yes/no回答者0）のため、
+#     abcd 引数を使うオラクルケースは実機 JS では非該当 → 本受入の対象外。
+#
+# 期待値: expected は各入力に対する triage_router オラクルの goal（GOAL1_救急/GOAL2_看護師/GOAL3_通常）。
+#   （複合入力の collapse 後も一意。tools/build_part_acceptance_bivr.py 後に modules/triage_router/oracle.py で検算済み）
+#
+# 実機確認: Brekeke ログを grep "[TEST FAIL]" して 0 件なら全 PASS。"[TEST DONE]" 到達で完走。
+# モジュール数: dispatch 1 + 27×5 + frame 2 = 138（1 コール 1000 上限内）。
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$triage_router"
+  flow_name: "テスト$triage_router"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$triage_router"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] triage_router 単体受入テスト (27 ケース)");
+      $runner.getLogger().info("対象: docs/brekeke/script_templates/triage_router.js / オラクル 39/39 PASS 済（abcd 非依存分）");
+      $runner.getLogger().info("grep [TEST FAIL] = 0 なら実機も全 PASS");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: matrix
+
+  - step: matrix
+    type: script_test_matrix
+    script_file: "../../../docs/brekeke/script_templates/triage_router.js"
+    input_placeholder: "{{COMPLAINT_MODULE}}"
+    wiring:
+      "{{DETAIL_MODULE}}": "{{COMPLAINT_MODULE}}"   # 主訴・詳細を同一注入発話で読む（連結走査＝単一入力と同結果）
+    final_next: ログ_終了
+    cases:
+      # ---- A-0 CPA（心肺停止語・全テキスト検知 → 即 GOAL1） ----
+      - {id: cpa1, input: "母が呼吸をしていません", expected: "GOAL1_救急"}
+      - {id: cpa2, input: "脈がないみたいです", expected: "GOAL1_救急"}
+      - {id: cpa3, input: "子どもがお風呂で沈んでいて", expected: "GOAL1_救急"}
+      # ---- B 頭痛めまい（Red Flag → GOAL1 / 軽症 → GOAL3） ----
+      - {id: bh1, input: "突然、頭を殴られたような痛みがします", expected: "GOAL1_救急"}
+      - {id: bh2, input: "頭が痛くて、手足がしびれてきました", expected: "GOAL1_救急"}
+      - {id: bh3, input: "昨日から軽い頭痛があります", expected: "GOAL3_通常"}
+      # ---- B 胸痛 ----
+      - {id: bc1, input: "胸が痛くて、腕にも広がって冷や汗が出ます", expected: "GOAL1_救急"}
+      - {id: bc2, input: "胸も痛いし、安静にしても痛みます", expected: "GOAL1_救急"}
+      # ---- B 腹痛 ----
+      - {id: ba1, input: "今まで経験したことのない激しい腹痛です", expected: "GOAL1_救急"}
+      - {id: ba2, input: "お腹が痛くて、足の付け根にこぶが出ています", expected: "GOAL1_救急"}
+      # ---- B 発熱 ----
+      - {id: bf1, input: "40度の熱があって解熱薬も効きません", expected: "GOAL1_救急"}
+      - {id: bf2, input: "４０度の熱で意識がもうろうとします", expected: "GOAL1_救急"}
+      - {id: bf3, input: "熱があって、けいれんを起こしました", expected: "GOAL1_救急"}
+      # ---- B 外傷出血 ----
+      - {id: bt1, input: "指を切って、圧迫しても血が止まりません", expected: "GOAL1_救急"}
+      - {id: bt2, input: "転んで、骨が見えています", expected: "GOAL1_救急"}
+      # ---- B 共通致死語（その他カテゴリでも拾う） ----
+      - {id: cl1, input: "なんだか息ができなくて苦しいです", expected: "GOAL1_救急"}
+      - {id: cl2, input: "呂律が回らなくて、片側の手が動きません", expected: "GOAL1_救急"}
+      # ---- B 自由発話フォールバック（主訴＋詳細の連結で Red Flag を拾う） ----
+      - {id: bft, input: "胸が痛い 腕に広がって冷や汗も出てきました", expected: "GOAL1_救急"}
+      # ---- C 修飾因子 → GOAL2 ----
+      - {id: cm1, input: "腰が少しだるくて、歩けなくなりました", expected: "GOAL2_看護師"}
+      - {id: cm2, input: "頭を軽くぶつけました。血をサラサラにする薬を飲んでいます", expected: "GOAL2_看護師"}
+      - {id: cm3, input: "少し熱っぽいです。妊娠しています", expected: "GOAL2_看護師"}
+      - {id: cm4, input: "喉が痛いです。父は80歳です", expected: "GOAL2_看護師"}
+      # ---- D 通常（全否定 → GOAL3） ----
+      - {id: dd1, input: "少し鼻がつまっています", expected: "GOAL3_通常"}
+      - {id: dd2, input: "のどが少しいがいがします", expected: "GOAL3_通常"}
+      - {id: dd3, input: "", expected: "GOAL3_通常"}
+      # ---- 優先順位（ランクダウンなし・上位ブロック先勝ち） ----
+      - {id: pr1, input: "母が呼吸をしていません。父は80歳です", expected: "GOAL1_救急"}
+      - {id: pr2, input: "胸が痛くて腕に広がる。父は80歳で歩けない", expected: "GOAL1_救急"}
+
+  - step: ログ_終了
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST DONE] triage_router 27 ケース完走。grep [TEST FAIL] = 0 で全 PASS");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: 切断
+
+  - step: 切断
+    type: termination

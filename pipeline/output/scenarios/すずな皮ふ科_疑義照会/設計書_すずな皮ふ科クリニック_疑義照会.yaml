@@ -1,0 +1,659 @@
+# 設計書 — すずな皮ふ科クリニック 疑義照会
+# 生成元: @director エージェント
+# 生成日: 2026-05-11
+# 入力資料: docs/migration/すずな皮ふ科_疑義照会.md
+# 元資料:   docs/reference/customer_docs/すずな皮ふ科_疑義照会_raw.md
+# 補足元資料: docs/reference/customer_docs/すずな皮ふ科クリニック様_AI電話設計書・定例資料_.pdf
+# 参考シナリオ: output/scenarios/小山記念病院_薬剤部/設計書_小山記念病院_薬剤部.yaml
+# 流用元: output/scenarios/すずな皮ふ科_診療/ (group_name / office_id / 冒頭アナウンス文言)
+# 作業種別: 新規作成 (Pattern 1)
+# 確認レポート: output/scenarios/すずな皮ふ科_疑義照会/確認レポート_すずな皮ふ科_疑義照会_20260511.md
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "すずな皮ふ科クリニック"
+  scenario_name: "疑義照会"
+  group_name: "すずな皮膚科クリニック"
+  flow_name: "すずな皮膚科クリニック$疑義照会"
+  target_facility: "すずな皮ふ科クリニック（東京都渋谷区幡ヶ谷2-18-1 ケイオービル5階）"
+  office_id: "5eecd40f2c9faeddaddc1dc9"
+  phone_number: "050-5527-9968"
+  business_hours: "24時間365日（3/2 月曜のみ9時開始）— 既存診療シナリオから踏襲。詳細は Dr.JOY 側で acceptance_times 設定"
+  flow_type: "1flow"
+  work_type: "new"
+  environment: "demo"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+# 入電者は調剤薬局担当者（患者本人ではない）。氏名/生年月日/電話番号/診察券番号の
+# 標準4点セットは患者本人由来ではないため、PatientName / Phone / MedicalCard /
+# DateOfBirth の各標準サブフローは原則使用しない。患者名・患者生年月日は hearing
+# として直接 main に置く (小山記念病院_薬剤部 と同型)。
+flow_structure:
+  type: "1flow"
+  flows:
+    - name: "すずな皮膚科クリニック$疑義照会"
+      role: "main"
+      description: "調剤薬局からの疑義照会一次受付フロー。電話帳登録済み薬局は自動認識し、無登録は薬局名聴取にフォールバック"
+  subflows: []
+
+# --- セクション3: フローの目的 ---
+purpose: >
+  すずな皮ふ科クリニックに調剤薬局担当者から疑義照会の電話があった際、
+  薬局名・担当者名・患者氏名・患者生年月日 (DTMF)・疑義内容 を自動聴取し、
+  Dr.JOY に登録する。Dr.JOY 電話帳に登録された 4 薬局からの着信は
+  incoming-category-classifier + Phone2Name の組み合わせで薬局名を自動認識し
+  「{薬局名}さんですね。」と読み上げる。電話帳未登録時は薬局名を聴取する。
+  患者生年月日はクリニック側で患者本人と紐付けるための照合用情報。
+  ボット応答後、クリニック側担当者が「お掛けいただいた番号に折り返し」対応する。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "すずな皮膚科クリニック$疑義照会"
+    diagram: |
+      冒頭(wait 2000ms)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → 非通知_アナウンス(TTS) → 完了フラグ_非通知(status=2) → 切断
+            └─ 通常/携帯/固定 → 営業時間チェック(acceptance_times)
+                ├─ 時間外 → 時間外_アナウンス(TTS) → 完了フラグ_時間外(status=6) → 切断
+                └─ 受付可 → 冒頭_アナウンス(TTS)「お電話ありがとうございます。すずな皮ふ科クリニックAI電話です。」
+                    → 薬局カテゴリ判定(augment: incoming-category-classifier)
+                        ├─ found(リスト1=薬局ヒット) → 薬局名読み上げ(augment: Phone2Name)
+                        │     「{薬局名}さんですね。」(recipient_name 差込) → 担当者名
+                        └─ other(no_result/timeout/error) → 薬局名聴取(hearing, text)
+                            → 担当者名
+                                → 患者名(hearing, text)
+                                    → 患者生年月日(hearing, DTMF 8桁, datetime)
+                                        → 疑義内容(hearing, text)
+                                            → END_疑義照会(status=1, sms_flag=-1)
+    notes: |
+      設計のポイント:
+      1. 薬局カテゴリ判定は Dr.JOY 電話帳の「リスト1（薬局カテゴリ）」を参照する
+         augment ブロック (incoming-category-classifier)。電話帳に 4 薬局を事前登録する
+         前提で稼働 (Dr.JOY 側設定)
+      2. 電話帳マッチ時は Phone2Name で「{薬局名}さんですね。」を動的差込で読み上げ
+         （recipient_name プレースホルダ）。担当者名聴取へ直接遷移
+      3. 電話帳ミス時 (NO_RESULT/TIMEOUT/ERROR) は薬局名聴取 (hearing) にフォールバック
+         して同じく担当者名聴取へ合流
+      4. 患者生年月日のみ DTMF 併用必須 (raw.md L228 / L34)。stt_type=DTMF_AmiVoice、
+         dtmf_max_length=8 (YYYYMMDD)
+      5. 復唱は全項目なし (raw.md アナウンス一覧の「復唱有無」全行「無し」)
+      6. 既存診療シナリオの用件分岐 (DTMF 5番=疑義紹介) からの遷移経路は本設計書
+         スコープ外。診療側フロー JSON の更新は別タスク
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭 (opening: wait + saveContextModel2DB + incoming-classifier + acceptance_times) ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  # --- 冒頭アナウンス ---
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 薬局カテゴリ判定
+
+  # --- 薬局カテゴリ判定 (augment: incoming-category-classifier) ---
+  # Dr.JOY 電話帳のリスト1（薬局カテゴリ）に着信番号がヒットするか判定。
+  # scaffold は placeholder Script で生成 → Brekeke IVR UI で
+  # drjoy^Incoming$incoming-category-classifier に手動置換が必要。
+  - step: 薬局カテゴリ判定
+    type: augment
+    augment_pattern: new_module
+    augment_purpose: "drjoy^Incoming$incoming-category-classifier を使用。Dr.JOY 電話帳の薬局カテゴリ（リスト1）に着信番号がヒットするか判定。HIT 時は薬局名読み上げ(Phone2Name)へ、NO_RESULT/TIMEOUT/ERROR 時は薬局名聴取(hearing)にフォールバック。詳細は docs/brekeke/モジュール詳細設定ガイド_1.md §6.2 と docs/reference/incoming_category_examples/README.md を参照"
+    conditions:
+      - match: "found"
+        next: 薬局名読み上げ
+      - match: "other"
+        next: 薬局名聴取
+
+  # --- 薬局名読み上げ (augment: Phone2Name) ---
+  # 電話帳ヒット時のみ実行。フリガナを recipient_name で差込んで「{薬局名}さんですね。」と読み上げ。
+  # scaffold は placeholder Script で生成 → Brekeke IVR UI で
+  # drjoy^External Integration$Phone2Name に手動置換が必要。
+  # FOUND_KATAKANA_NAME_DEFAULT_TMP: "recipient_name さんですね。"
+  - step: 薬局名読み上げ
+    type: augment
+    augment_pattern: new_module
+    augment_purpose: "drjoy^External Integration$Phone2Name を使用。電話帳のフリガナを recipient_name プレースホルダで動的差込し「{薬局名}さんですね。」と読み上げる。FOUND_KATAKANA_NAME_DEFAULT_TMP='recipient_name さんですね。' / NOT_FOUND_KATAKANA_NAME_DEFAULT_TMP=空。NO_RESULT/TIMEOUT/ERROR は薬局名聴取にフォールバックする想定だが、ここでは前段の incoming-category-classifier で既に found 判定されているため通常は to-found-route のみ通る。詳細は docs/brekeke/モジュール詳細設定ガイド_1.md §4.6 を参照"
+    next: 担当者名
+
+  # --- 薬局名聴取 (hearing, text) ---
+  # 電話帳未登録時のフォールバック経路。
+  - step: 薬局名聴取
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 担当者名
+
+  # --- 担当者名 (hearing, text) ---
+  - step: 担当者名
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 患者名
+
+  # --- 患者名 (hearing, text) ---
+  # 患者本人ではなく薬局担当者からの代理入力。
+  - step: 患者名
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 患者生年月日
+
+  # --- 患者生年月日 (hearing, DTMF + datetime) ---
+  # raw.md L228 / L34 で DTMF 併用必須が明記されている。
+  # dtmf_max_length: 8 (YYYYMMDD 8 桁固定で自動確定)
+  - step: 患者生年月日
+    type: hearing
+    output_format: datetime
+    retry_failure: skip
+    next: 疑義内容
+
+  # --- 疑義内容 (hearing, text) ---
+  - step: 疑義内容
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: END_疑義照会
+
+  # --- 終話: 疑義照会 ---
+  - step: END_疑義照会
+    type: termination
+    termination_ref: "END_疑義照会"
+
+# --- セクション5: コンテキストフィールド一覧 ---
+# Dr.JOY 詳細画面の確認画面表示（raw.md L161-171）:
+#   薬局名 〇 / 担当者名 〇 / 患者名 〇 / 患者生年月日 〇 / 疑義内容 〇 / 状態 ✕
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "5"
+        order: "5"
+        value: "疑義照会"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件区分。本フロー起点では既存診療フローの用件分岐で「疑義照会」が確定済み前提。Dr.JOY UI 表示用に「疑義照会」のみ宣言。診療フロー側 saveContextModel2DB には他用件 (お問い合わせ/予約/予約変更/予約キャンセル) を含めるため、本フロー単独では「5: 疑義照会」のみで十分"
+
+  - context_name: "patientName"
+    context_name_jp: "患者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "薬局担当者からの代理入力。患者本人ではない"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "患者生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "DTMF 8桁 (YYYYMMDD) 入力。クリニック側で患者本人と紐付けるための照合用"
+
+  - context_name: "reason"
+    context_name_jp: "疑義内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "薬局担当者からの疑義の自由記述"
+
+  - context_name: "clinicalDepartment2"
+    context_name_jp: "薬局名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "電話帳ヒット時は Phone2Name の recipient_name 経由で書き込まれず、Dr.JOY 側で電話帳マッチ情報が紐付く想定。フォールバック (薬局名聴取 hearing) 時のみ本 context に格納。命名は小山記念病院_薬剤部の慣習に倣う"
+
+  - context_name: "Desiredreservation"
+    context_name_jp: "担当者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "薬局担当者名。命名は小山記念病院_薬剤部の慣習に倣う (フィールド名は既存運用文化を継承)"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納。Phone2Name の入力源にもなる"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本フローでは聴取しない (折り返し先は着信番号固定)。テンプレート標準フィールドとして残置"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "転送"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "Gen3 標準ラベル。すずな皮ふ科の facility-specific ラベル（未処理 1/処理中 3/SMS返信待ち 2/処理済み 4）は Dr.JOY 管理画面側で表示置換する想定。raw.md L120-142 にあった status=0 (途中切断) は Gen3 では使わないため status=2 に置換"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "システム自動取得"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値"
+
+# --- セクション6: 聴取項目一覧 ---
+# raw.md アナウンス一覧の「復唱有無」が全行「無し」のため全項目 echo_back=false
+hearing_items:
+  - order: 1
+    name: "薬局名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment2"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "電話帳ミス時のフォールバック経路。raw.md L225「薬局名（電話番号登録なし）: 薬局名をお話しください。」"
+
+  - order: 2
+    name: "担当者名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "Desiredreservation"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "raw.md L226「今お電話いただいているご担当者名を、「担当は佐藤です」のようにお話しください。」"
+
+  - order: 3
+    name: "患者名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientName"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "raw.md L227「患者様のお名前を、「名前は山田太郎です」のようにフルネームでお話しください。」"
+
+  - order: 4
+    name: "患者生年月日"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 8
+    retry_count: 2
+    echo_back: false
+    save_to: "patientDateOfBirth"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: "raw.md L228「患者様の生年月日を、「1990年4月1日」のようにお話しください。プッシュボタンでも操作できます。」DTMF 8桁 YYYYMMDD で自動確定。終端記号なし (一般生年月日と異なり米印終端の明示なし)"
+
+  - order: 5
+    name: "疑義内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "raw.md L229「疑義の内容をお話しください。」最終聴取項目。retry_failure=skip で空のまま END_疑義照会 へ進む"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "冒頭_アナウンス"
+    tts_announcement: "お電話ありがとうございます。すずな皮ふ科クリニックAI電話です。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: ""
+    next_step: "薬局カテゴリ判定"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "薬局名読み上げ"
+    tts_announcement: "<% recipient_name %> さんですね。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: ""
+    next_step: "担当者名"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "薬局名聴取"
+    tts_announcement: "薬局名をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "clinicalDepartment2"
+    next_step: "担当者名"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "担当者名"
+    tts_announcement: "今お電話いただいているご担当者名を、「担当は佐藤です」のようにお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "Desiredreservation"
+    next_step: "患者名"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "患者名"
+    tts_announcement: "患者様のお名前を、「名前は山田太郎です」のようにフルネームでお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "patientName"
+    next_step: "患者生年月日"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "患者生年月日"
+    tts_announcement: "患者様の生年月日を、「1990年4月1日」のようにお話しください。プッシュボタンでも操作できます。"
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "DTMF 8桁 YYYYMMDD (例: 19900401) または音声「1990年4月1日」「平成2年4月1日」"
+          output: "YYYY-MM-DD 形式に正規化 (例: 1990-04-01)"
+      no_result_condition: "和暦/西暦解釈不能、または無音"
+    save_to: "patientDateOfBirth"
+    next_step: "疑義内容"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "疑義内容"
+    tts_announcement: "疑義の内容をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "reason"
+    next_step: "END_疑義照会"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須） ---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "お手数をおかけしますが、発信者番号を通知して再度お電話ください。電話番号の前に「186」を追加いただくことで、発信者番号を通知していただくことができます。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。すずな皮ふ科クリニックの、予約、問合せ専用AI電話です。ただいまの時間は受付時間外です。恐れ入りますが、水曜と日祝を除く月曜から金曜は8時から18時、土曜は8時から13時の間におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "ご回答の確認ができませんでしたので、こちらからお電話失礼させていただきます。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系 ---
+  - name: "END_疑義照会"
+    condition: "通話完了（疑義照会フロー正常終了）"
+    tts_announcement: "かしこまりました。お掛けいただいた番号に折り返しいたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_疑義照会"
+
+# smsFlag 分岐設計
+# 疑義照会は薬局→クリニック間の業務であり、SMS 送信は不要 (sms_flag=-1)
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ 検索サブフロー ---
+# 本フローは定型受付であり、FAQ 検索は不要
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション8c: Dr.JOY 電話帳エントリ ---
+# 着信電話番号 → 薬局カテゴリ自動判定（incoming-category-classifier + Phone2Name）で使用。
+# 元 PDF にフリガナ記載なし → 全件空欄で出力、Dr.JOY 管理画面で人間が補完する運用。
+phonebook:
+  enabled: true
+  list_labels:
+    list1: "薬局カテゴリ（登録 4 薬局）"
+    list2: ""
+    list3: ""
+    list4: ""
+    list5: ""
+  entries:
+    - phone_number: "0333205751"
+      name: "クオール薬局"
+      furigana: ""
+      blacklist: 0
+      list1: 1
+      list2: 0
+      list3: 0
+      list4: 0
+      list5: 0
+      notification: 0
+    - phone_number: "0353048590"
+      name: "ミツヤ薬局"
+      furigana: ""
+      blacklist: 0
+      list1: 1
+      list2: 0
+      list3: 0
+      list4: 0
+      list5: 0
+      notification: 0
+    - phone_number: "0333792179"
+      name: "ミネ薬局（ミネドラッグ）"
+      furigana: ""
+      blacklist: 0
+      list1: 1
+      list2: 0
+      list3: 0
+      list4: 0
+      list5: 0
+      notification: 0
+    - phone_number: "0357382921"
+      name: "日本調剤"
+      furigana: ""
+      blacklist: 0
+      list1: 1
+      list2: 0
+      list3: 0
+      list4: 0
+      list5: 0
+      notification: 0
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内（既存診療シナリオと共通文言）"
+    announcement: "お電話ありがとうございます。すずな皮ふ科クリニックAI電話です。"
+
+  - module_name: "薬局名読み上げ"
+    purpose: "電話帳マッチ時の薬局名動的読み上げ（Phone2Name の FOUND_KATAKANA_NAME_DEFAULT_TMP）"
+    announcement: "<% recipient_name %> さんですね。"
+
+  - module_name: "薬局名聴取"
+    purpose: "電話帳ミス時の薬局名聴取フォールバック"
+    announcement: "薬局名をお話しください。"
+
+  - module_name: "担当者名"
+    purpose: "薬局担当者名聴取"
+    announcement: "今お電話いただいているご担当者名を、「担当は佐藤です」のようにお話しください。"
+
+  - module_name: "患者名"
+    purpose: "患者名（薬局担当者からの代理入力）聴取"
+    announcement: "患者様のお名前を、「名前は山田太郎です」のようにフルネームでお話しください。"
+
+  - module_name: "患者生年月日"
+    purpose: "患者生年月日（DTMF 8桁）聴取"
+    announcement: "患者様の生年月日を、「1990年4月1日」のようにお話しください。プッシュボタンでも操作できます。"
+
+  - module_name: "疑義内容"
+    purpose: "疑義内容自由記述聴取"
+    announcement: "疑義の内容をお話しください。"
+
+  - module_name: "リトライ_薬局名聴取"
+    purpose: "薬局名 再聴取"
+    announcement: "すみません、うまく聞き取れませんでした。もう一度お話しください。"
+
+  - module_name: "リトライ_担当者名"
+    purpose: "担当者名 再聴取"
+    announcement: "すみません、うまく聞き取れませんでした。もう一度お話しください。"
+
+  - module_name: "リトライ_患者名"
+    purpose: "患者名 再聴取"
+    announcement: "すみません、うまく聞き取れませんでした。もう一度お話しください。"
+
+  - module_name: "リトライ_患者生年月日"
+    purpose: "患者生年月日 再聴取"
+    announcement: "すみません、うまく聞き取れませんでした。もう一度お話しください。"
+
+  - module_name: "リトライ_疑義内容"
+    purpose: "疑義内容 再聴取"
+    announcement: "すみません、うまく聞き取れませんでした。もう一度お話しください。"
+
+  - module_name: "END_疑義照会"
+    purpose: "疑義照会 通常終話"
+    announcement: "かしこまりました。お掛けいただいた番号に折り返しいたします。お電話ありがとうございました。"
+
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知切断"
+    announcement: "お手数をおかけしますが、発信者番号を通知して再度お電話ください。電話番号の前に「186」を追加いただくことで、発信者番号を通知していただくことができます。お電話ありがとうございました。"
+
+  - module_name: "時間外_アナウンス"
+    purpose: "時間外切断"
+    announcement: "お電話ありがとうございます。すずな皮ふ科クリニックの、予約、問合せ専用AI電話です。ただいまの時間は受付時間外です。恐れ入りますが、水曜と日祝を除く月曜から金曜は8時から18時、土曜は8時から13時の間におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "聴取失敗_アナウンス"
+    purpose: "リトライ上限切断"
+    announcement: "ご回答の確認ができませんでしたので、こちらからお電話失礼させていただきます。お電話ありがとうございました。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+# 薬局名聴取（フォールバック経路）で 4 薬局名を認識する辞書。
+# 電話帳マッチ経路では Phone2Name が直接読み上げるため STT 辞書は不要だが、
+# フォールバック経路（電話帳ミス）でも 4 薬局のいずれかをお話しになる
+# 可能性が高いので登録しておく。
+# raw.md L57-63 「薬局名（店舗名までは入れずOK）」より店舗名サフィックスは省略。
+amivoice_dictionary:
+  - step_name: "薬局名聴取"
+    words: |
+      クオール薬局 くおーるやっきょく
+      クオール くおーる
+      ミツヤ薬局 みつややっきょく
+      ミツヤ みつや
+      ミネ薬局 みねやっきょく
+      ミネドラッグ みねどらっぐ
+      日本調剤 にほんちょうざい
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "本フローは調剤薬局担当者を対象とする一次受付。患者本人由来の標準4点セット (PatientName / Phone / MedicalCard / DateOfBirth) サブフローは使用せず、患者名・患者生年月日は hearing として直接 main に置く (小山記念病院_薬剤部と同型)"
+  - "薬局名自動判定は incoming-category-classifier + Phone2Name の二段構成。Dr.JOY 電話帳に 4 薬局 (クオール薬局 03-3320-5751 / ミツヤ薬局 03-5304-8590 / ミネ薬局（ミネドラッグ） 03-3379-2179 / 日本調剤 03-5738-2921) をリスト1 (薬局カテゴリ) として事前登録する人間作業が必要"
+  - "Phone2Name の FOUND_KATAKANA_NAME_DEFAULT_TMP は 'recipient_name さんですね。' に設定。recipient_name は電話帳のフリガナで動的差込される Brekeke 公式プレースホルダ"
+  - "augment ブロック (薬局カテゴリ判定 / 薬局名読み上げ) は scaffold が placeholder Script で生成。最終的に Brekeke IVR UI で drjoy^Incoming$incoming-category-classifier および drjoy^External Integration$Phone2Name に手動置換が必要"
+  - "復唱は raw.md アナウンス一覧の「復唱有無」が全行「無し」のため全項目 echo_back=false。電話番号復唱モジュールは本フローに出現しない (折り返し先は着信番号固定)"
+  - "患者生年月日のみ DTMF 併用必須 (raw.md L228 / L34)。stt_type=DTMF_AmiVoice、dtmf_max_length=8 (YYYYMMDD 8桁自動確定、終端記号なし)"
+  - "raw.md L120-142 にあった status=0 (途中切断) は Gen3 で使用禁止のため、saveCompletionFlag2db では使用しない。途中切断相当は END_聴取失敗 で status=3 (処理中相当) に集約"
+  - "既存診療フロー (drjoy^すずな皮膚科クリニック$診療_20260401) の用件分岐 OpenAI に DTMF 5番=疑義照会 経路を追加し、Custom Jump to Flow で本フローを呼び出す経路追加は別タスク (本設計書のスコープ外)"
+  - "raw.md の基本設定1/2・アナウンス一覧は元 PDF からの抽出時に表組みが崩れている (L68-173 / L175-231)。本設計書は raw.md の崩れた表組みではなく顧客 PDF 元資料 (P.2 / P.4 / P.8) の論理構造を優先して構築"
+  - "facility_name (顧客資料準拠) と group_name (既存稼働中 診療 フロー準拠) で漢字表記が異なる: facility_name=「すずな皮ふ科クリニック」(raw.md 表記) / group_name=「すずな皮膚科クリニック」(既存 modified_すずな皮ふ科_診療.json の name フィールドより)。group_name は既存稼働中フローと一致させて IVR プロパティ参照衝突を避ける"
+
+# --- セクション12: 要確認事項 ---
+# 詳細は確認レポート (output/scenarios/すずな皮ふ科_疑義照会/確認レポート_すずな皮ふ科_疑義照会_20260511.md) を参照
+confirmation_items:
+  # ===== NON-BLOCKER (仮値で設定済み、顧客確認で差し替え推奨) =====
+  - item: "【NON-BLOCKER N-1】END_疑義照会 の status=1 (未処理) で仮設定。元 PDF P.8 で異なる値が明示されている場合は差し替え (raw.md L120-142 表組み崩れで未確定)"
+    resolved: false
+  - item: "【NON-BLOCKER N-2】END_疑義照会 の sms_flag=-1 (SMS 送信なし) で仮設定。薬局相手の業務性質上 SMS 不要の判断。raw.md L70-90 SMS 文言列が疑義照会用に適用されるか要確認"
+    resolved: false
+  - item: "【NON-BLOCKER N-3】稼働時間 24時間365日 (3/2 月曜のみ9時開始) を既存診療シナリオから踏襲。Dr.JOY 側で acceptance_times スケジュール設定要"
+    resolved: false
+  - item: "【NON-BLOCKER N-4】時間外アナウンス文言は raw.md L114-117 を流用 (8〜18時の文言)。24時間稼働と時間外文言が併存する raw.md の矛盾は Dr.JOY 側で実運用時に解消"
+    resolved: false
+  - item: "【NON-BLOCKER N-5】office_id=5eecd40f2c9faeddaddc1dc9 を既存診療 IVR プロパティから流用。フロー JSON 側では参照しないが、IVR プロパティ生成時に必要"
+    resolved: false
+  - item: "【NON-BLOCKER N-6 / 重要】Dr.JOY 電話帳への 4 薬局登録 (フリガナ付き) はフロー稼働前の必須人間作業。リスト1 (薬局カテゴリ) に クオール薬局 / ミツヤ薬局 / ミネ薬局（ミネドラッグ）/ 日本調剤 を登録"
+    resolved: false
+  - item: "【NON-BLOCKER N-7】Phone2Name の FOUND_KATAKANA_NAME_DEFAULT_TMP='recipient_name さんですね。' の半角スペース有無・敬称末尾の感じ等は実機検証で調整"
+    resolved: false
+  - item: "【NON-BLOCKER N-8】既存診療フロー (drjoy^すずな皮膚科クリニック$診療_20260401) の用件分岐 OpenAI に DTMF 5番=疑義照会 経路を追加 + Custom Jump to Flow (本フロー呼出) を追加する別タスクが必要"
+    resolved: false
+  - item: "【NON-BLOCKER N-9】患者生年月日 DTMF 8桁の終端記号 (米印等) なしで自動確定。raw.md L198 一般生年月日と異なり L228 患者生年月日では終端記号の明示なしで設計"
+    resolved: false
+  - item: "【NON-BLOCKER N-10】疑義内容 retry_failure=skip で統一。リトライ失敗時も空 reason で END_疑義照会 へ進行する。end_failure に変更したい場合は要確認"
+    resolved: false
+  - item: "【augment 確認】薬局カテゴリ判定 / 薬局名読み上げ ブロックは scaffold で placeholder Script として生成される。最終的に Brekeke IVR UI で drjoy^Incoming$incoming-category-classifier および drjoy^External Integration$Phone2Name に手動置換が必要。手順は docs/reference/incoming_category_examples/README.md 参照"
+    resolved: false

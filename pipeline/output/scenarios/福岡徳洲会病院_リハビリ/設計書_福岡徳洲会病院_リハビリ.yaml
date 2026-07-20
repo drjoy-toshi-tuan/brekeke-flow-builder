@@ -1,0 +1,583 @@
+# 設計書 — 福岡徳洲会病院 リハビリ（通所リハビリテーション）
+# 生成元: @director エージェント
+# 生成日: 2026-04-27
+# 元資料: docs/reference/customer_docs/【リハビリ1】：福岡徳洲会 20251225.md
+# 移管ノート: docs/migration/gen2_福岡徳洲会病院_リハビリ.md
+# 備考: 本プロジェクト初のリハビリシナリオ。customer_doc 側は「超シンプルシナリオ」を明言しているが
+#       function schema には通所リハビリ特有のフィールド（欠席連絡・お迎え時間・体験利用 等）を持つ。
+#       聴取は patientName / reason の2項目のみ。他の required フィールドは空文字保存で済ませる。
+#       customer_doc §Ⅰ「出力可能文以外は一文字でも違えばルール違反」「言い換え・意訳禁止」が最重要制約。
+
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "福岡徳洲会病院"
+  scenario_name: "リハビリ"
+  group_name: "福岡徳洲会病院"
+  flow_name: "福岡徳洲会病院$リハビリ"
+  target_facility: "福岡徳洲会病院 通所リハビリテーション"
+  office_id: "TODO_要確認"
+  phone_number: "TODO_要確認"
+  business_hours: "TODO_要確認（customer_doc に記載なし。Dr.JOY 側で設定）"
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "prod"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+# 個人情報聴取サブフローの利用方針（CLAUDE.md Rule 9 準拠）:
+#   氏名のみサブフロー化。DOB/電話/診察券番号は customer_doc で聴取していないため呼び出し不要。
+#   （function schema には存在するが空文字許容 = 関連サブフロー不要）
+#   復唱・再確認の全面禁止（customer_doc §Ⅱ, §1-8）に従い、氏名聴取サブフローの
+#   復唱（recitation）は「なし」で運用する。
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "福岡徳洲会病院$リハビリ"
+      role: "main"
+      description: "通所リハビリテーション専用 AI 電話。氏名・用件を聴取し status 判定後に終話する超シンプルフロー。"
+  subflows:
+    - name: "福岡徳洲会病院$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: |
+        標準氏名聴取サブフロー（Custom Jump to Flow）を使用。カタカナ変換は内蔵 OpenAI に委譲。
+        customer_doc §1-4-1 に従い retry_count=1 を採用（標準の 2 を 1 に上書き）。
+        再質問文言は §1-7 + §V を合成した施設固有文言:
+        「申し訳ありません。うまく聞き取れませんでした。ゆっくり話すとAIがうまく聞き取れません。普通のスピードではっきりとお話しください。再度伺います。お名前をお話しください。」
+        を IVR プロパティ（リトライ_患者氏名聴取.prompt_true）で上書きする。復唱は絶対禁止。
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  福岡徳洲会病院 通所リハビリテーションの代表電話（AI 電話）に着信した利用者から、氏名と用件を
+  聴取して Dr.JOY に記録し、人間スタッフに折り返し連絡を依頼するための「受付代行」フロー。
+  復唱・再確認・言い換え・FAQ 対応は一切行わず、患者氏名と用件を淡々と聴取するだけの超シンプル構成。
+  customer_doc §Ⅱ・§1-8・§1-9 により、本フロー内で AI が自由発話することは一切許されない。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "福岡徳洲会病院$リハビリ"
+    diagram: |
+      冒頭(wait 2000ms)
+        → コンテキスト設定(saveContextModel2DB)
+          → 着信電話番号分類(incoming-classifier)
+              ├─ 非通知 → END_非通知(TTS) → 完了フラグ_非通知(status=2) → 切断
+              └─ 通常   → 営業時間チェック(acceptance_times)
+                            ├─ 時間外 → END_時間外(TTS) → 完了フラグ_時間外(status=6) → 切断
+                            └─ 受付可 → 冒頭_アナウンス(TTS)
+                                          → 患者氏名聴取(Custom Jump to Flow → 氏名聴取サブフロー)
+                                            → 用件聴取(TTS + STT + save2db, output_format=text)
+                                              → 終話判定_氏名チェック(ContextMatchRouter: patientName)
+                                                  ├─ 非空(.+) → END_終話_成功(TTS, status=1) → 切断
+                                                  └─ 空(default) → 終話判定_用件チェック(ContextMatchRouter: reason)
+                                                                      ├─ 非空(.+) → END_終話_成功(TTS, status=1) → 切断
+                                                                      └─ 空(default) → END_終話_失敗(同一 TTS, status=2) → 切断
+    notes: |
+      - FAQ・復唱・再確認は一切なし（§1-2, §Ⅱ, §1-8）。
+      - 時間外・非通知アナウンスはテンプレート既定文言を使用（customer_doc に記載なし。N-3/N-4 で要確認）。
+      - 終話 TTS は成功 / 失敗で同一文言。違いは saveCompletionFlag2db の status 値のみ。
+      - 用件聴取は output_format=text（OpenAI 正規化なし）。STT 結果をそのまま reason に保存。
+      - 各聴取項目とも retry_count=1（§1-4-1）。リトライ失敗時は無言で次へ skip。
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭 ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true     # customer_doc 記載なしだが Dr.JOY 側で時間制御を行う想定（N-2）
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 患者氏名聴取
+
+  # --- 氏名聴取（サブフロー） ---
+  - step: 患者氏名聴取
+    type: subflow
+    flowname: "福岡徳洲会病院$氏名聴取"
+    next: 用件聴取
+
+  # --- 用件聴取（メインフロー内 hearing） ---
+  - step: 用件聴取
+    type: hearing
+    output_format: text                 # 自由記述。reason フィールドへそのまま保存
+    retry_failure: skip                 # customer_doc §1-4-1: リトライ超過時は次項目へ強制遷移
+    next: 終話判定_氏名チェック
+
+  # --- 終話判定（ContextMatchRouter 2 段直列: patientName → reason の空チェック） ---
+  # script ブロックはカレンダー計算（営業日・祝日・休館日）専用（モジュール選定ガイド §3.8 / qa_validator E-13）。
+  # 複数 context の OR 空チェックは ContextMatchRouter を 2 段直列に並べて等価に実現する。
+  # 1 段目で patientName 非空なら SUCCESS、空なら 2 段目に流す。
+  # 2 段目で reason 非空なら SUCCESS、空なら FAIL（両 context 空＝失敗）。
+  - step: 終話判定_氏名チェック
+    type: context_match_router
+    reference_module: "patientName"
+    conditions:
+      - match: ".+"
+        next: END_終話_成功
+      - match: "default"
+        next: 終話判定_用件チェック
+    notes: |
+      patientName が非空（.+ にマッチ）なら成功ルート確定。空文字なら 2 段目（用件チェック）へ。
+      status マッピング: 非空 → END_終話_成功（status=1）
+
+  - step: 終話判定_用件チェック
+    type: context_match_router
+    reference_module: "reason"
+    conditions:
+      - match: ".+"
+        next: END_終話_成功
+      - match: "default"
+        next: END_終話_失敗
+    notes: |
+      patientName が空だった場合のみ到達。reason 非空（.+ にマッチ）なら成功、空なら失敗。
+      status マッピング:
+        - reason 非空 → END_終話_成功（status=1）
+        - reason 空（= patientName / reason 両方空）→ END_終話_失敗（status=2、Gen2 の 0 を Gen3 禁止のため 2 に置換）
+      customer_doc §Ⅲ「データ格納」の status 判定（patientName または reason 非空 → 1、両方空 → 0/Gen3 規則で 2）に等価。
+
+  # --- 終話 ---
+  - step: END_終話_成功
+    type: termination
+    termination_ref: "END_終話_成功"
+
+  - step: END_終話_失敗
+    type: termination
+    termination_ref: "END_終話_失敗"
+
+# --- セクション5: コンテキストフィールド一覧 ---
+# customer_doc §function に列挙された全 required フィールドを定義する。
+# リハビリ固有フィールドは function schema の display_type に準拠。
+# endpoint は saveCompletionFlag2db のパラメータなのでコンテキストには入れない（director.md Gen2 マッピングルール）。
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "受付区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "欠席連絡"
+      - id: "2"
+        order: "2"
+        value: "変更"
+      - id: "3"
+        order: "3"
+        value: "お迎え時間"
+      - id: "4"
+        order: "4"
+        value: "体験利用・新規契約申し込み"
+      - id: "5"
+        order: "5"
+        value: "担当者会議"
+      - id: "6"
+        order: "6"
+        value: "無回答"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "function schema enum に準拠。本シンプルシナリオでは聴取せず空文字保存のまま。"
+
+  - context_name: "patientName"
+    context_name_jp: "利用者氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "氏名聴取サブフローでカタカナ変換後に保存（§1-7）。"
+
+  - context_name: "reason"
+    context_name_jp: "用件内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件聴取で STT 結果をそのまま保存（OpenAI 正規化なし）。"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本シンプルシナリオでは聴取なし。空文字保存。"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日(和暦)"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本シンプルシナリオでは聴取なし。空文字保存。"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "本シンプルシナリオでは聴取なし。空文字保存。"
+
+  - context_name: "reservationDate"
+    context_name_jp: "現在の予約日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "function schema 準拠。本シンプルシナリオでは空文字保存。"
+
+  - context_name: "Preferred_date"
+    context_name_jp: "予約希望日"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "function schema 準拠（リハビリ固有フィールド）。本シンプルシナリオでは空文字保存。"
+
+  - context_name: "Medical_history"
+    context_name_jp: "受診歴"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "function schema 準拠（リハビリ固有フィールド）。本シンプルシナリオでは空文字保存。"
+
+  - context_name: "company_name"
+    context_name_jp: "企業名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "function schema 準拠（リハビリ固有フィールド）。本シンプルシナリオでは空文字保存。"
+
+  - context_name: "company_check"
+    context_name_jp: "折り返し先種別"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "function schema description: 折り返し／利用者／事業所。本シンプルシナリオでは空文字保存。"
+
+  - context_name: "checking_details"
+    context_name_jp: "希望日有無"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "function schema description: 有／無。本シンプルシナリオでは空文字保存。"
+
+  - context_name: "Fax_number"
+    context_name_jp: "Fax番号"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "function schema 準拠（リハビリ固有フィールド）。本シンプルシナリオでは空文字保存。"
+
+  - context_name: "change_item"
+    context_name_jp: "変更項目"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "function schema 準拠（リハビリ固有フィールド）。本シンプルシナリオでは空文字保存。"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納。customer_doc §1-3: 先頭 0 を省略してはいけない（零サプレス禁止）。"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "システム自動取得。"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値。displayType / itemDefault / deletable は変更不可（scaffold 側でも強制上書き）。"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: |
+      customer_doc §Ⅲ + function schema description 準拠:
+        - patientName もしくは reason が非空 → "1"
+        - 両方空（Gen2 では "0"）          → "2"（Gen3 規則で "0" は禁止のため "2" に置換）
+        - 代表案内ルート                    → "2"
+      本フローで使用するのは 1 / 2 / 6 のみ。
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "患者氏名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1                      # customer_doc §1-4-1: 再質問1回のみ
+    echo_back: false                    # customer_doc §Ⅱ・§1-8: 復唱絶対禁止
+    save_to: "patientName"
+    openai_processing: "convert"        # カタカナ変換（§1-7）
+    output_format: "text"
+    output_labels: []
+    notes: |
+      氏名聴取サブフロー（福岡徳洲会病院$氏名聴取）に委譲。
+      サブフロー内の OpenAI プロンプトは customer_doc §1-7 に完全準拠:
+        - カタカナ出力を強制（かな・漢字入力をすべてカタカナに正規化）
+        - 復唱・確認・疑問終助詞（「〜ですか」「〜でしょうか」）出力禁止
+        - 再質問文言は固定（後述 tts_modules 参照）
+        - §1-5 数字表記ルールに従う（"for"/"C"/"号"/"go" 出力禁止）
+      リトライ失敗時は skip（= 用件聴取へ）。聞き取れた表記でそのまま保存する。
+
+  - order: 2
+    name: "用件聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 1                      # customer_doc §1-4-1: 再質問1回のみ
+    echo_back: false                    # 復唱絶対禁止
+    save_to: "reason"
+    openai_processing: "none"           # text そのまま保存（OpenAI 正規化なし）
+    output_format: "text"
+    output_labels: []
+    notes: |
+      リトライ失敗時は skip（= 終話判定へ）。聞き取れたテキストを reason に保存する。
+      ※ customer_doc の function schema には classification enum があるが、本シンプルシナリオでは
+         AI 分類せず、ユーザー発話をそのまま reason に格納する方針（移管ノート §1 明言）。
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "患者氏名聴取"
+    tts_announcement: "お名前をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "カタカナ表記の氏名（例: ヤマダ タロウ）"
+        - "カタカナ変換不可時は STT が聞き取った表記そのまま"
+      mapping:
+        - input: "ヤマダ タロウ（既にカタカナ）"
+          output: "ヤマダ タロウ"
+        - input: "やまだ たろう（ひらがな）"
+          output: "ヤマダ タロウ"
+        - input: "山田 太郎（漢字で読みが自明）"
+          output: "ヤマダ タロウ"
+        - input: "小山 大和（コヤマ/オヤマ・ヤマト/ダイワが不確定）"
+          output: "再質問文言を出力 → 再聴取でも不一致なら聞き取れた表記のまま保存"
+      no_result_condition: "無音・非言語音（「ん」「えー」等）のみ → 再質問1回 → それでも取得できなければ skip"
+    save_to: "patientName"
+    next_step: "用件聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: ""      # skip のため無言（TTS 出力なし）
+
+  - step_name: "用件聴取"
+    tts_announcement: "ご用件をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "STT 結果のテキスト（そのまま）"
+      mapping: []
+      no_result_condition: "無音・非言語音のみ → 再質問1回 → それでも取得できなければ skip"
+    save_to: "reason"
+    next_step: "終話判定"
+    retry_failure: "skip"
+    retry_failure_announcement: ""      # skip のため無言
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須・削除禁止）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達（保険用。本フローでは全聴取項目 retry_failure=skip のため通常到達しない）"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系（customer_doc §V 準拠）---
+  - name: "END_終話_成功"
+    condition: "patientName または reason が非空（デフォルトルート）"
+    tts_announcement: "お申込みを受付しました。失礼いたします。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_終話_成功"
+  - name: "END_終話_失敗"
+    condition: "patientName および reason が両方空文字"
+    tts_announcement: "お申込みを受付しました。失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_終話_失敗"
+
+# smsFlag 分岐は不要（本フローは SMS 送信なし固定）
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ 検索サブフロー ---
+# customer_doc §1-2 の「FAQ の対応はしない」明言に従い、RAG サブフローは一切組み込まない。
+# Gen2→Gen3 移管のデフォルトは pattern 3 だが、customer_doc の明示禁止指示を優先。
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+# customer_doc §Ⅰ の「出力可能な文は以下のみ・一文字でも異なる文言の出力はルール違反」に従い、
+# 以下の文言を完全一致で登録する。gen_properties の汎用デフォルトで上書きされないように注意。
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "通話開始時の固定アナウンス"
+    announcement: "福岡徳洲会病院通所リハビリテーション専用、AI電話です。"
+
+  - module_name: "患者氏名聴取"
+    purpose: "氏名聴取 質問文言（氏名聴取サブフロー内）"
+    announcement: "お名前をお話しください。"
+
+  - module_name: "リトライ_患者氏名聴取"
+    purpose: "氏名聴取 再質問文言（氏名聴取サブフロー内・1回のみ発話）"
+    announcement: "申し訳ありません。うまく聞き取れませんでした。ゆっくり話すとAIがうまく聞き取れません。普通のスピードではっきりとお話しください。再度伺います。お名前をお話しください。"
+
+  - module_name: "用件聴取"
+    purpose: "用件聴取 質問文言"
+    announcement: "ご用件をお話しください。"
+
+  - module_name: "リトライ_用件聴取"
+    purpose: "用件聴取 再質問文言（1回のみ発話）"
+    announcement: "申し訳ありません。うまく聞き取れませんでした。再度、ご用件をお話しください。"
+
+  - module_name: "END_終話_成功"
+    purpose: "全聴取完了時の終話（成功）"
+    announcement: "お申込みを受付しました。失礼いたします。"
+
+  - module_name: "END_終話_失敗"
+    purpose: "両項目とも空文字だった場合の終話（失敗）"
+    announcement: "お申込みを受付しました。失礼いたします。"
+
+  - module_name: "END_非通知"
+    purpose: "非通知着信時の案内"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_時間外"
+    purpose: "営業時間外着信時の案内"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "聴取失敗時の保険終話"
+    announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+# リハビリシナリオ固有の専門用語辞書は customer_doc に記載なし。
+# 氏名・自由発話の用件のみのため、特別な辞書は不要。
+amivoice_dictionary: []
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "【最重要・§Ⅰ】出力可能文の固定文言制約。customer_doc に記載のある文言を一文字でも変えて出力するとルール違反。言い換え・意訳・補足説明・省略・追加禁止。@prompter / @reviewer 工程で OpenAI プロンプトのフォールバック文に禁止文字列（「聞き取りませんでした」「もう一度お願いします」「〜でしょうか」「〜ですか」）が混入しないよう特に注意。"
+  - "【§Ⅱ・§1-8】復唱・再確認・Yes/No 確認の全面禁止。氏名復唱もしない。Re-confirmation・DOB Re-confirmation・Phone Normalization 等の復唱モジュールを一切使わない。"
+  - "【§1-1】口調規則: 「ありがとうございます」「お気軽に」禁止、「おっしゃってください」→「お話ください」に統一。終話は「失礼いたします」で締める。"
+  - "【§1-2】FAQ 対応なし。RAG サブフロー・FAQ 分岐を一切組み込まない（rag_subflow.pattern=none）。"
+  - "【§1-3】着信電話番号の先頭 0 保持。telephoneNumber に格納する際に零サプレスしないこと。"
+  - "【§1-4-1】各項目の再質問は 1 回のみ。超過時は聞き取れたテキストをそのまま保存して次項目へ強制遷移（retry_failure=skip）。リトライ失敗アナウンスは発話しない（無言で次へ）。"
+  - "【§1-5】数字表記ルール: 「よん/し」→ 4、「ご/ごお/ごー」→ 5。\"for\"/\"C\"/\"号\"/\"go\" の出力禁止。OpenAI 正規化プロンプトで明示。"
+  - "【§1-6】Gen2 SSML 制御指示（<dtmf />, <break time=\"500ms\"/> 等）は Gen3 では SSML 禁止のため無視。TTS は {tts_g:...} 形式のみ。<speak>, <break>, <say-as> 等を埋め込まない。"
+  - "【§1-7】氏名カタカナ変換: 入力文字種を問わずカタカナに正規化。判別不可時は聞き取れた表記で保存、再質問は 1 回のみ。再質問文言は §1-7 + §V を合成した長文版を使用。"
+  - "【§1-9】言い換え禁止: 再質問文言は customer_doc 記載の固定文を完全一致で使用。意訳・省略・接続詞追加もルール違反。"
+  - "【§Ⅲ】status 値マッピング: patientName もしくは reason が非空 → 1、両方空 → 2（Gen2 の 0 は Gen3 禁止値のため 2 に置換）、代表案内 → 2。本フローでは代表案内ルートは実装しない。"
+  - "【未聴取フィールド扱い】classification / medicalCardNumber / patientDateOfBirth / additionalPhoneNumber / reservationDate / Preferred_date / Medical_history / company_name / company_check / checking_details / Fax_number / change_item は function schema 上 required だが本シンプルシナリオでは聴取せず空文字保存とする。saveContextModel2DB に定義のみ行い、フロー内で populate しない。"
+  - "【サブフロー retry_count 上書き】氏名聴取サブフロー標準の retry_count（通常 2）を 1 に上書きする必要あり（§1-4-1 準拠）。手順は N-6 で要確認。"
+  - "【サブフロー再質問 TTS 上書き】氏名聴取サブフローの「リトライ_患者氏名聴取」プロパティを §1-7 + §V の長文合成版で上書きすること。gen_properties の汎用デフォルト（短縮版）が当たって施設固有文言が失われないように注意。"
+  - "【endpoint フィールド】function schema の endpoint は saveCompletionFlag2db のパラメータとして扱い、saveContextModel2DB には含めない（director.md Gen2 マッピングルール）。"
+  - "【終話判定の構成】script ブロックはカレンダー計算（営業日・祝日・休館日）専用のため使用しない（qa_validator E-13 / モジュール選定ガイド §3.8）。複数 context（patientName / reason）の OR 空チェックは ContextMatchRouter を 2 段直列に並べて等価表現する。1 段目（終話判定_氏名チェック: patientName 参照）で非空なら成功、空なら 2 段目（終話判定_用件チェック: reason 参照）に流し、reason 非空なら成功、両方空なら失敗。両終話の TTS は同一文言で status のみ 1/2 で差別化する。"
+
+# --- セクション12: 要確認事項 ---
+confirmation_items:
+  - item: "office_id（施設 ID）— Dr.JOY 管理画面から取得"
+    status: "TODO"
+    assignee: "人間"
+    resolved: false
+
+  - item: "AI 電話着信番号（phone_number）— customer_doc に記載なし。浜口に要ヒアリング"
+    status: "TODO"
+    assignee: "浜口"
+    resolved: false
+
+  - item: "営業時間スケジュール（曜日・時間帯）— customer_doc に記載なし。acceptance_times は配置するが具体値は Dr.JOY 側で設定。24 時間対応であれば use_acceptance_times=false に変更要"
+    status: "TODO"
+    assignee: "Dr.JOY 管理画面 / 施設"
+    resolved: false
+
+  - item: "group_name — customer_doc に明示記載がないため施設名と同一値（福岡徳洲会病院）を仮設定。Brekeke 上の実際のグループ名を確認"
+    status: "TODO"
+    assignee: "人間（Brekeke 管理画面）"
+    resolved: false
+
+  - item: "氏名聴取サブフロー retry_count=1 への上書き手順（標準 2 を 1 に変更する Brekeke IVR UI 操作の確認）"
+    status: "TODO"
+    assignee: "人間（Brekeke IVR UI）"
+    resolved: false
+
+  - item: "氏名聴取サブフロー再質問 TTS（リトライ_患者氏名聴取）を §1-7 + §V 合成の長文版に上書きする手順（IVR プロパティ経由）"
+    status: "TODO"
+    assignee: "人間（Brekeke IVR UI）"
+    resolved: false
+
+  - item: "非通知 / 時間外 / 聴取失敗 TTS 文言 — customer_doc に記載なし。テンプレート既定文言を仮採用。施設監修後に確定"
+    status: "TODO"
+    assignee: "施設監修"
+    resolved: false
+
+  - item: "終話判定 ContextMatchRouter 2 段直列の動作確認 — Brekeke ContextMatchRouter が match: \".+\" 正規表現で「非空文字」を検知できることを実機検証。仕様上未対応なら match に enum 列挙への切替、または OpenAI による空判定への作り替えを検討（Script への回帰は不可：qa_validator E-13）"
+    status: "TODO"
+    assignee: "scaffold_generator 実装確認 / 通話テスト"
+    resolved: false

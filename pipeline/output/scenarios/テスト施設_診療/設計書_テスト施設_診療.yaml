@@ -1,0 +1,311 @@
+# 設計書: テスト施設_診療（AmiVoice vs Soniox 比較テスト用）
+# 冒頭 → STT方式選択（通常/Soniox）で分岐し、同一聴取項目を異なるSTTで実行
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト施設"
+  group_name: "テスト$診療"
+  flow_name: "テスト$診療"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: "standalone"
+  flows:
+    - name: "テスト$診療"
+      role: "main"
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: STT方式選択
+
+  # === STT方式選択（DTMF: 1=通常, 2=Soniox）===
+  - step: STT方式選択
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "通常"
+        next: 氏名_通常
+      - match: "Soniox"
+        next: 氏名_Soniox
+
+  # ========================================
+  # 通常パス（AmiVoice DTMF STT）
+  # ========================================
+  - step: 氏名_通常
+    type: hearing
+    output_format: text
+    next: 生年月日_通常
+
+  - step: 生年月日_通常
+    type: hearing
+    output_format: datetime
+    next: 電話番号_通常
+
+  - step: 電話番号_通常
+    type: hearing
+    output_format: text
+    next: 診療科_通常
+
+  - step: 診療科_通常
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "内科"
+        next: 希望予約日_通常
+      - match: "外科"
+        next: 希望予約日_通常
+      - match: "小児科"
+        next: 希望予約日_通常
+      - match: "眼科"
+        next: 希望予約日_通常
+      - match: "耳鼻咽喉科"
+        next: 希望予約日_通常
+      - match: "皮膚科"
+        next: 希望予約日_通常
+      - match: "整形外科"
+        next: 希望予約日_通常
+      - match: "default"
+        next: 希望予約日_通常
+
+  - step: 希望予約日_通常
+    type: hearing
+    output_format: datetime
+    next: 主訴_通常
+
+  - step: 主訴_通常
+    type: hearing
+    output_format: text
+    next: END_受付完了
+
+  # ========================================
+  # Soniox パス（Soniox STT・TTS内蔵）
+  # ========================================
+  - step: 氏名_Soniox
+    type: hearing
+    output_format: text
+    next: 生年月日_Soniox
+
+  - step: 生年月日_Soniox
+    type: hearing
+    output_format: datetime
+    next: 電話番号_Soniox
+
+  - step: 電話番号_Soniox
+    type: hearing
+    output_format: text
+    next: 診療科_Soniox
+
+  - step: 診療科_Soniox
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "内科"
+        next: 希望予約日_Soniox
+      - match: "外科"
+        next: 希望予約日_Soniox
+      - match: "小児科"
+        next: 希望予約日_Soniox
+      - match: "眼科"
+        next: 希望予約日_Soniox
+      - match: "耳鼻咽喉科"
+        next: 希望予約日_Soniox
+      - match: "皮膚科"
+        next: 希望予約日_Soniox
+      - match: "整形外科"
+        next: 希望予約日_Soniox
+      - match: "default"
+        next: 希望予約日_Soniox
+
+  - step: 希望予約日_Soniox
+    type: hearing
+    output_format: datetime
+    next: 主訴_Soniox
+
+  - step: 主訴_Soniox
+    type: hearing
+    output_format: text
+    next: END_受付完了
+
+  # === 終話 ===
+  - step: END_受付完了
+    type: termination
+    termination_ref: 受付完了
+  - step: END_聴取失敗
+    type: termination
+    termination_ref: 聴取失敗
+  - step: END_非通知
+    type: termination
+    termination_ref: 非通知
+  - step: END_時間外
+    type: termination
+    termination_ref: 時間外
+    termination_ref: END_時間外
+
+context_fields:
+  - context_name: "sttMode"
+    context_name_jp: "STT方式"
+    display_type: "TEXT"
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号"
+    display_type: "PHONE_NUMBER"
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+  - context_name: "reservationDate"
+    context_name_jp: "希望予約日"
+    display_type: "DATE"
+  - context_name: "chiefComplaint"
+    context_name_jp: "主訴"
+    display_type: "TEXT"
+
+hearing_items:
+  # STT方式選択（DTMF: 1=通常, 2=Soniox）
+  - order: 1
+    name: "STT方式選択"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    save_to: "sttMode"
+    output_format: "enum"
+    output_labels: ["通常", "Soniox"]
+
+  # === 通常パス ===
+  - order: 2
+    name: "氏名_通常"
+    stt_type: "DTMF_AmiVoice"
+    retry_count: 2
+    save_to: "patientName"
+    output_format: "text"
+  - order: 3
+    name: "生年月日_通常"
+    stt_type: "AmiVoice_STT"
+    retry_count: 2
+    save_to: "patientDateOfBirth"
+    output_format: "datetime"
+  - order: 4
+    name: "電話番号_通常"
+    stt_type: "DTMF_AmiVoice"
+    retry_count: 2
+    save_to: "telephoneNumber"
+    output_format: "text"
+  - order: 5
+    name: "診療科_通常"
+    stt_type: "DTMF_AmiVoice"
+    retry_count: 2
+    save_to: "clinicalDepartment"
+    output_format: "enum"
+    output_labels: ["内科", "外科", "小児科", "眼科", "耳鼻咽喉科", "皮膚科", "整形外科"]
+  - order: 6
+    name: "希望予約日_通常"
+    stt_type: "AmiVoice_STT"
+    retry_count: 2
+    save_to: "reservationDate"
+    output_format: "datetime"
+  - order: 7
+    name: "主訴_通常"
+    stt_type: "AmiVoice_STT"
+    retry_count: 2
+    save_to: "chiefComplaint"
+    output_format: "text"
+
+  # === Soniox パス ===
+  - order: 8
+    name: "氏名_Soniox"
+    stt_type: "Soniox_STT"
+    retry_count: 2
+    save_to: "patientName"
+    output_format: "text"
+  - order: 9
+    name: "生年月日_Soniox"
+    stt_type: "Soniox_STT"
+    retry_count: 2
+    save_to: "patientDateOfBirth"
+    output_format: "datetime"
+  - order: 10
+    name: "電話番号_Soniox"
+    stt_type: "Soniox_STT"
+    retry_count: 2
+    save_to: "telephoneNumber"
+    output_format: "text"
+  - order: 11
+    name: "診療科_Soniox"
+    stt_type: "Soniox_STT"
+    retry_count: 2
+    save_to: "clinicalDepartment"
+    output_format: "enum"
+    output_labels: ["内科", "外科", "小児科", "眼科", "耳鼻咽喉科", "皮膚科", "整形外科"]
+  - order: 12
+    name: "希望予約日_Soniox"
+    stt_type: "Soniox_STT"
+    retry_count: 2
+    save_to: "reservationDate"
+    output_format: "datetime"
+  - order: 13
+    name: "主訴_Soniox"
+    stt_type: "Soniox_STT"
+    retry_count: 2
+    save_to: "chiefComplaint"
+    output_format: "text"
+
+step_details:
+  - step_name: "STT方式選択"
+    tts_announcement: "テストモードを選択してください。通常の場合は1を、Sonioxの場合は2を押してください。"
+  - step_name: "氏名_通常"
+    tts_announcement: "お名前をフルネームでお伝えください。"
+  - step_name: "生年月日_通常"
+    tts_announcement: "生年月日を西暦でお伝えください。"
+  - step_name: "電話番号_通常"
+    tts_announcement: "ご連絡先の電話番号をお伝えください。"
+  - step_name: "診療科_通常"
+    tts_announcement: "ご希望の診療科をお話しください。"
+  - step_name: "希望予約日_通常"
+    tts_announcement: "ご希望の予約日をお話しください。"
+  - step_name: "主訴_通常"
+    tts_announcement: "症状やご相談内容をお話しください。"
+  - step_name: "氏名_Soniox"
+    tts_announcement: "お名前をフルネームでお伝えください。"
+  - step_name: "生年月日_Soniox"
+    tts_announcement: "生年月日を西暦でお伝えください。"
+  - step_name: "電話番号_Soniox"
+    tts_announcement: "ご連絡先の電話番号をお伝えください。"
+  - step_name: "診療科_Soniox"
+    tts_announcement: "ご希望の診療科をお話しください。"
+  - step_name: "希望予約日_Soniox"
+    tts_announcement: "ご希望の予約日をお話しください。"
+  - step_name: "主訴_Soniox"
+    tts_announcement: "症状やご相談内容をお話しください。"
+
+termination_patterns:
+  - name: "受付完了"
+    status: "2"
+    completion_flag_name: "完了フラグ_受付完了"
+    tts_announcement: "ご予約を承りました。お電話ありがとうございました。"
+  - name: "聴取失敗"
+    status: "6"
+    completion_flag_name: "完了フラグ_聴取失敗"
+    tts_announcement: "申し訳ございません。お電話を切らせていただきます。"
+  - name: "非通知"
+    status: "6"
+    completion_flag_name: "完了フラグ_非通知"
+    tts_announcement: "電話番号を通知しておかけ直しください。"
+  - name: "時間外"
+    status: "6"
+    completion_flag_name: "完了フラグ_時間外"
+    tts_announcement: "ただいまの時間は受付時間外です。"
+
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    announcement: "お電話ありがとうございます。テスト施設です。STTテストモードです。"

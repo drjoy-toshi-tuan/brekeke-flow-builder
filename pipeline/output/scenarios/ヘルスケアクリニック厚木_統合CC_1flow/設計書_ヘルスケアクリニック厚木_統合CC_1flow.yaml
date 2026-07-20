@@ -1,0 +1,1208 @@
+version: '1.0'
+basic_info:
+  facility_name: ヘルスケアクリニック厚木
+  scenario_name: 統合CC
+  group_name: ヘルスケアクリニック厚木_統合CC_20260617
+  flow_name: ヘルスケアクリニック厚木_統合CC_20260617$統合CC
+  target_facility: 株式会社健康予防医学協会グループ6施設（ヘルスケアクリニック厚木 / ヒロオカクリニック / 渋谷ウエストクリニック / ヘルスケアクリニック秋葉原 / 鉄鋼ビル丸の内クリニック / みなと健診クリニック）共通の統合コールセンター
+  office_id: 5eecd4182c9faeddaddc8b41
+  phone_number: ''
+  business_hours: 祝日を除く月曜〜土曜 7:50〜16:30
+  flow_type: 1flow
+  work_type: new
+  environment: demo
+  tts_platform: GOOGLE
+  stt_platform: AMIVOICE
+  openai_platform: OPENAI
+flow_structure:
+  type: 1flow
+  flows:
+  - name: ヘルスケアクリニック厚木_統合CC_20260617$統合CC
+    role: main
+    description: エリア選択→施設選択→（遅刻ガード）→用件確認→各用件処理→個人情報聴取→終話。6施設は施設確定後に同一下流へ合流する1メインフロー構成。
+  subflows: []
+purpose: '株式会社健康予防医学協会グループ6クリニック共通の健診予約統合コールセンター。 受診希望者がエリア→施設を選択した上で、健診の予約・変更・キャンセル・その他用件を申し込む電話に自動応対し、 個人情報を聴取して折り返し受付（スタッフ対応）へつなぐ。当日の変更・キャンセル、雇用時健診は受付対象外として案内終話する。
+
+  '
+flow_diagrams:
+- flow_name: ヘルスケアクリニック厚木_統合CC_20260617$統合CC
+  diagram: "冒頭(wait)\n  → コンテキスト設定(saveContextModel2DB)\n  → 着信電話番号分類(incoming-classifier)\n      ├─ 非通知 → END_非通知（186案内）→ 切断\n      ├─ 海外   → ※scaffold は通常フローへ流すため海外案内終話は手動配線（確認レポート B-4）\n      └─ 通常   → 受付時間判定(acceptance_times)\n                    ├─ 時間外 → END_時間外 → 切断\n                    └─ 受付可 → 冒頭_アナウンス\n                                  → 明日以降確認\n                                      ├─ はい → エリア選択\n                                      └─ いいえ → 遅刻種別確認\n                                                    ├─ 遅刻       → 受診施設名称聴取（classification=遅刻・発話→氏名聴取）\n                                                    └─ 変更/ｷｬﾝｾﾙ → END_当日受付不可（当日はAI受付不可）\nエリア選択(DTMF 1/2/3)\n  ├─ 神奈川     → 施設案内_神奈川 ──┐\n  ├─ 新宿渋谷   → 施設選択_新宿渋谷(DTMF 1/2) ──┤\n  └─ 東京品川   → 施設選択_東京品川(DTMF 1/2/3) ──┤\n                                                  ▼\n                                      （施設選択後）健診予約案内 → 用件確認\n                                        ※遅刻は別ルート（遅刻種別確認→受診施設名称聴取→氏名聴取・用件確認スキップ）\n                                        ※施設確定後分岐CMRは遅刻分離に伴い撤去\n用件確認(DTMF 1/2/3/4 + 発話)\n  ├─ 予約       → コース選択\n  ├─ 変更       → 変更受付案内 → 氏名聴取\n  ├─ キャンセル → 現在の予約日 → 再受診希望 → 氏名聴取\n  └─ その他     → お問い合わせ内容 → 氏名聴取\nコース選択(DTMF 1/2/3/4 + 発話)\n  ├─ 人間ドック/協会けんぽ/定期健診 → 氏名聴取\n  ├─ 雇用時健診（発話検知）         → END_雇用時健診_HP案内（HP誘導+SMS）\n  └─ その他の健診                   → その他コース確認\n                                        ├─ 雇用時健診 → END_雇用時健診_HP案内\n                                        └─ other      → 氏名聴取\n氏名聴取 → 生年月日聴取 → 電話番号聴取\n  → 終話分岐_電話種別(CMR: 電話番号聴取 phonetype)\n      ├─ 携帯(1)        → END_受付完了_携帯（SMS言及あり）\n      └─ 固定/その他    → END_受付完了_固定（SMS言及なし）\n"
+  notes: 海外/非通知/時間外/聴取失敗は異常系。海外のみ手動配線（B-4）。
+scenario_flow:
+- step: 冒頭
+  type: opening
+  use_acceptance_times: true
+  next: 冒頭_アナウンス
+- step: 冒頭_アナウンス
+  type: announcement
+  next: 明日以降確認
+- step: 明日以降確認
+  type: hearing
+  output_format: text
+  save_to: ''
+  next: 明日以降確認_分類
+- step: 明日以降確認_分類
+  type: script
+  script_template: yes_no_classifier
+  reference_module: 入力_明日以降確認
+  template_params:
+    INPUT_MODULE: 入力_明日以降確認
+  conditions:
+  - match: 肯定
+    next: エリア選択
+  - match: 否定
+    next: 遅刻種別確認
+  - match: NO_RESULT
+    next: リトライ_明日以降確認
+- step: 遅刻種別確認
+  type: hearing
+  output_format: text
+  save_to: ''
+  next: 遅刻種別確認_分類
+- step: 遅刻種別確認_分類
+  type: script
+  script_template: checkup_intent_classifier
+  reference_module: 入力_遅刻種別確認
+  template_params:
+    SCOPE: lateness
+    INPUT_MODULE: 入力_遅刻種別確認
+  conditions:
+  - match: 遅刻
+    next: 受診施設名称聴取
+  - match: 変更
+    next: END_当日受付不可
+  - match: キャンセル
+    next: END_当日受付不可
+  - match: NO_RESULT
+    next: リトライ_遅刻種別確認
+  - match: other
+    next: リトライ_遅刻種別確認
+  save_to: classification
+- step: 受診施設名称聴取
+  type: hearing
+  output_format: text
+  save_to: facility
+  next: 遅刻アナウンス
+- step: 遅刻アナウンス
+  type: announcement
+  next: 到着時間
+- step: 到着時間
+  type: hearing
+  output_format: text
+  save_to: arrivalTime
+  next: 氏名聴取
+- step: エリア選択
+  type: hearing
+  output_format: text
+  save_to: ''
+  next: エリア選択_分類
+- step: エリア選択_分類
+  type: script
+  script_template: checkup_menu_classifier
+  reference_module: 入力_エリア選択
+  template_params:
+    MENU: area
+    INPUT_MODULE: 入力_エリア選択
+  conditions:
+  - match: 神奈川エリア
+    next: 施設案内_神奈川
+  - match: 新宿渋谷エリア
+    next: 施設選択_新宿渋谷
+  - match: 東京品川エリア
+    next: 施設選択_東京品川
+  - match: NO_RESULT
+    next: リトライ_エリア選択
+  save_to: area
+- step: 施設案内_神奈川
+  type: announcement
+  save_to: facility
+  save_value: ヘルスケアクリニック厚木
+  next: 健診予約案内
+- step: 施設選択_新宿渋谷
+  type: hearing
+  output_format: text
+  save_to: ''
+  next: 施設選択_新宿渋谷_分類
+- step: 施設選択_新宿渋谷_分類
+  type: script
+  script_template: checkup_menu_classifier
+  reference_module: 入力_施設選択_新宿渋谷
+  template_params:
+    MENU: shinjuku_shibuya
+    INPUT_MODULE: 入力_施設選択_新宿渋谷
+  conditions:
+  - match: ヒロオカクリニック
+    next: 健診予約案内
+  - match: 渋谷ウエストクリニック
+    next: 健診予約案内
+  - match: NO_RESULT
+    next: リトライ_施設選択_新宿渋谷
+  save_to: facility
+- step: 施設選択_東京品川
+  type: hearing
+  output_format: text
+  save_to: ''
+  next: 施設選択_東京品川_分類
+- step: 施設選択_東京品川_分類
+  type: script
+  script_template: checkup_menu_classifier
+  reference_module: 入力_施設選択_東京品川
+  template_params:
+    MENU: tokyo_shinagawa
+    INPUT_MODULE: 入力_施設選択_東京品川
+  conditions:
+  - match: ヘルスケアクリニック秋葉原
+    next: 健診予約案内
+  - match: 鉄鋼ビル丸の内クリニック
+    next: 健診予約案内
+  - match: みなと健診クリニック
+    next: 健診予約案内
+  - match: NO_RESULT
+    next: リトライ_施設選択_東京品川
+  save_to: facility
+- step: 健診予約案内
+  type: announcement
+  next: 用件確認
+- step: 用件確認
+  type: hearing
+  output_format: text
+  save_to: ''
+  next: 用件確認_分類
+- step: 用件確認_分類
+  type: script
+  script_template: checkup_intent_classifier
+  reference_module: 入力_用件確認
+  template_params:
+    SCOPE: full
+    INPUT_MODULE: 入力_用件確認
+  conditions:
+  - match: 予約
+    next: コース選択
+  - match: 変更
+    next: 変更受付案内
+  - match: キャンセル
+    next: 現在の予約日
+  - match: その他
+    next: お問い合わせ内容
+  - match: 雇用時健診
+    next: END_雇用時健診_HP案内
+  - match: 遅刻
+    next: 遅刻アナウンス
+  - match: NO_RESULT
+    next: リトライ_用件確認
+  save_to: classification
+- step: コース選択
+  type: hearing
+  output_format: text
+  save_to: ''
+  next: コース選択_分類
+- step: コース選択_分類
+  type: script
+  script_template: checkup_course_classifier
+  reference_module: 入力_コース選択
+  template_params:
+    INPUT_MODULE: 入力_コース選択
+  conditions:
+  - match: 人間ドック
+    next: 氏名聴取
+  - match: 協会けんぽ
+    next: 氏名聴取
+  - match: 定期健診
+    next: 氏名聴取
+  - match: 雇用時健診
+    next: END_雇用時健診_HP案内
+  - match: その他の健診
+    next: その他コース確認
+  - match: NO_RESULT
+    next: リトライ_コース選択
+  save_to: course
+- step: その他コース確認
+  type: hearing
+  output_format: text
+  save_to: course
+  next: その他コース確認_分類
+- step: その他コース確認_分類
+  type: script
+  script_template: checkup_course_classifier
+  reference_module: 入力_その他コース確認
+  template_params:
+    INPUT_MODULE: 入力_その他コース確認
+  conditions:
+  - match: 雇用時健診
+    next: END_雇用時健診_HP案内
+  - match: NO_RESULT
+    next: リトライ_その他コース確認
+  - match: other
+    next: 氏名聴取
+- step: 変更受付案内
+  type: announcement
+  next: 氏名聴取
+- step: 現在の予約日
+  type: hearing
+  output_format: text
+  save_to: ''
+  next: 現在の予約日_分類
+- step: 現在の予約日_分類
+  type: script
+  script_template: reservation_date_classifier
+  reference_module: 入力_現在の予約日
+  template_params:
+    INPUT_MODULE: 入力_現在の予約日
+  conditions:
+  - match: 不明
+    next: 再受診希望
+  - match: NO_RESULT
+    next: リトライ_現在の予約日
+  - match: other
+    next: 再受診希望
+  save_to: ''
+- step: 再受診希望
+  type: hearing
+  output_format: text
+  save_to: ''
+  next: 再受診希望_分類
+- step: 再受診希望_分類
+  type: script
+  script_template: yes_no_classifier
+  reference_module: 入力_再受診希望
+  template_params:
+    INPUT_MODULE: 入力_再受診希望
+  conditions:
+  - match: 肯定
+    next: 氏名聴取
+  - match: 否定
+    next: 氏名聴取
+  - match: NO_RESULT
+    next: リトライ_再受診希望
+  save_to: rebooking
+- step: お問い合わせ内容
+  type: hearing
+  output_format: text
+  next: 氏名聴取
+- step: 氏名聴取
+  type: slot
+  slot: patient_name
+  save_to: patientName
+  next: 生年月日聴取
+- step: 生年月日聴取
+  type: slot
+  slot: date_of_birth
+  save_to: patientDateOfBirth
+  next: 電話番号聴取
+- step: 電話番号聴取
+  type: slot
+  slot: phone
+  save_to: additionalPhoneNumber
+  next: 終話分岐_電話種別
+- step: 終話分岐_電話種別
+  type: context_match_router
+  reference_module: <%phonetype%>
+  conditions:
+  - match: 携帯
+    next: END_受付完了_携帯
+  - match: other
+    next: END_受付完了_固定
+- step: END_受付完了_携帯
+  type: termination
+  termination_ref: END_受付完了_携帯
+- step: END_受付完了_固定
+  type: termination
+  termination_ref: END_受付完了_固定
+- step: END_雇用時健診_HP案内
+  type: termination
+  termination_ref: END_雇用時健診_HP案内
+- step: END_当日受付不可
+  type: termination
+  termination_ref: END_当日受付不可
+context_fields:
+- context_name: classification
+  context_name_jp: 用件区分
+  display_type: CLASSIFICATION
+  range_values:
+  - id: '1'
+    order: '1'
+    value: 予約
+  - id: '2'
+    order: '2'
+    value: 変更
+  - id: '3'
+    order: '3'
+    value: キャンセル
+  - id: '4'
+    order: '4'
+    value: その他
+  - id: '5'
+    order: '5'
+    value: 遅刻
+  item_default: true
+  editable: true
+  deletable: false
+  notes: 用件区分。遅刻種別確認・用件確認で設定。
+- context_name: area
+  context_name_jp: 受診エリア
+  display_type: TEXT
+  range_values:
+  - id: '1'
+    order: '1'
+    value: 神奈川エリア
+  - id: '2'
+    order: '2'
+    value: 新宿渋谷エリア
+  - id: '3'
+    order: '3'
+    value: 東京品川エリア
+  item_default: false
+  editable: true
+  deletable: false
+  notes: エリア選択(DTMF)で設定。
+- context_name: facility
+  context_name_jp: 受診施設
+  display_type: TEXT
+  range_values:
+  - id: '1'
+    order: '1'
+    value: ヘルスケアクリニック厚木
+  - id: '2'
+    order: '2'
+    value: ヒロオカクリニック
+  - id: '3'
+    order: '3'
+    value: 渋谷ウエストクリニック
+  - id: '4'
+    order: '4'
+    value: ヘルスケアクリニック秋葉原
+  - id: '5'
+    order: '5'
+    value: 鉄鋼ビル丸の内クリニック
+  - id: '6'
+    order: '6'
+    value: みなと健診クリニック
+  item_default: false
+  editable: true
+  deletable: false
+  notes: 施設選択(DTMF)で設定。神奈川エリアは施設案内_神奈川(announcement)のため facility 自動保存なし＝確認レポート N-5。
+- context_name: course
+  context_name_jp: 受診希望コース
+  display_type: TEXT
+  range_values: []
+  item_default: false
+  editable: true
+  deletable: false
+  notes: コース選択・その他コース確認で設定。雇用時健診を検知したら HP 案内終話へ。
+- context_name: rebooking
+  context_name_jp: 再受診希望
+  display_type: TEXT
+  range_values: []
+  item_default: false
+  editable: true
+  deletable: false
+  notes: キャンセル時の再予約希望（肯定/否定）。
+- context_name: patientName
+  context_name_jp: 患者名
+  display_type: TEXT
+  range_values: []
+  item_default: true
+  editable: true
+  deletable: false
+  notes: 氏名聴取サブフローで設定。
+- context_name: patientDateOfBirth
+  context_name_jp: 生年月日(和暦)
+  display_type: DATE_OF_BIRTH
+  range_values: []
+  item_default: true
+  editable: true
+  deletable: false
+  notes: 生年月日聴取サブフローで設定。
+- context_name: reason
+  context_name_jp: 問い合わせ内容
+  display_type: TEXT
+  range_values: []
+  item_default: true
+  editable: true
+  deletable: false
+  notes: その他お問い合わせ内容（n12）。
+- context_name: arrivalTime
+  context_name_jp: 到着予定時間
+  display_type: TEXT
+  range_values: []
+  item_default: false
+  editable: true
+  deletable: false
+  notes: 遅刻ルートで聴取する到着予定時間（自由発話・受診施設名称聴取の後）。
+- context_name: reservationDate
+  context_name_jp: 現在の予約日
+  display_type: DATE
+  range_values: []
+  item_default: true
+  editable: true
+  deletable: false
+  notes: キャンセル時の現在のご予約日（n10, 西暦8桁DTMF）。
+- context_name: telephoneNumber
+  context_name_jp: 着信元電話番号
+  display_type: PHONE_NUMBER_CALL
+  range_values: []
+  item_default: true
+  editable: false
+  deletable: false
+  notes: 着信番号自動格納。
+- context_name: additionalPhoneNumber
+  context_name_jp: 連絡先電話番号
+  display_type: PHONE_NUMBER
+  range_values: []
+  item_default: true
+  editable: true
+  deletable: false
+  notes: 電話番号聴取サブフローで設定。
+- context_name: status
+  context_name_jp: 状態
+  display_type: STATUS
+  range_values:
+  - id: '1'
+    order: '1'
+    value: 未処理
+  - id: '2'
+    order: '2'
+    value: 代表案内
+  - id: '3'
+    order: '3'
+    value: 聴取失敗
+  - id: '6'
+    order: '6'
+    value: 時間外
+  - id: '7'
+    order: '7'
+    value: HP案内
+  item_default: true
+  editable: true
+  deletable: false
+  notes: 1=未処理(通常受付) 2=代表案内/受付不可 3=聴取失敗 6=時間外 7=HP案内(雇用時健診)。第2世代の 0/5 は使用禁止。
+- context_name: dateOfCall
+  context_name_jp: 入電日時
+  display_type: DATE
+  range_values: []
+  item_default: true
+  editable: false
+  deletable: false
+  notes: システム自動取得。
+- context_name: callId
+  context_name_jp: 通話ID
+  display_type: NUMBER
+  range_values: []
+  item_default: false
+  editable: true
+  deletable: false
+  notes: システム固定値。
+- context_name: phonetype
+  context_name_jp: 電話種別
+  display_type: TEXT
+  range_values:
+  - id: '1'
+    order: '1'
+    value: 携帯
+  - id: '2'
+    order: '2'
+    value: 固定
+  - id: '3'
+    order: '3'
+    value: その他
+  item_default: false
+  editable: true
+  deletable: false
+  notes: 電話番号スロットの phone_type 結果。終話分岐_電話種別 が <%phonetype%> で参照。
+hearing_items:
+- order: 1
+  name: 明日以降確認
+  stt_type: AmiVoice_STT
+  dtmf_max_length: null
+  retry_count: 2
+  echo_back: false
+  save_to: ''
+  openai_processing: none
+  output_format: text
+  output_labels:
+  - はい
+  - いいえ
+  notes: 遅刻ガード。明日以降の予約に関することか（はい/いいえ）。値は永続化しない（分岐のみ）。
+- order: 2
+  name: 遅刻種別確認
+  stt_type: AmiVoice_STT
+  dtmf_max_length: null
+  retry_count: 2
+  echo_back: false
+  save_to: classification
+  openai_processing: none
+  output_format: text
+  output_labels:
+  - 遅刻
+  - 変更キャンセル
+  notes: 「いいえ」後の切り分け。遅刻→受診施設名称聴取(classification=遅刻)、変更/キャンセル等→当日受付不可で終話。
+- order: 3
+  name: エリア選択
+  stt_type: DTMF_AmiVoice
+  dtmf_max_length: 1
+  retry_count: 2
+  echo_back: false
+  save_to: area
+  openai_processing: none
+  output_format: text
+  output_labels:
+  - 神奈川エリア
+  - 新宿渋谷エリア
+  - 東京品川エリア
+  notes: DTMF 1=神奈川エリア, 2=新宿渋谷エリア, 3=東京品川エリア。発話併用。
+- order: 4
+  name: 施設選択_新宿渋谷
+  stt_type: DTMF_AmiVoice
+  dtmf_max_length: 1
+  retry_count: 2
+  echo_back: false
+  save_to: facility
+  openai_processing: none
+  output_format: text
+  output_labels:
+  - ヒロオカクリニック
+  - 渋谷ウエストクリニック
+  notes: DTMF 1=ヒロオカクリニック, 2=渋谷ウエストクリニック。
+- order: 5
+  name: 施設選択_東京品川
+  stt_type: DTMF_AmiVoice
+  dtmf_max_length: 1
+  retry_count: 2
+  echo_back: false
+  save_to: facility
+  openai_processing: none
+  output_format: text
+  output_labels:
+  - ヘルスケアクリニック秋葉原
+  - 鉄鋼ビル丸の内クリニック
+  - みなと健診クリニック
+  notes: DTMF 1=ヘルスケアクリニック秋葉原, 2=鉄鋼ビル丸の内クリニック, 3=みなと健診クリニック。
+- order: 6
+  name: 用件確認
+  stt_type: DTMF_AmiVoice
+  dtmf_max_length: 1
+  retry_count: 2
+  echo_back: false
+  save_to: classification
+  openai_processing: none
+  output_format: text
+  output_labels:
+  - 予約
+  - 変更
+  - キャンセル
+  - その他
+  notes: DTMF 1=予約, 2=変更, 3=キャンセル, 4=その他。
+- order: 7
+  name: コース選択
+  stt_type: DTMF_AmiVoice
+  dtmf_max_length: 1
+  retry_count: 2
+  echo_back: false
+  save_to: course
+  openai_processing: none
+  output_format: text
+  output_labels:
+  - 人間ドック
+  - 協会けんぽ
+  - 定期健診
+  - 雇用時健診
+  - その他の健診
+  notes: DTMF 1=人間ドック, 2=協会けんぽ, 3=定期健診, 4=その他の健診。雇用時健診はDTMFになく発話検知のみ→HP案内終話へ。定期健診は通常進行。
+- order: 8
+  name: その他コース確認
+  stt_type: AmiVoice_STT
+  dtmf_max_length: null
+  retry_count: 2
+  echo_back: false
+  save_to: course
+  openai_processing: none
+  output_format: text
+  output_labels:
+  - 雇用時健診
+  notes: コース名称を自由発話。雇用時健診を検知したらHP案内終話へ、それ以外（わからない含む）はコース名をcourseにセットして氏名聴取へ。
+- order: 9
+  name: 現在の予約日
+  stt_type: DTMF_AmiVoice
+  dtmf_max_length: 8
+  retry_count: 2
+  echo_back: false
+  save_to: reservationDate
+  openai_processing: none
+  output_format: text
+  output_labels: []
+  notes: 'キャンセル対象の現在のご予約日。西暦8桁(YYYYMMDD)DTMF入力。入電日分類ではない。 / フラット化: STT を ^[0-9]{8}$ 直接ガード（分類器なし）。'
+- order: 10
+  name: 再受診希望
+  stt_type: AmiVoice_STT
+  dtmf_max_length: null
+  retry_count: 2
+  echo_back: false
+  save_to: rebooking
+  openai_processing: none
+  output_format: text
+  output_labels:
+  - 肯定
+  - 否定
+  notes: 再予約の希望（はい/いいえ）。肯定/否定いずれも氏名聴取へ（値はrebookingに記録）。
+- order: 11
+  name: お問い合わせ内容
+  stt_type: AmiVoice_STT
+  dtmf_max_length: null
+  retry_count: 2
+  echo_back: false
+  save_to: reason
+  openai_processing: none
+  output_format: text
+  output_labels: []
+  notes: その他用件の自由発話。FAQ発動なし。受付で折り返し対応。
+- order: 12
+  name: 受診施設名称聴取
+  stt_type: AmiVoice_STT
+  dtmf_max_length: null
+  retry_count: 2
+  echo_back: false
+  save_to: facility
+  openai_processing: none
+  output_format: text
+  output_labels: []
+  notes: 遅刻ルート専用。受診施設の名称を自由発話で聴取し facility に保存。分類器なし(純粋聴取)。素案フロー準拠。
+- order: 13
+  name: 到着時間
+  stt_type: AmiVoice_STT
+  dtmf_max_length: null
+  retry_count: 2
+  echo_back: false
+  save_to: arrivalTime
+  openai_processing: none
+  output_format: text
+  output_labels: []
+  notes: 遅刻ルート専用。到着予定時間を自由発話で聴取し arrivalTime に保存。分類器なし(純粋聴取)。受診施設名称聴取の後・氏名聴取の前。
+step_details:
+- step_name: 冒頭_アナウンス
+  tts_announcement: 株式会社健康予防医学協会のAI電話です。グループクリニックすべての健診予約を承ります。{recstart}の後に、お話しいただくか、ダイヤルプッシュで操作してください。
+  input_method: voice_only
+  save_to: ''
+  next_step: 明日以降確認
+  retry_failure: skip
+- step_name: 明日以降確認
+  tts_announcement: ご用件は、明日以降のご予約に関することでしょうか。「はい、そうです」や「いいえ、ちがいます」のようにお話しください。
+  input_method: voice_only
+  openai_rules:
+    output_values:
+    - はい
+    - いいえ
+    mapping:
+    - input: 「はい」「そうです」など明日以降の予約に関する肯定
+      output: はい
+    - input: 「いいえ」「違います」など否定（当日・遅刻・変更等）
+      output: いいえ
+    no_result_condition: 肯定/否定いずれの意図も判定できない場合
+  save_to: ''
+  next_step: エリア選択
+  retry_failure: end_failure
+- step_name: 遅刻種別確認
+  tts_announcement: 遅刻のご連絡でしょうか。それとも、ご予約の変更・キャンセルなどのお問い合わせでしょうか。
+  input_method: voice_only
+  openai_rules:
+    output_values:
+    - 遅刻
+    - 変更キャンセル
+    mapping:
+    - input: 「遅刻」「遅れる」など到着遅延の連絡
+      output: 遅刻
+    - input: 変更・キャンセル・その他の問い合わせ
+      output: 変更キャンセル
+    no_result_condition: いずれの意図も判定できない場合
+  save_to: classification
+  next_step: 受診施設名称聴取
+  retry_failure: end_failure
+- step_name: エリア選択
+  tts_announcement: 受診を希望されるエリアを、次の三つからお選びください。神奈川エリアは一番、新宿・渋谷エリアは二番、東京・品川エリアは三番を、ダイヤルプッシュで入力してください。
+  input_method: dtmf_voice
+  openai_rules:
+    output_values:
+    - 神奈川エリア
+    - 新宿渋谷エリア
+    - 東京品川エリア
+    mapping:
+    - input: DTMF 1 または「神奈川」
+      output: 神奈川エリア
+    - input: DTMF 2 または「新宿」「渋谷」
+      output: 新宿渋谷エリア
+    - input: DTMF 3 または「東京」「品川」
+      output: 東京品川エリア
+    no_result_condition: 上記いずれにも該当しない場合
+  save_to: area
+  next_step: 施設案内_神奈川
+  retry_failure: end_failure
+- step_name: 施設案内_神奈川
+  tts_announcement: 神奈川エリアの受診希望施設は、ヘルスケアクリニック厚木で承ります。
+  input_method: voice_only
+  save_to: ''
+  next_step: 健診予約案内
+  retry_failure: skip
+- step_name: 施設選択_新宿渋谷
+  tts_announcement: 受診を希望されるクリニックを、次の二つからお選びください。ヒロオカクリニックは一番、渋谷ウエストクリニックは二番を、ダイヤルプッシュで入力してください。
+  input_method: dtmf_voice
+  openai_rules:
+    output_values:
+    - ヒロオカクリニック
+    - 渋谷ウエストクリニック
+    mapping:
+    - input: DTMF 1 または「ヒロオカ」
+      output: ヒロオカクリニック
+    - input: DTMF 2 または「渋谷ウエスト」
+      output: 渋谷ウエストクリニック
+    no_result_condition: 上記いずれにも該当しない場合
+  save_to: facility
+  next_step: 健診予約案内
+  retry_failure: end_failure
+- step_name: 施設選択_東京品川
+  tts_announcement: 受診を希望されるクリニックを、次の三つからお選びください。ヘルスケアクリニック秋葉原は一番、鉄鋼ビル丸の内クリニックは二番、みなと健診クリニックは三番を、ダイヤルプッシュで入力してください。
+  input_method: dtmf_voice
+  openai_rules:
+    output_values:
+    - ヘルスケアクリニック秋葉原
+    - 鉄鋼ビル丸の内クリニック
+    - みなと健診クリニック
+    mapping:
+    - input: DTMF 1 または「秋葉原」
+      output: ヘルスケアクリニック秋葉原
+    - input: DTMF 2 または「鉄鋼ビル」「丸の内」
+      output: 鉄鋼ビル丸の内クリニック
+    - input: DTMF 3 または「みなと」
+      output: みなと健診クリニック
+    no_result_condition: 上記いずれにも該当しない場合
+  save_to: facility
+  next_step: 健診予約案内
+  retry_failure: end_failure
+- step_name: 健診予約案内
+  tts_announcement: ここからは、健診のご予約を承ります。
+  input_method: voice_only
+  save_to: ''
+  next_step: 用件確認
+  retry_failure: skip
+- step_name: 用件確認
+  tts_announcement: ご用件をお伺いします。健診のご予約は一番、変更は二番、キャンセルは三番、その他のご用件は四番を、お話しいただくか、番号をプッシュしてください。
+  input_method: dtmf_voice
+  openai_rules:
+    output_values:
+    - 予約
+    - 変更
+    - キャンセル
+    - その他
+    mapping:
+    - input: DTMF 1 または「予約」「健診の予約」
+      output: 予約
+    - input: DTMF 2 または「変更」
+      output: 変更
+    - input: DTMF 3 または「キャンセル」
+      output: キャンセル
+    - input: DTMF 4 またはその他・上記に該当しない用件
+      output: その他
+    no_result_condition: 発話が無音・無関係でいずれにも該当しない場合
+  save_to: classification
+  next_step: コース選択
+  retry_failure: end_failure
+- step_name: コース選択
+  tts_announcement: ご希望のメニューを、次の四つのうちのいずれかでお話しください。人間ドックは一番、協会けんぽは二番、定期健診は三番、その他の健診は四番を、該当の番号をプッシュしてください。
+  input_method: dtmf_voice
+  openai_rules:
+    output_values:
+    - 人間ドック
+    - 協会けんぽ
+    - 定期健診
+    - 雇用時健診
+    - その他の健診
+    mapping:
+    - input: DTMF 1 または「人間ドック」
+      output: 人間ドック
+    - input: DTMF 2 または「協会けんぽ」
+      output: 協会けんぽ
+    - input: DTMF 3 または「定期健診」「定期健康診断」
+      output: 定期健診
+    - input: 「雇用時健診」「雇入れ時健診」「雇入れ」（DTMFになく発話のみ）
+      output: 雇用時健診
+    - input: DTMF 4 または上記以外の健診
+      output: その他の健診
+    no_result_condition: 発話が無音・無関係でいずれにも該当しない場合
+  save_to: course
+  next_step: その他コース確認
+  retry_failure: end_failure
+- step_name: その他コース確認
+  tts_announcement: それでは、受診を希望するコースの名称をお話しください。分からない場合は、「わからない」とお話しください。
+  input_method: voice_only
+  openai_rules:
+    output_values:
+    - 雇用時健診
+    mapping:
+    - input: 「雇用時健診」「雇入れ時健診」「雇入れ」を含む発話
+      output: 雇用時健診
+    no_result_condition: 雇用時健診以外のコース名称・「わからない」・無音（default 分岐＝氏名聴取へ、発話内容を course に保存）
+  save_to: course
+  next_step: 氏名聴取
+  retry_failure: end_failure
+- step_name: 変更受付案内
+  tts_announcement: 承知いたしました。変更内容の詳細につきましては、後ほどスタッフより折り返し電話の際に、お伺いさせていただきます。
+  input_method: voice_only
+  save_to: ''
+  next_step: 氏名聴取
+  retry_failure: skip
+- step_name: 現在の予約日
+  tts_announcement: 現在のご予約日を、西暦8桁で、ダイヤルプッシュで入力してください。
+  input_method: dtmf_voice
+  openai_rules:
+    output_values:
+    - YYYY-MM-DD HH:MM
+    mapping:
+    - input: '西暦8桁のDTMF入力（例: 20260415）または日付発話'
+      output: 正規化した日時（YYYY-MM-DD 00:00）
+    no_result_condition: 日付として解釈できない場合
+  save_to: reservationDate
+  next_step: 再受診希望
+  retry_failure: skip
+- step_name: 再受診希望
+  tts_announcement: 再予約のご希望はありますか。「はい、そうです」または「いいえ、違います」のようにお話しください。
+  input_method: voice_only
+  openai_rules:
+    output_values:
+    - 肯定
+    - 否定
+    mapping:
+    - input: 「はい」「そうです」など肯定
+      output: 肯定
+    - input: 「いいえ」「違います」など否定
+      output: 否定
+    no_result_condition: 日付だけなど、肯定/否定いずれの意図も判定できない場合
+  save_to: rebooking
+  next_step: 氏名聴取
+  retry_failure: end_failure
+- step_name: お問い合わせ内容
+  tts_announcement: ご用件をお話しください。
+  input_method: voice_only
+  save_to: reason
+  next_step: 氏名聴取
+  retry_failure: skip
+- step_name: 受診施設名称聴取
+  tts_announcement: 受診施設の名称をお話しください。
+  input_method: voice_only
+  save_to: facility
+  next_step: 遅刻アナウンス
+  retry_failure: skip
+- step_name: 遅刻アナウンス
+  tts_announcement: ご到着時間により、承る事が出来ない検査がございますことをご了承ください。
+  input_method: voice_only
+  save_to: ''
+  next_step: 到着時間
+  retry_failure: skip
+- step_name: 到着時間
+  tts_announcement: ご到着予定のお時間をお知らせください。
+  input_method: voice_only
+  save_to: arrivalTime
+  next_step: 氏名聴取
+  retry_failure: skip
+termination_patterns:
+- name: END_非通知
+  condition: 非通知着信
+  tts_announcement: お客様のお電話は非通知のため、電話番号が確認できず、折り返しのご連絡をすることができません。電話番号を通知の上おかけ直しいただくか、当院の電話番号の頭に「186」を付けてからおかけください。それでは失礼いたします。
+  status: '2'
+  sms_flag: '0'
+  completion_flag_name: 完了フラグ_非通知
+- name: END_時間外
+  condition: 受付時間外
+  tts_announcement: お電話ありがとうございます。ヘルスケアクリニック厚木の健診予約専用AI電話です。申し訳ございませんが、ただいまの時間は受付時間外となっております。受付時間は、祝日を除く月曜から土曜の、7時50分から16時30分となっております。恐れ入りますが、受付時間内におかけ直しください。お電話ありがとうございました。それでは失礼いたします。
+  status: '6'
+  sms_flag: '0'
+  completion_flag_name: 完了フラグ_時間外
+- name: END_聴取失敗
+  condition: リトライ上限到達
+  tts_announcement: 申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。
+  status: '2'
+  sms_flag: '0'
+  completion_flag_name: 完了フラグ_聴取失敗
+- name: END_受付完了_携帯
+  condition: 全聴取完了 かつ 携帯（phonetype=1）
+  tts_announcement: かしこまりました。<%classification%>の申し込みを受付いたしました。内容を確認のうえ、スタッフから折り返しのお電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+  status: '1'
+  sms_flag: '1'
+  completion_flag_name: 完了フラグ_受付完了_携帯
+- name: END_受付完了_固定
+  condition: 全聴取完了 かつ 固定/その他（phonetype=2）
+  tts_announcement: かしこまりました。<%classification%>の申し込みを受付いたしました。内容を確認のうえ、スタッフから折り返しのお電話にてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+  status: '1'
+  sms_flag: '0'
+  completion_flag_name: 完了フラグ_受付完了_固定
+- name: END_雇用時健診_HP案内
+  condition: 雇用時健診を希望（用件確認/コース選択/その他コース確認で検知）
+  tts_announcement: 恐れ入りますが、雇用時健診をご希望の方は、当院ホームページのお申し込みフォームよりご予約をお願いいたします。携帯電話からご連絡いただいた方には、ショートメールにてお申し込みフォームのリンクをお送りしておりますので、そちらからお手続きください。お電話ありがとうございました。
+  status: '7'
+  sms_flag: '2'
+  completion_flag_name: 完了フラグ_雇用時健診
+- name: END_当日受付不可
+  condition: 当日かつ遅刻連絡でない変更・キャンセル等（AIでは受付不可）
+  tts_announcement: 当日の変更・キャンセルについては、受診施設へ直接ご連絡ください。
+  status: '2'
+  sms_flag: '0'
+  completion_flag_name: 完了フラグ_当日受付不可
+sms_flag_routing:
+  enabled: true
+  routing_keys:
+  - phonetype
+  patterns:
+  - condition: 携帯（phonetype=1）
+    sms_flag: '1'
+    notes: END_受付完了_携帯。ショートメールで案内。
+  - condition: 固定/その他（phonetype=2）
+    sms_flag: '0'
+    notes: END_受付完了_固定。固定電話はSMS受信不可のためSMS言及なし。
+  - condition: 雇用時健診
+    sms_flag: '2'
+    notes: END_雇用時健診_HP案内。HP申込みフォームのリンクを携帯にSMS送信（固定は案内のみ・物理的に未配信）。
+rag_subflow:
+  pattern: none
+  inquiry_insertion_point: ''
+  pre_termination: false
+phonebook:
+  enabled: false
+tts_modules:
+- module_name: 冒頭_アナウンス
+  purpose: 冒頭の法人案内
+  announcement: 株式会社健康予防医学協会のAI電話です。グループクリニックすべての健診予約を承ります。{recstart}の後に、お話しいただくか、ダイヤルプッシュで操作してください。
+- module_name: 明日以降確認
+  purpose: 遅刻ガード（明日以降の予約か）
+  announcement: ご用件は、明日以降のご予約に関することでしょうか。「はい、そうです」や「いいえ、ちがいます」のようにお話しください。
+- module_name: 遅刻種別確認
+  purpose: 遅刻 or 変更・キャンセル等の切り分け
+  announcement: 遅刻のご連絡でしょうか。それとも、ご予約の変更・キャンセルなどのお問い合わせでしょうか。
+- module_name: エリア選択
+  purpose: エリア選択（DTMF）
+  announcement: 受診を希望されるエリアを、次の三つからお選びください。神奈川エリアは一番、新宿・渋谷エリアは二番、東京・品川エリアは三番を、ダイヤルプッシュで入力してください。
+- module_name: 施設案内_神奈川
+  purpose: 神奈川エリアの単一施設案内
+  announcement: 神奈川エリアの受診希望施設は、ヘルスケアクリニック厚木で承ります。
+- module_name: 施設選択_新宿渋谷
+  purpose: 新宿・渋谷エリアの施設選択（DTMF）
+  announcement: 受診を希望されるクリニックを、次の二つからお選びください。ヒロオカクリニックは一番、渋谷ウエストクリニックは二番を、ダイヤルプッシュで入力してください。
+- module_name: 施設選択_東京品川
+  purpose: 東京・品川エリアの施設選択（DTMF）
+  announcement: 受診を希望されるクリニックを、次の三つからお選びください。ヘルスケアクリニック秋葉原は一番、鉄鋼ビル丸の内クリニックは二番、みなと健診クリニックは三番を、ダイヤルプッシュで入力してください。
+- module_name: 健診予約案内
+  purpose: 健診予約導入アナウンス（n1）
+  announcement: ここからは、健診のご予約を承ります。
+- module_name: 用件確認
+  purpose: 用件確認（DTMF併用）
+  announcement: ご用件をお伺いします。健診のご予約は一番、変更は二番、キャンセルは三番、その他のご用件は四番を、お話しいただくか、番号をプッシュしてください。
+- module_name: コース選択
+  purpose: コース選択（DTMF併用・⚠顧客確定待ち）
+  announcement: ご希望のメニューを、次の四つのうちのいずれかでお話しください。人間ドックは一番、協会けんぽは二番、定期健診は三番、その他の健診は四番を、該当の番号をプッシュしてください。
+- module_name: その他コース確認
+  purpose: その他コース名称聴取
+  announcement: それでは、受診を希望するコースの名称をお話しください。分からない場合は、「わからない」とお話しください。
+- module_name: 変更受付案内
+  purpose: 変更受付（折り返し回収）案内（n9）
+  announcement: 承知いたしました。変更内容の詳細につきましては、後ほどスタッフより折り返し電話の際に、お伺いさせていただきます。
+- module_name: 現在の予約日
+  purpose: キャンセル対象の現在のご予約日聴取（DTMF8桁）
+  announcement: 現在のご予約日を、西暦8桁で、ダイヤルプッシュで入力してください。
+- module_name: 再受診希望
+  purpose: 再予約希望の確認
+  announcement: 再予約のご希望はありますか。「はい、そうです」または「いいえ、違います」のようにお話しください。
+- module_name: お問い合わせ内容
+  purpose: その他用件の自由聴取（⚠顧客確定待ち）
+  announcement: ご用件をお話しください。
+- module_name: 受診施設名称聴取
+  purpose: 遅刻ルート専用。受診施設の名称を自由発話で聴取（素案フロー準拠）
+  announcement: 受診施設の名称をお話しください。
+- module_name: 遅刻アナウンス
+  purpose: 遅刻ルート専用。到着時間聴取の前に検査制限の免責を案内
+  announcement: ご到着時間により、承る事が出来ない検査がございますことをご了承ください。
+- module_name: 到着時間
+  purpose: 遅刻ルート専用。到着予定時間を自由発話で聴取
+  announcement: ご到着予定のお時間をお知らせください。
+- module_name: END_非通知
+  purpose: 非通知終話
+  announcement: お客様のお電話は非通知のため、電話番号が確認できず、折り返しのご連絡をすることができません。電話番号を通知の上おかけ直しいただくか、当院の電話番号の頭に「186」を付けてからおかけください。それでは失礼いたします。
+- module_name: END_時間外
+  purpose: 時間外終話
+  announcement: お電話ありがとうございます。ヘルスケアクリニック厚木の健診予約専用AI電話です。申し訳ございませんが、ただいまの時間は受付時間外となっております。受付時間は、祝日を除く月曜から土曜の、7時50分から16時30分となっております。恐れ入りますが、受付時間内におかけ直しください。お電話ありがとうございました。それでは失礼いたします。
+- module_name: END_聴取失敗
+  purpose: 聴取失敗終話
+  announcement: 申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。
+- module_name: END_受付完了_携帯
+  purpose: 受付完了終話（携帯・SMS言及あり）
+  announcement: かしこまりました。<%classification%>の申し込みを受付いたしました。内容を確認のうえ、スタッフから折り返しのお電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+- module_name: END_受付完了_固定
+  purpose: 受付完了終話（固定・SMS言及なし）
+  announcement: かしこまりました。<%classification%>の申し込みを受付いたしました。内容を確認のうえ、スタッフから折り返しのお電話にてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。
+- module_name: END_雇用時健診_HP案内
+  purpose: 雇用時健診HP誘導終話（SMSでフォームリンク）
+  announcement: 恐れ入りますが、雇用時健診をご希望の方は、当院ホームページのお申し込みフォームよりご予約をお願いいたします。携帯電話からご連絡いただいた方には、ショートメールにてお申し込みフォームのリンクをお送りしておりますので、そちらからお手続きください。お電話ありがとうございました。
+- module_name: END_当日受付不可
+  purpose: 当日の変更・キャンセル等 受付不可終話
+  announcement: 当日の変更・キャンセルについては、受診施設へ直接ご連絡ください。
+- module_name: 氏名聴取
+  purpose: 氏名聴取（slot）。フロー図（素案）の氏名例示に合わせる
+  announcement: 受診される方のお名前を『名前は、たなか たろうです』のようにお話しください。
+- module_name: 生年月日聴取
+  purpose: 生年月日聴取（slot）。フロー図（素案）の生年月日例示に合わせる
+  announcement: 受診される方の生年月日を『1990年5月1日』とお話しいただくか、西暦8桁をダイヤルプッシュで入力ください。
+- module_name: 聴取_電話番号聴取_連絡先
+  purpose: 連絡先電話番号の入力案内（固定回線/別番号path・drawio No.21相当）
+  announcement: 日中、連絡の取れる携帯電話番号または、市外局番を含む電話番号を、ダイヤルプッシュで入力してください。入力が終わりましたら「こめじるし」を押してください。
+amivoice_dictionary:
+- step_name: 氏名聴取
+  use_template:
+  - hearing_name
+- step_name: エリア選択
+  words: '神奈川 かながわ
+
+    新宿 しんじゅく
+
+    渋谷 しぶや
+
+    東京 とうきょう
+
+    品川 しながわ
+
+    一番 いちばん
+
+    二番 にばん
+
+    三番 さんばん
+
+    '
+- step_name: 施設選択_新宿渋谷
+  words: 'ヒロオカクリニック ひろおかくりにっく
+
+    渋谷ウエストクリニック しぶやうえすとくりにっく
+
+    一番 いちばん
+
+    二番 にばん
+
+    '
+- step_name: 施設選択_東京品川
+  words: 'ヘルスケアクリニック秋葉原 へるすけあくりにっくあきはばら
+
+    鉄鋼ビル丸の内クリニック てっこうびるまるのうちくりにっく
+
+    みなと健診クリニック みなとけんしんくりにっく
+
+    一番 いちばん
+
+    二番 にばん
+
+    三番 さんばん
+
+    '
+- step_name: 用件確認
+  words: '雇用時健診 こようじけんしん
+
+    遅刻 ちこく
+
+    予約 よやく
+
+    変更 へんこう
+
+    変更 へんこー
+
+    キャンセル きゃんせる
+
+    その他 そのた
+
+    その他 そのほか
+
+    一番 いちばん
+
+    二番 にばん
+
+    三番 さんばん
+
+    四番 よんばん
+
+    '
+- step_name: コース選択
+  words: '雇用時健診 こようじけんしん
+
+    雇入れ やといいれ
+
+    雇入れ時健診 やといいれじけんしん
+
+    人間ドック にんげんどっく
+
+    協会けんぽ きょうかいけんぽ
+
+    協会けんぽ きょーかいけんぽ
+
+    定期健診 ていきけんしん
+
+    定期健診 てーきけんしん
+
+    その他の健診 そのたのけんしん
+
+    その他の健診 そのほかのけんしん
+
+    一番 いちばん
+
+    二番 にばん
+
+    三番 さんばん
+
+    四番 よんばん
+
+    '
+- step_name: その他コース確認
+  words: '雇用時健診 こようじけんしん
+
+    雇入れ やといいれ
+
+    雇入れ時健診 やといいれじけんしん
+
+    人間ドック にんげんどっく
+
+    協会けんぽ きょうかいけんぽ
+
+    協会けんぽ きょーかいけんぽ
+
+    定期健診 ていきけんしん
+
+    定期健診 てーきけんしん
+
+    '
+special_notes:
+- 本シナリオは厚木単体ではなく、株式会社健康予防医学協会グループ6施設共通の健診予約統合コールセンター。施設確定後は全施設が同一下流に合流する1メインフロー構成（施設は facility/area context に保存）。
+- 元資料は drawio 素案 v1.0（上流B案＋下流A案 v0.1 連結）。⚠要検討ノード（コース選択 n6 / お問い合わせ内容 n12）は顧客確定待ち。図に無い値は推測せず BLOCKER 化している。
+- '遅刻ルート: 明日以降確認=いいえ→遅刻種別確認=遅刻 で classification=遅刻 を保存し、受診施設名称聴取(発話・自由テキストを facility に保存)→氏名聴取へ直行（用件確認・エリア/施設選択はスキップ＝素案フロー準拠）。明日以降確認=はい の通常ルートは エリア選択→施設選択→健診予約案内→用件確認へ（施設確定後分岐CMRは遅刻ルート分離に伴い撤去）。'
+- '海外（国際）入電: scaffold の opening ブロックは incoming-classifier の海外ラベルを通常フロー(受付時間判定)へ流す仕様のため、海外案内終話は自動生成されない。Brekeke IVR UI で incoming-classifier の海外ラベル(^海外$)を海外案内TTS→saveCompletionFlag2db→Disconnect へ手動配線すること（確認レポート B-4）。海外案内文言: 「申し訳ございません。ヘルスケアクリニック厚木の健診予約専用AI電話です。海外からのお問い合わせはAI電話ではご対応できませんので、代表電話の046-227-1131におかけ直しください。繰り返します。お電話番号は、046-227-1131です。繰り返します。お電話番号は、046-227-1131です。お電話ありがとうございました。それでは失礼いたします。」status=2 / sms_flag=-1 想定。'
+- 雇用時健診は携帯/固定で分岐させず単一終話(END_雇用時健診_HP案内)とする。TTS文言で「携帯の方にはSMSでフォームリンクを送る」旨を両者に案内し、SMS(sms_flag=2)は携帯にのみ物理的に配信される。旧要件定義(status7/SMS2)と整合。
+- 終話 n16 は素案では用件(予約/変更/キャンセル)を差し込む共通文言だが、動的差し込みは行わず携帯/固定の2終話に共通文言化した。用件は classification context でスタッフが把握可能。用件別の読み上げが必要なら <% classification %> 等で後対応（確認レポート N-7）。
+- n9 原文「押し返し電話」は「折り返し電話」の誤記とみなし訂正済み（変更受付案内 TTS）。
+- drawio の浮きエッジ pf45N7fBwcwUXuKzfR7y-24（→n9）は作図残骸として設計に取り込まない。
+- 電話番号聴取は標準サブフローを採用。素案 n15(固定のみ番号確認・違う時のみDTMF)/yxE1-13(携帯は案内のみ)の簡略仕様は標準サブフロー(携帯=着信番号自動格納+復唱、固定=手入力+復唱)に包含した（確認レポート N-6）。
+- MedicalCard（診察券番号）は図に登場しないため不使用。予約希望日(旧要件定義にあり)も drawio には無いため設置しない（コース選択→氏名直行）。
+- 現在の予約日(n10)は入電日分類ではなく既存予約日の西暦8桁DTMF入力のため、date_of_call_classifier は不要。
+confirmation_items:
+- item: '[BLOCKER B-1] END_当日受付不可 の終話文言（当日の変更・キャンセル等を受付不可とする案内）。図・元資料に記載なし。'
+  resolved: false
+- item: '[BLOCKER B-3] 雇用時健診 SMS の申込みフォーム URL および SMS 文面。placeholder のまま。Dr.JOY 側 SMS 設定で後差し替え。'
+  resolved: false
+- item: '[BLOCKER B-4] 海外（国際）入電の終話処理を Brekeke IVR UI で手動配線（incoming-classifier 海外ラベル→海外案内TTS→切断）。scaffold opening が海外を通常フローへ流すため。文言は special_notes 参照。'
+  resolved: false
+- item: '[TODO N-1] office_id（Dr.JOY 管理画面で取得）'
+  resolved: false
+- item: '[TODO N-2] AI 着信番号（phone_number）。046-227-1131 は海外案内用の代表電話であり AI 回線ではない。'
+  resolved: false
+- item: '[TODO N-3] status / sms_flag 体系。旧要件定義の暫定値（通常=status1+SMS1 / 雇用時健診=status7+SMS2）を採用。6施設統合CCで体系が変わる可能性があるため顧客確認。'
+  resolved: false
+- item: '[TODO N-4] 受付時間スケジュール詳細（祝日除く月〜土 7:50〜16:30）は Dr.JOY 側で設定。フロー側は acceptance_times の配置のみ。'
+  resolved: false
+- item: '[TODO N-5] 神奈川エリア（厚木）は施設案内_神奈川が announcement のため facility context が自動保存されない。area=神奈川エリアで識別可だが、facility=ヘルスケアクリニック厚木 を記録する必要があるか確認（必要なら定数セット手段を追加）。'
+  resolved: false
+- item: '[TODO N-6] 電話番号聴取は標準サブフロー採用。素案の「携帯は案内のみ（復唱なし）」簡略との差異を確認。'
+  resolved: false
+- item: '[TODO N-7] 終話の用件別読み上げ（予約/変更/キャンセル差し込み）。共通文言化済み。差し込みが必要なら後対応。'
+  resolved: false
+- item: '[TODO N-8] ⚠黄ノード（コース選択 n6 / お問い合わせ内容 n12）は顧客側で要確定の素案段階。図の文言で構築済み。'
+  resolved: false
+- item: '[TODO N-9] 当日かつ遅刻でない変更・キャンセルを「受付せず終話」とする方針（当日の変更・キャンセルは AI 受付不可）で確定でよいか最終確認。'
+  resolved: false

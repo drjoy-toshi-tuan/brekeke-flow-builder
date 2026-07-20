@@ -1,0 +1,602 @@
+# 設計書 — 福岡県済生会二日市病院 連携室（患者支援センター）
+# 生成元: @director エージェント
+# 生成日: 2026-04-20
+# 入力資料:
+#   - docs/migration/gen2_福岡県済生会二日市病院_連携室.md（移管ノート）
+#   - docs/reference/customer_docs/【連携室】福岡県済生会二日市病院.md（元資料）
+# 備考: 医療機関スタッフ・福祉施設・行政からの入電を想定する連携室シナリオ。
+#       通常の患者向け診療シナリオとは聴取順序（用件→病棟・担当者→患者名→施設名→連絡先→確認事項）が異なる点に注意。
+
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "福岡県済生会二日市病院"
+  group_name: "福岡県済生会二日市病院"
+  flow_name: "福岡県済生会二日市病院$連携室"
+  target_facility: "福岡県済生会二日市病院（連携室・患者支援センター）"
+  office_id: "TODO_要確認"
+  phone_number: "TODO_要確認"
+  business_hours: "なし（フロー側で時間判定は行わない。代表電話案内の文言としてのみ『土日祝日を除く月〜金 8:30〜17:00』を読み上げる）"
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "prod"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "福岡県済生会二日市病院$連携室"
+      role: "main"
+      description: "医療機関スタッフ・福祉施設・行政からの連絡受付。用件・病棟担当者・患者名・施設名・連絡先・確認事項を順に聴取する。"
+  subflows:
+    - name: "福岡県済生会二日市病院$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: |
+        Gen2 の「電話番号確認（着信番号でよいか）→ 電話番号直接聴取 → 電話番号復唱」の3段構造を
+        標準 Phone サブフローに集約。echo_back（復唱）は電話番号のみ有効化する。
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  医療機関スタッフ・福祉施設・行政等から福岡県済生会二日市病院の患者支援センター（連携室）に入電する通話を受け、
+  至急案件は代表電話に案内しつつ、通常案件は用件・病棟／担当MSW・患者名・施設名・連絡先電話番号・確認事項を
+  順次聴取して記録する。担当者が後日折り返す前提のため、OpenAI による用件分類分岐は実装せず、
+  各項目を自由テキストとして記録する方針（Pattern A 分岐は「至急確認 Yes/No」1回のみ）。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "福岡県済生会二日市病院$連携室"
+    diagram: |
+      冒頭(wait)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → 非通知_アナウンス(TTS) → 完了フラグ_非通知(status=2) → 切断
+            └─ 通常   → 冒頭_アナウンス(TTS)
+                          └─ 至急確認(hearing: はい/いいえ)
+                                ├─ はい → END_至急代表案内(TTS, 代表電話3回繰返) → 完了フラグ_代表案内(status=2) → 切断
+                                └─ default(いいえ/無言/リトライ超過) → 用件聴取(hearing text→inquiry)
+                                      → 病棟担当者確認(hearing text→patientName2)
+                                      → 患者名聴取(hearing text→patientName)
+                                      → 施設名聴取(hearing text→company_name)
+                                      → jump_電話番号聴取(subflow, 着信番号でよいか→直接聴取→復唱)
+                                      → 確認項目聴取(hearing text→reason)
+                                      → END_終話(TTS) → 完了フラグ_受付完了(status=1, smsFlag=1) → 切断
+    notes: |
+      - Date of Call Classifier は不要（元資料に営業時間外分岐なし。受付時間は代表電話案内 TTS 文言内で言及するのみ）
+      - 非通知・時間外・聴取失敗はテンプレートデフォルトの終話パターンを使用（customer_doc 記載なしだが第3世代必須）
+      - 復唱は電話番号のみ（施設固有ルールで他項目の復唱確認は禁止）
+      - リトライ超過時は全 hearing ブロックで「次ステップへスキップ」して通話を継続
+
+# --- セクション4b: シナリオフロー定義 ---
+scenario_flow:
+  # --- 冒頭（opening）---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: false
+    next: 冒頭_アナウンス
+
+  # --- 冒頭アナウンス ---
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 至急確認
+
+  # --- 至急確認（Pattern A: 唯一の OpenAI 分岐）---
+  - step: 至急確認
+    type: hearing
+    output_format: enum
+    openai_processing: judge
+    output_labels:
+      - はい
+      - いいえ
+    retry_failure: skip
+    conditions:
+      - match: "はい"
+        next: END_至急代表案内
+      - match: "default"
+        next: 用件聴取
+
+  # --- 用件聴取（自由テキスト→inquiry）---
+  - step: 用件聴取
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 病棟担当者確認
+
+  # --- 病棟・担当者確認（自由テキスト→patientName2）---
+  - step: 病棟担当者確認
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 患者名聴取
+
+  # --- 患者名聴取（自由テキスト→patientName、復唱確認禁止）---
+  - step: 患者名聴取
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: 施設名聴取
+
+  # --- 施設名聴取（自由テキスト→company_name、「施設名・所属・お名前」を1フィールド一括）---
+  - step: 施設名聴取
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: jump_電話番号聴取
+
+  # --- 電話番号聴取サブフロー（標準 Phone サブフロー）---
+  - step: jump_電話番号聴取
+    type: subflow
+    flowname: "福岡県済生会二日市病院$電話番号聴取"
+    next: 確認項目聴取
+
+  # --- 確認項目聴取（自由テキスト→reason、「最後の問い合わせ」も兼ねる）---
+  - step: 確認項目聴取
+    type: hearing
+    output_format: text
+    retry_failure: skip
+    next: END_終話
+
+  # --- 終話: 至急代表案内 ---
+  - step: END_至急代表案内
+    type: termination
+    termination_ref: "END_至急代表案内"
+
+  # --- 終話: 受付完了 ---
+  - step: END_終話
+    type: termination
+    termination_ref: "END_終話"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  # 標準フィールド（Dr.JOY itemDefault: true）
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "初診"
+      - id: "2"
+        order: "2"
+        value: "再診"
+      - id: "3"
+        order: "3"
+        value: "変更"
+      - id: "4"
+        order: "4"
+        value: "キャンセル"
+      - id: "5"
+        order: "5"
+        value: "問い合わせ"
+      - id: "6"
+        order: "6"
+        value: "無回答"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: |
+      Gen2 function 定義より enum をそのまま採用。本フローでは分類分岐には使わず、フィールドは空のまま運用される
+      （移管ノート: enum をそのまま採用し、分類分岐は組まない方針）。
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "受診者名。患者名聴取ステップで格納。復唱確認禁止。"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "本シナリオでは聴取しないが標準フィールドとして保持。"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "本シナリオでは聴取しないが標準フィールドとして保持。"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "着信番号自動格納。"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "連絡先電話番号。電話番号聴取サブフロー内で格納。"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "聴取失敗"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: true
+    notes: "1=未処理(通話完了) 2=代表案内 3=聴取失敗 6=時間外。Gen2 の status=0 は Gen3 では使用しない。"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: true
+    notes: ""
+
+  # 施設固有フィールド（itemDefault: false）
+  - context_name: "patientName2"
+    context_name_jp: "担当者名・病棟名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: |
+      入院病棟または担当MSW名。通常フローの「担当者」用フィールドではなく患者名フィールドの 2 番目を流用している点に注意
+      （Gen2 customer_doc 指定どおり）。
+
+  - context_name: "inquiry"
+    context_name_jp: "用件内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "用件聴取ステップで格納。自由テキスト（OpenAI 分類分岐なし）。"
+
+  - context_name: "company_name"
+    context_name_jp: "施設名・所属"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "施設名・所属・お名前を1フィールド一括で格納（customer_doc 指定どおり）。"
+
+  - context_name: "reason"
+    context_name_jp: "確認事項"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "確認項目聴取ステップで格納。「最後の問い合わせ」も兼ねる二重用途。"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "至急確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: ""
+    openai_processing: "judge"
+    output_format: "enum"
+    output_labels:
+      - はい
+      - いいえ
+    notes: |
+      唯一の Pattern A 分岐。「はい」なら END_至急代表案内、それ以外（「いいえ」／無言／リトライ超過）は用件聴取へ。
+      save_to は設定しない（分岐専用、コンテキスト保存不要）。
+
+  - order: 2
+    name: "用件聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "inquiry"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "自由テキストでそのまま格納。復唱確認禁止。複数情報一括発話時は OpenAI 処理せずまとめて格納。"
+
+  - order: 3
+    name: "病棟担当者確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientName2"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "入院病棟または担当MSW名を自由テキストで格納。患者名より先に聞く非標準順序。"
+
+  - order: 4
+    name: "患者名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientName"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "受診者氏名をフルネームで自由テキスト格納。施設固有ルール『復唱確認禁止』を厳守。"
+
+  - order: 5
+    name: "施設名聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "company_name"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "施設名・所属・お名前を1フィールド一括で格納。氏名を別フィールドに分離しない。"
+
+  - order: 6
+    name: "確認項目聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "『その他に何かお問い合わせはございませんか？』を自由テキスト格納。『最後の問い合わせ』も兼ねる二重用途のため、別途ループは作らない。"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "至急確認"
+    tts_announcement: "はじめにお伺いします。至急のご用件でしょうか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "はい"
+        - "いいえ"
+      mapping:
+        - input: "はい／肯定／至急／大至急 等の肯定表現を含む"
+          output: "はい"
+        - input: "いいえ／否定／急ぎじゃない／違う 等の否定表現を含む"
+          output: "いいえ"
+      no_result_condition: "肯定・否定のどちらとも判定できない場合"
+    save_to: ""
+    next_step: "用件聴取（デフォルト）／ END_至急代表案内（はい）"
+    retry_failure: "skip"
+    retry_failure_announcement: ""
+
+  - step_name: "用件聴取"
+    tts_announcement: "ご用件をお話しください"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "inquiry"
+    next_step: "病棟担当者確認"
+    retry_failure: "skip"
+    retry_failure_announcement: "大変申し訳ございません。ご回答が確認できませんでした。"
+
+  - step_name: "病棟担当者確認"
+    tts_announcement: "入院病棟、または担当MSWをお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "patientName2"
+    next_step: "患者名聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: "大変申し訳ございません。ご回答が確認できませんでした。"
+
+  - step_name: "患者名聴取"
+    tts_announcement: "患者さんのお名前をフルネームでお話ください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "patientName"
+    next_step: "施設名聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: "大変申し訳ございません。ご回答が確認できませんでした。"
+
+  - step_name: "施設名聴取"
+    tts_announcement: "施設名・所属・お名前をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "company_name"
+    next_step: "jump_電話番号聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: "大変申し訳ございません。ご回答が確認できませんでした。"
+
+  - step_name: "確認項目聴取"
+    tts_announcement: "その他に、何かお問い合わせはございませんか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: "reason"
+    next_step: "END_終話"
+    retry_failure: "skip"
+    retry_failure_announcement: "大変申し訳ございません。ご回答が確認できませんでした。"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須 — 削除禁止）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外（本フローでは use_acceptance_times=false のため未使用だが第3世代必須のためデフォルト保持）"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系 ---
+  - name: "END_至急代表案内"
+    condition: "至急確認で『はい』と応答"
+    tts_announcement: "申し訳ございません、至急のご用件の場合には、済生会二日市病院代表電話までおかけなおしください。受付時間は土日祝日を除く月曜日から金曜日の8時30分から17時です。お電話番号が分かる場合は、お電話をお切りください。分からない場合はご案内いたしますのでメモをご準備ください。092-923-1551、繰り返します、092-923-1551、繰り返します、092-923-1551、お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_代表案内"
+  - name: "END_終話"
+    condition: "全聴取完了（通話完了）"
+    tts_announcement: "かしこまりました。内容を確認後、担当者より折り返し電話にてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+# 元資料 1-2: プロンプトに記載がない質問は「AI電話では対応ができません。職員から折り返し...」と案内する方針。
+# RAG は使わず、確認項目聴取ステップに自由テキストとして格納して担当者が折り返し対応する。
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。福岡県済生会二日市病院の患者支援センター専用、AI電話です。"
+
+  - module_name: "至急確認"
+    purpose: "至急用件の Yes/No 確認"
+    announcement: "はじめにお伺いします。至急のご用件でしょうか？"
+
+  - module_name: "用件聴取"
+    purpose: "用件の自由発話聴取"
+    announcement: "ご用件をお話しください。"
+
+  - module_name: "病棟担当者確認"
+    purpose: "入院病棟または担当MSW名の聴取"
+    announcement: "入院病棟、または担当MSWをお話しください。"
+
+  - module_name: "患者名聴取"
+    purpose: "患者氏名フルネーム聴取（復唱禁止）"
+    announcement: "患者さんのお名前をフルネームでお話ください。"
+
+  - module_name: "施設名聴取"
+    purpose: "施設名・所属・氏名の一括聴取"
+    announcement: "施設名・所属・お名前をお話しください。"
+
+  - module_name: "確認項目聴取"
+    purpose: "最後の問い合わせ聴取（reason 格納）"
+    announcement: "その他に、何かお問い合わせはございませんか？"
+
+  - module_name: "END_至急代表案内"
+    purpose: "至急ルートの代表電話案内終話"
+    announcement: "申し訳ございません、至急のご用件の場合には、済生会二日市病院代表電話までおかけなおしください。受付時間は土日祝日を除く月曜日から金曜日の8時30分から17時です。お電話番号が分かる場合は、お電話をお切りください。分からない場合はご案内いたしますのでメモをご準備ください。092-923-1551、繰り返します、092-923-1551、繰り返します、092-923-1551、お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_終話"
+    purpose: "通常ルートの通話完了終話"
+    announcement: "かしこまりました。内容を確認後、担当者より折り返し電話にてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_非通知"
+    purpose: "非通知着信の案内終話"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_時間外"
+    purpose: "時間外着信の案内終話（本フローでは未使用だが第3世代必須）"
+    announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ上限到達時の終話"
+    announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+# 元資料に診療科・専門用語の辞書指定なし。連携室シナリオのため診療科聴取は発生しない。
+# 病棟・MSW 名等の固有名詞も customer_doc に列挙なし → profile_words は空で開始し、
+# 運用後に認識精度を見て追加することとする。
+amivoice_dictionary: []
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "【聞き直し禁止】一度聴取した内容は不明確でも再質問・復唱しない。各 hearing ブロックの Retry は『無言時のみ再プロンプト』に限定し、ContextMatchRouter による再確認ループを作らない。"
+  - "【復唱許可範囲】復唱確認は電話番号聴取サブフローのみ。患者名・施設名・病棟担当者等は一切復唱しない。"
+  - "【複数情報一括発話】初回の用件発話で inquiry／patientName2／patientName／company_name が同時に発話される可能性あり。prompter 指示時に『既に聴取済みの項目は再質問しない』旨を明示するが、本設計では各ブロックが独立しているため OpenAI のクロスフィールド抽出は行わない（一括発話は inquiry に格納し、後続ステップでは重複受け取りになる可能性あり）。"
+  - "【用件分類の非分岐】Gen2 function の classification enum（初診/再診/変更/キャンセル/問い合わせ/無回答）は診療系シナリオからの流用。本フローでは OpenAI 分類分岐を組まず、classification フィールドは空のまま運用される。"
+  - "【patientName2 の用途】通常の『担当者』用フィールドではなく患者名フィールドの 2 番目を流用して病棟・担当MSW 名を格納する。Dr.JOY 画面表示名は『担当者名・病棟名』に設定済み。"
+  - "【company_name 一括格納】『施設名・所属・お名前をお話しください』の発話内容は 1 フィールドに一括格納する。氏名を PhoneName 等に分離しない。"
+  - "【reason の二重用途】確認項目聴取ステップの『その他に何かお問い合わせはございませんか？』は Gen2 で『確認事項』と『最後の問い合わせ』の両方を兼ねていた。Gen3 でも同一 reason フィールドに格納し、別途ループは作らない。"
+  - "【至急代表案内 TTS】代表電話番号 092-923-1551 を 3 回繰り返す長文。gen_properties.py で 1 発話にまとめる際、読点・自然な間を保つようプレーンテキストのまま配置する（SSML タグ禁止）。"
+  - "【status/smsFlag ルール】必須項目が全て埋まる（END_終話 到達）→ status=1, smsFlag=1。代表電話案内（END_至急代表案内）→ status=2, smsFlag=-1。Gen2 の status=0（途中切断）は Gen3 では使用しない（途中切断時は終話モジュール自体に到達しないため）。"
+  - "【endpoint の扱い】Gen2 function に endpoint enum（冒頭切断/時間外/電話転送/電話案内/途中切断/通話完了）が定義されているが、director 規約に従い saveContextModel2DB には含めない（saveCompletionFlag2db のパラメータとして扱う）。現状 endpoint を明示保存する要件はないため未配線。"
+  - "【口調ルール】customer_doc 指定の口調を厳守: 『かしこまりました』は可／『ありがとうございます』『お気軽に』は禁止／『おっしゃってください』→『お話ください』／無言時の共通再プロンプト『大変申し訳ございません。ご回答が確認できませんでした。再度お伺いいたします。』。"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "office_id（施設ID）— Dr.JOY 管理画面から取得して IVR プロパティに設定"
+    resolved: false
+  - item: "IVR 着信電話番号（本番ARS番号）— Brekeke 設定時に別途設定"
+    resolved: false
+  - item: "group_name（Brekeke グループ名）— 現状 facility_name と同一『福岡県済生会二日市病院』で仮設定。既存の健診／診療フローと同じグループに配置する場合は Brekeke 側の既存グループ名に合わせて変更が必要"
+    resolved: false
+  - item: "SMS 送信可否 — END_終話 に smsFlag=1（SMS 送信あり）を設定しているが、連携室入電の発信元は医療機関スタッフ／福祉施設／行政であり、患者向け SMS テンプレートがそのまま送られるのが妥当か要確認。不要なら smsFlag=-1 に変更"
+    resolved: false
+  - item: "SMS 送信文面 — Dr.JOY 管理画面から別途設定（フロー側では smsFlag の値のみ制御）"
+    resolved: false
+  - item: "非通知／時間外／聴取失敗 終話のアナウンス文言 — customer_doc に記載がないためテンプレートデフォルト文言をそのまま採用。施設固有の言い回しが欲しい場合は要確認"
+    resolved: false
+  - item: "営業時間チェック — use_acceptance_times=false で固定。24時間着信を受け付けて時間外は代表電話案内 TTS の文言のみで対応する方針で問題ないか確認"
+    resolved: false
+  - item: "電話番号聴取サブフロー — 標準 Phone サブフローのコピーを使用。施設固有カスタマイズ（着信番号が固定電話の場合の分岐、非通知ケース等）が必要か確認"
+    resolved: false

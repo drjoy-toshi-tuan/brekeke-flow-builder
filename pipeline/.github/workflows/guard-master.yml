@@ -1,0 +1,75 @@
+name: guard-master
+
+# 非オーナーによる master への push を監視し、保護ゾーン（output/ 以外）に
+# 触れていた場合は push 前の状態へ自動復元する defense-in-depth。
+#
+# 本命の防御はブランチ保護 + CODEOWNERS（docs/governance/branch-protection-setup.md）。
+# この workflow には「同一 push 内で workflow 自体を書き換えられると無効化される」
+# 自己言及的な弱点があるため、単独では防御として完全ではない点に注意。
+#
+# 運用ルール: 保護ゾーンを含む PR はオーナーがマージする（CONTRIBUTING.md）。
+# 非オーナーがマージすると、この guard が push ごと復元してしまう。
+
+on:
+  push:
+    branches: [master]
+
+# 復元 commit の push に必要（リポジトリ既定の GITHUB_TOKEN は read-only のため明示昇格）
+permissions:
+  contents: write
+
+env:
+  OWNER: "TS-dong-nc"
+  ALLOWED_PREFIX: "output/" # 自由ゾーン。これ以外は保護ゾーン
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: check push against allowlist
+        env:
+          PUSHER: ${{ github.actor }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          if [ "$PUSHER" = "github-actions[bot]" ] || [ "$PUSHER" = "$OWNER" ]; then
+            echo "Authorized pusher ($PUSHER) — OK"
+            exit 0
+          fi
+
+          # 変更ファイル一覧（before が存在しない場合は直近コミットのみ）
+          if git cat-file -e "$BEFORE" 2>/dev/null; then
+            CHANGED=$(git diff --name-only "$BEFORE" "$AFTER")
+          else
+            CHANGED=$(git diff-tree --no-commit-id --name-only -r "$AFTER")
+          fi
+
+          PROTECTED=$(echo "$CHANGED" | grep -v "^${ALLOWED_PREFIX}" || true)
+          if [ -z "$PROTECTED" ]; then
+            echo "Push by $PUSHER touches allowlist zone only — OK"
+            exit 0
+          fi
+
+          echo "::warning::Push by $PUSHER touches protected paths — reverting"
+          echo "$PROTECTED"
+
+          if ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            echo "::error::Cannot auto-restore (no before sha) — manual intervention required"
+            exit 1
+          fi
+
+          # push 全体を before の tree へ復元する commit を積む
+          # （merge commit / 複数 commit の push でも安全に巻き戻せる）
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          NEW=$(git commit-tree "$BEFORE^{tree}" -p "$AFTER" \
+            -m "revert: unauthorized protected-path push by $PUSHER" \
+            -m "Restored to $BEFORE. See CONTRIBUTING.md (allowlist policy).")
+          git push origin "$NEW:master"
+          echo "Reverted. master restored to tree of $BEFORE"
+          exit 1

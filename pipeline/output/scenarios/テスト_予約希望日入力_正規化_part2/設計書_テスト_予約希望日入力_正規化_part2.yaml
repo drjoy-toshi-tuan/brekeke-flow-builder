@@ -1,0 +1,77 @@
+# Pattern 6 (テストフロー) - 予約希望日入力 正規化スクリプト 121 ケース (part 2)
+#
+# 経緯:
+#   part 1 (370 ケース 1 bivr) を Brekeke で流したところ、
+#   Brekeke の「Max execution of modules.1000」ハード上限により v0905 (249 ケース目) で停止。
+#   未消化の 121 ケース (v0906〜v1231 の 117 有効 + 無効 4) をこの part 2 で消化する。
+#
+# ケース構成 (121 ケース):
+#   - 有効 117: valid_range で 0906..1231 に絞り込み
+#       Sep 6-30 (25) + Oct (31) + Nov (30) + Dec (31) = 117
+#   - 無効 4: NO_RESULT 期待ケース (part 1 と同じ)
+#       inv_0230 / inv_0431 / inv_1301 / inv_0000
+#
+# モジュール構成:
+#   matrix dispatch (1) + 5 modules × 121 case (605) + フレーム 4 = 610 モジュール
+#   モジュール実行回数: フレーム 3 + 121 × 4 = 487 < 1000 OK
+#
+# ログ書式: part 1 と同じ
+#   [TEST PASS] v0906 in=0906 exp=0906
+#   [TEST FAIL] inv_0230 in=0230 exp=NO_RESULT
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$予約希望日_正規化_part2"
+  flow_name: "テスト$予約希望日_正規化_part2"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$予約希望日_正規化_part2"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] 予約希望日入力 正規化 part 2 (121 ケース)");
+      $runner.getLogger().info("有効 117 (v0906..v1231) + 無効 4 (0230/0431/1301/0000)");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: matrix
+
+  - step: matrix
+    type: dtmf_date_test_matrix
+    auto_generate_valid: true
+    valid_range:
+      start: "0906"
+      end: "1231"
+    additional_cases:
+      - {id: inv_0230, input: "0230", expected: "NO_RESULT"}
+      - {id: inv_0431, input: "0431", expected: "NO_RESULT"}
+      - {id: inv_1301, input: "1301", expected: "NO_RESULT"}
+      - {id: inv_0000, input: "0000", expected: "NO_RESULT"}
+    final_next: ログ_終了
+
+  - step: ログ_終了
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST END] 予約希望日入力 正規化 part 2 (121 ケース)");
+      $runner.getLogger().info("Brekeke ログを grep [TEST FAIL] で件数確認");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: 終了
+
+  - step: 終了
+    type: termination

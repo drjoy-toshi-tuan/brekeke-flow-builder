@@ -1,0 +1,790 @@
+# Pattern 6 (テストフロー) - ContextMatchRouter シート 19 ケース集約
+#
+# 受け入れテストシート (ContextMatchRouter 全 23 ケース) のうち、
+# UI 系 3 ケース (CMR-301/302/303) + スペース許容 CMR-205 を除外した 19 ケース。
+#
+# 構造: 各ケース 5 モジュール
+#   {ケース}_setup (inline_script で setResult, または save_context2db で session)
+#   → CMR_{ケース} (context_match_router)
+#   → Assert_{ケース}_PASS (期待通り、ログ出力)
+#   → Assert_{ケース}_FAIL (期待外、エラーログ)
+#   → 次ケースの setup へ join
+#
+# Brekeke API:
+# - $runner.setResult(value): モジュール出力値
+# - $runner.getLogger().info/.error(msg): ロガー
+# - save_context2db: drjoy^Persistence$saveContext2DB (内部で save2db フロー呼び出し)
+# - CMR: drjoy^Context Logic$ContextMatchRouter
+#   - module1Name/2Name に "<%var%>" 形式で session variable 直読み (スペースなし必須)
+#   - その他はモジュール名扱いで getModuleResult
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$コンテキスト判定"
+  flow_name: "テスト$コンテキスト判定"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$コンテキスト判定"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] テスト_コンテキスト判定 (CMR 19 ケース)");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: CMR101_setup_a
+
+  # ============================================================
+  # CMR-101: mod1/mod2 ともモジュール名で組み合わせ1 完全一致
+  # ============================================================
+  - step: CMR101_setup_a
+    type: inline_script
+    body: |
+      $runner.setResult("予約変更");
+    next: CMR101_setup_b
+
+  - step: CMR101_setup_b
+    type: inline_script
+    body: |
+      $runner.setResult("本院");
+    next: CMR_CMR101
+
+  - step: CMR_CMR101
+    type: context_match_router
+    module1: "CMR101_setup_a"
+    module2: "CMR101_setup_b"
+    value_pairs:
+      - {value1: "予約変更", value2: "本院"}
+    conditions:
+      - match: "予約変更"
+        next: Assert_CMR101_PASS
+      - match: "other"
+        next: Assert_CMR101_FAIL
+
+  - step: Assert_CMR101_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-101: mod名/モジュール名で組合せ1完全一致");
+      $runner.setResult("ok");
+    next: CMR102_setup_a
+
+  - step: Assert_CMR101_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-101: 組合せ1にマッチせず");
+      $runner.setResult("ok");
+    next: CMR102_setup_a
+
+  # ============================================================
+  # CMR-102: mod1 だけ一致、mod2 不一致でフォールスルー
+  # ============================================================
+  - step: CMR102_setup_a
+    type: inline_script
+    body: |
+      $runner.setResult("予約変更");
+    next: CMR102_setup_b
+
+  - step: CMR102_setup_b
+    type: inline_script
+    body: |
+      $runner.setResult("分院");
+    next: CMR_CMR102
+
+  - step: CMR_CMR102
+    type: context_match_router
+    module1: "CMR102_setup_a"
+    module2: "CMR102_setup_b"
+    value_pairs:
+      - {value1: "予約変更", value2: "本院"}
+    conditions:
+      - match: "予約変更"
+        next: Assert_CMR102_FAIL  # mod2 不一致だが mod1 マッチしてここに来ると FAIL
+      - match: "other"
+        next: Assert_CMR102_PASS  # 正解: フォールスルーで other へ
+
+  - step: Assert_CMR102_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-102: mod2不一致でフォールスルー→other");
+      $runner.setResult("ok");
+    next: CMR103_setup
+
+  - step: Assert_CMR102_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-102: フォールスルーすべきが組合せにマッチ");
+      $runner.setResult("ok");
+    next: CMR103_setup
+
+  # ============================================================
+  # CMR-103: 1モジュール判定パターン (mod1=mod2 同一)
+  # ============================================================
+  - step: CMR103_setup
+    type: inline_script
+    body: |
+      $runner.setResult("中之島");
+    next: CMR_CMR103
+
+  - step: CMR_CMR103
+    type: context_match_router
+    module1: "CMR103_setup"
+    module2: "CMR103_setup"
+    value_pairs:
+      - {value1: "中之島", value2: "中之島"}
+    conditions:
+      - match: "中之島"
+        next: Assert_CMR103_PASS
+      - match: "other"
+        next: Assert_CMR103_FAIL
+
+  - step: Assert_CMR103_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-103: 1モジュール判定 (mod1=mod2)");
+      $runner.setResult("ok");
+    next: CMR104_setup_a
+
+  - step: Assert_CMR103_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-103: 1モジュール判定で組合せ1にマッチせず");
+      $runner.setResult("ok");
+    next: CMR104_setup_a
+
+  # ============================================================
+  # CMR-104: 10組目の境界で一致
+  # ============================================================
+  - step: CMR104_setup_a
+    type: inline_script
+    body: |
+      $runner.setResult("v10a");
+    next: CMR104_setup_b
+
+  - step: CMR104_setup_b
+    type: inline_script
+    body: |
+      $runner.setResult("v10b");
+    next: CMR_CMR104
+
+  - step: CMR_CMR104
+    type: context_match_router
+    module1: "CMR104_setup_a"
+    module2: "CMR104_setup_b"
+    value_pairs:
+      - {value1: "", value2: ""}
+      - {value1: "", value2: ""}
+      - {value1: "", value2: ""}
+      - {value1: "", value2: ""}
+      - {value1: "", value2: ""}
+      - {value1: "", value2: ""}
+      - {value1: "", value2: ""}
+      - {value1: "", value2: ""}
+      - {value1: "", value2: ""}
+      - {value1: "v10a", value2: "v10b"}
+    conditions:
+      - match: "skip1"
+        next: Assert_CMR104_FAIL
+      - match: "skip2"
+        next: Assert_CMR104_FAIL
+      - match: "skip3"
+        next: Assert_CMR104_FAIL
+      - match: "skip4"
+        next: Assert_CMR104_FAIL
+      - match: "skip5"
+        next: Assert_CMR104_FAIL
+      - match: "skip6"
+        next: Assert_CMR104_FAIL
+      - match: "skip7"
+        next: Assert_CMR104_FAIL
+      - match: "skip8"
+        next: Assert_CMR104_FAIL
+      - match: "skip9"
+        next: Assert_CMR104_FAIL
+      - match: "v10a"
+        next: Assert_CMR104_PASS
+      - match: "other"
+        next: Assert_CMR104_FAIL
+
+  - step: Assert_CMR104_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-104: 10組目の境界で Matched at index 10");
+      $runner.setResult("ok");
+    next: CMR105_setup_a
+
+  - step: Assert_CMR104_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-104: 10組目で正しくマッチせず");
+      $runner.setResult("ok");
+    next: CMR105_setup_a
+
+  # ============================================================
+  # CMR-105: Other 分岐
+  # ============================================================
+  - step: CMR105_setup_a
+    type: inline_script
+    body: |
+      $runner.setResult("不一致");
+    next: CMR105_setup_b
+
+  - step: CMR105_setup_b
+    type: inline_script
+    body: |
+      $runner.setResult("外れ");
+    next: CMR_CMR105
+
+  - step: CMR_CMR105
+    type: context_match_router
+    module1: "CMR105_setup_a"
+    module2: "CMR105_setup_b"
+    value_pairs:
+      - {value1: "正解1", value2: "正解1"}
+      - {value1: "正解2", value2: "正解2"}
+    conditions:
+      - match: "正解1"
+        next: Assert_CMR105_FAIL
+      - match: "正解2"
+        next: Assert_CMR105_FAIL
+      - match: "other"
+        next: Assert_CMR105_PASS
+
+  - step: Assert_CMR105_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-105: 全不一致で Other 分岐");
+      $runner.setResult("ok");
+    next: CMR106_setup_a
+
+  - step: Assert_CMR105_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-105: 全不一致なのに組合せにマッチ");
+      $runner.setResult("ok");
+    next: CMR106_setup_a
+
+  # ============================================================
+  # CMR-106: 空ペアスキップ (val1 && val2 ガード)
+  # ============================================================
+  - step: CMR106_setup_a
+    type: inline_script
+    body: |
+      $runner.setResult("");
+    next: CMR106_setup_b
+
+  - step: CMR106_setup_b
+    type: inline_script
+    body: |
+      $runner.setResult("本院");
+    next: CMR_CMR106
+
+  - step: CMR_CMR106
+    type: context_match_router
+    module1: "CMR106_setup_a"
+    module2: "CMR106_setup_b"
+    value_pairs:
+      - {value1: "", value2: ""}
+      - {value1: "ダミー", value2: "本院"}
+    conditions:
+      - match: "skip_empty"
+        next: Assert_CMR106_FAIL
+      - match: "ダミー"
+        next: Assert_CMR106_FAIL  # mod1 ''≠ダミー で組合せ2 もマッチしない想定だが、別観点
+      - match: "other"
+        next: Assert_CMR106_PASS
+
+  - step: Assert_CMR106_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-106: 空ペア (val1='' && val2='') がスキップされた");
+      $runner.setResult("ok");
+    next: CMR107_setup
+
+  - step: Assert_CMR106_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-106: 空ペアが誤マッチした疑い");
+      $runner.setResult("ok");
+    next: CMR107_setup
+
+  # ============================================================
+  # CMR-107: 1-based の境界 (組み合わせ1 で setResult=1、0 にならないこと)
+  # ============================================================
+  - step: CMR107_setup
+    type: inline_script
+    body: |
+      $runner.setResult("正解");
+    next: CMR_CMR107
+
+  - step: CMR_CMR107
+    type: context_match_router
+    module1: "CMR107_setup"
+    module2: "CMR107_setup"
+    value_pairs:
+      - {value1: "正解", value2: "正解"}
+    conditions:
+      - match: "正解"
+        next: Assert_CMR107_PASS
+      - match: "other"
+        next: Assert_CMR107_FAIL
+
+  - step: Assert_CMR107_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-107: 組合せ1で setResult=1 (0 オフバイワン回帰)");
+      $runner.setResult("ok");
+    next: CMR201_setup
+
+  - step: Assert_CMR107_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-107: 1-based 境界でマッチせず");
+      $runner.setResult("ok");
+    next: CMR201_setup
+
+  # ============================================================
+  # CMR-201: mod1 を <%var%> で直読み (新機能)
+  # ============================================================
+  - step: CMR201_setup
+    type: save_context2db
+    context_name: "intent_201"
+    context_value: "予約変更"
+    next: CMR201_setup_b
+
+  - step: CMR201_setup_b
+    type: inline_script
+    body: |
+      $runner.setResult("本院");
+    next: CMR_CMR201
+
+  - step: CMR_CMR201
+    type: context_match_router
+    module1: "<%intent_201%>"
+    module2: "CMR201_setup_b"
+    value_pairs:
+      - {value1: "予約変更", value2: "本院"}
+    conditions:
+      - match: "予約変更"
+        next: Assert_CMR201_PASS
+      - match: "other"
+        next: Assert_CMR201_FAIL
+
+  - step: Assert_CMR201_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-201: mod1=<%var%> で session 直読み");
+      $runner.setResult("ok");
+    next: CMR202_setup_a
+
+  - step: Assert_CMR201_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-201: <%var%> 解決失敗");
+      $runner.setResult("ok");
+    next: CMR202_setup_a
+
+  # ============================================================
+  # CMR-202: mod1/mod2 とも <%var%> 直読み
+  # ============================================================
+  - step: CMR202_setup_a
+    type: save_context2db
+    context_name: "intent_202"
+    context_value: "予約変更"
+    next: CMR202_setup_b
+
+  - step: CMR202_setup_b
+    type: save_context2db
+    context_name: "facility_202"
+    context_value: "本院"
+    next: CMR_CMR202
+
+  - step: CMR_CMR202
+    type: context_match_router
+    module1: "<%intent_202%>"
+    module2: "<%facility_202%>"
+    value_pairs:
+      - {value1: "予約変更", value2: "本院"}
+    conditions:
+      - match: "予約変更"
+        next: Assert_CMR202_PASS
+      - match: "other"
+        next: Assert_CMR202_FAIL
+
+  - step: Assert_CMR202_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-202: mod1/mod2 ともに <%var%> で直読み");
+      $runner.setResult("ok");
+    next: CMR203_setup
+
+  - step: Assert_CMR202_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-202: 両方 <%var%> でマッチせず");
+      $runner.setResult("ok");
+    next: CMR203_setup
+
+  # ============================================================
+  # CMR-203: モジュール名と variable のミックス
+  # ============================================================
+  - step: CMR203_setup
+    type: save_context2db
+    context_name: "facility_203"
+    context_value: "本院"
+    next: CMR203_setup_b
+
+  - step: CMR203_setup_b
+    type: inline_script
+    body: |
+      $runner.setResult("予約変更");
+    next: CMR_CMR203
+
+  - step: CMR_CMR203
+    type: context_match_router
+    module1: "CMR203_setup_b"
+    module2: "<%facility_203%>"
+    value_pairs:
+      - {value1: "予約変更", value2: "本院"}
+    conditions:
+      - match: "予約変更"
+        next: Assert_CMR203_PASS
+      - match: "other"
+        next: Assert_CMR203_FAIL
+
+  - step: Assert_CMR203_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-203: モジュール名 + <%var%> ミックス");
+      $runner.setResult("ok");
+    next: CMR204_setup
+
+  - step: Assert_CMR203_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-203: ミックスでマッチせず");
+      $runner.setResult("ok");
+    next: CMR204_setup
+
+  # ============================================================
+  # CMR-204: hyphen 入り variable 名
+  # ============================================================
+  - step: CMR204_setup
+    type: save_context2db
+    context_name: "recipient-name"
+    context_value: "山田太郎"
+    next: CMR_CMR204
+
+  - step: CMR_CMR204
+    type: context_match_router
+    module1: "<%recipient-name%>"
+    module2: "<%recipient-name%>"
+    value_pairs:
+      - {value1: "山田太郎", value2: "山田太郎"}
+    conditions:
+      - match: "山田太郎"
+        next: Assert_CMR204_PASS
+      - match: "other"
+        next: Assert_CMR204_FAIL
+
+  - step: Assert_CMR204_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-204: hyphen 入り <%recipient-name%> 解決");
+      $runner.setResult("ok");
+    next: CMR206_setup
+
+  - step: Assert_CMR204_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-204: hyphen 入り variable 解決失敗");
+      $runner.setResult("ok");
+    next: CMR206_setup
+
+  # ============================================================
+  # CMR-206: 未定義 variable (クラッシュしないこと)
+  # ============================================================
+  - step: CMR206_setup
+    type: inline_script
+    body: |
+      // 何もしない (intent_206 は未定義のままにする)
+      $runner.setResult("noop");
+    next: CMR_CMR206
+
+  - step: CMR_CMR206
+    type: context_match_router
+    module1: "<%intent_206_undefined%>"
+    module2: "<%intent_206_undefined%>"
+    value_pairs:
+      - {value1: "予約変更", value2: "予約変更"}
+    conditions:
+      - match: "予約変更"
+        next: Assert_CMR206_FAIL
+      - match: "other"
+        next: Assert_CMR206_PASS
+
+  - step: Assert_CMR206_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-206: 未定義 variable で setResult=0");
+      $runner.setResult("ok");
+    next: CMR207_setup
+
+  - step: Assert_CMR206_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-206: 未定義 variable でマッチ (空文字 == '予約変更' は不成立のはず)");
+      $runner.setResult("ok");
+    next: CMR207_setup
+
+  # ============================================================
+  # CMR-207: 空文字 variable と空期待値の組み合わせ (val1 && val2 ガード)
+  # ============================================================
+  - step: CMR207_setup
+    type: save_context2db
+    context_name: "intent_207"
+    context_value: ""
+    next: CMR_CMR207
+
+  - step: CMR_CMR207
+    type: context_match_router
+    module1: "<%intent_207%>"
+    module2: "<%intent_207%>"
+    value_pairs:
+      - {value1: "", value2: ""}
+      - {value1: "ダミー", value2: "ダミー"}
+    conditions:
+      - match: "skip_empty"
+        next: Assert_CMR207_FAIL
+      - match: "ダミー"
+        next: Assert_CMR207_FAIL
+      - match: "other"
+        next: Assert_CMR207_PASS
+
+  - step: Assert_CMR207_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-207: 空 var/空期待値が誤マッチせず Other へ");
+      $runner.setResult("ok");
+    next: CMR208_setup
+
+  - step: Assert_CMR207_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-207: 空×空 で誤マッチ");
+      $runner.setResult("ok");
+    next: CMR208_setup
+
+  # ============================================================
+  # CMR-208: 部分テンプレ含む文字列 (onlyVarMatch 不一致)
+  # ============================================================
+  - step: CMR208_setup
+    type: save_context2db
+    context_name: "intent_208"
+    context_value: "予約変更"
+    next: CMR_CMR208
+
+  - step: CMR_CMR208
+    type: context_match_router
+    module1: "prefix_<%intent_208%>_suffix"
+    module2: "prefix_<%intent_208%>_suffix"
+    value_pairs:
+      - {value1: "予約変更", value2: "予約変更"}
+    conditions:
+      - match: "予約変更"
+        next: Assert_CMR208_FAIL
+      - match: "other"
+        next: Assert_CMR208_PASS
+
+  - step: Assert_CMR208_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-208: prefix_<%var%>_suffix はモジュール名扱い→空→Other");
+      $runner.setResult("ok");
+    next: CMR209_setup
+
+  - step: Assert_CMR208_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-208: 部分テンプレが direct resolve されてマッチ (仕様外)");
+      $runner.setResult("ok");
+    next: CMR209_setup
+
+  # ============================================================
+  # CMR-209: 正規表現メタ文字を含む値 (== 厳密一致なので regex 解釈されない)
+  # ============================================================
+  - step: CMR209_setup
+    type: save_context2db
+    context_name: "intent_209"
+    context_value: "a.b"
+    next: CMR_CMR209
+
+  - step: CMR_CMR209
+    type: context_match_router
+    module1: "<%intent_209%>"
+    module2: "<%intent_209%>"
+    value_pairs:
+      - {value1: "a.b", value2: "a.b"}
+    conditions:
+      - match: "a.b"
+        next: Assert_CMR209_PASS
+      - match: "other"
+        next: Assert_CMR209_FAIL
+
+  - step: Assert_CMR209_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-209: 'a.b' 厳密一致 (regex 解釈されず)");
+      $runner.setResult("ok");
+    next: CMR210_setup
+
+  - step: Assert_CMR209_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-209: 'a.b' でマッチせず");
+      $runner.setResult("ok");
+    next: CMR210_setup
+
+  # ============================================================
+  # CMR-210: 全角/半角・大文字小文字感度 (完全一致のみ)
+  # ============================================================
+  - step: CMR210_setup
+    type: save_context2db
+    context_name: "intent_210"
+    context_value: "予約"
+    next: CMR_CMR210
+
+  - step: CMR_CMR210
+    type: context_match_router
+    module1: "<%intent_210%>"
+    module2: "<%intent_210%>"
+    value_pairs:
+      - {value1: "予約", value2: "予約"}
+    conditions:
+      - match: "予約"
+        next: Assert_CMR210_PASS
+      - match: "other"
+        next: Assert_CMR210_FAIL
+
+  - step: Assert_CMR210_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-210: 全角『予約』完全一致");
+      $runner.setResult("ok");
+    next: CMR211_setup
+
+  - step: Assert_CMR210_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-210: 全角文字マッチ失敗");
+      $runner.setResult("ok");
+    next: CMR211_setup
+
+  # ============================================================
+  # CMR-211: 長文 variable 値 (300文字)
+  # ============================================================
+  - step: CMR211_setup
+    type: save_context2db
+    context_name: "long_text_211"
+    context_value: "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲンアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン12345678901234567890123456789012345678901234567890123456789012345678901234567890"
+    next: CMR_CMR211
+
+  - step: CMR_CMR211
+    type: context_match_router
+    module1: "<%long_text_211%>"
+    module2: "<%long_text_211%>"
+    value_pairs:
+      - {value1: "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲンアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン12345678901234567890123456789012345678901234567890123456789012345678901234567890",
+         value2: "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲンアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン12345678901234567890123456789012345678901234567890123456789012345678901234567890"}
+    conditions:
+      - match: "long_text"
+        next: Assert_CMR211_PASS
+      - match: "other"
+        next: Assert_CMR211_FAIL
+
+  - step: Assert_CMR211_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-211: 長文 300文字 variable 一致");
+      $runner.setResult("ok");
+    next: CMR402_setup
+
+  - step: Assert_CMR211_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-211: 長文一致失敗");
+      $runner.setResult("ok");
+    next: CMR402_setup
+
+  # ============================================================
+  # CMR-402: サブフロー戻り値を variable 経由で CMR 参照
+  #   (Pattern 6 にサブフロー実装無いので setObject でシミュレート)
+  # ============================================================
+  - step: CMR402_setup
+    type: save_context2db
+    context_name: "pn_phonetype"
+    context_value: "固定電話"
+    next: CMR_CMR402
+
+  - step: CMR_CMR402
+    type: context_match_router
+    module1: "<%pn_phonetype%>"
+    module2: "<%pn_phonetype%>"
+    value_pairs:
+      - {value1: "固定電話", value2: "固定電話"}
+      - {value1: "携帯電話", value2: "携帯電話"}
+    conditions:
+      - match: "固定電話"
+        next: Assert_CMR402_PASS
+      - match: "携帯電話"
+        next: Assert_CMR402_FAIL
+      - match: "other"
+        next: Assert_CMR402_FAIL
+
+  - step: Assert_CMR402_PASS
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST PASS] CMR-402: サブフロー戻り値 (pn_phonetype) を <%var%> で参照");
+      $runner.setResult("ok");
+    next: 集計
+
+  - step: Assert_CMR402_FAIL
+    type: inline_script
+    body: |
+      $runner.getLogger().error("[TEST FAIL] CMR-402: 固定電話にマッチせず");
+      $runner.setResult("ok");
+    next: 集計
+
+  # ============================================================
+  # 終了
+  # 注: CMR-401 (本番施設フローの後方互換) は Pattern 6 で実装不可、シート上 N/A
+  # ============================================================
+  - step: 集計
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST REPORT] CMR 19 ケース 全テスト完了 (CMR-401 は本番フロー必須で N/A)");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: TTS_テスト完了
+
+  - step: TTS_テスト完了
+    type: announcement
+    prompt: "{tts_g:テスト完了}"
+    next: 切断_テスト終了
+
+  - step: 切断_テスト終了
+    type: termination

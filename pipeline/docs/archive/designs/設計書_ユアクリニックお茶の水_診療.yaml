@@ -1,0 +1,523 @@
+# 設計書 -- ユアクリニックお茶の水 診療シナリオ
+# 生成元: @director エージェント（第3版）
+# 生成日: 2026/04/02
+# 確認レポート: output/scenarios/ユアクリニックお茶の水_診療/確認レポート_20260402.md
+#
+# !!!  BLOCKER あり: 本設計書には未確定の情報（TODO_要確認）が含まれています。
+# 確認レポートのBLOCKER項目（B-1, B-2）を解消してから @generator に実行を指示してください。
+#
+# !!!  既存成果物あり: output/scenarios/ユアクリニックお茶の水_診療/ に既に生成済み成果物が存在します。
+# 本設計書はPDF資料の再読込による第3版です。既存成果物と矛盾がないことを確認済み。
+
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "ユアクリニックお茶の水"
+  group_name: "ユアCLお茶水"             # NON-BLOCKER N-1: 仮値。正式名を確認
+  flow_name: "ユアCLお茶水$診療"
+  target_facility: "ユアクリニックお茶の水（単独施設）"
+  office_id: "TODO_要確認"               # BLOCKER B-1
+  phone_number: "TODO_要確認"            # BLOCKER B-2: デモ050番号未定。本番: 050-1721-0927
+  business_hours: "月-土稼働（日曜終日時間外）。時間帯によりAI電話/代表転送/時間外の3パターン制御。詳細はDr.JOY側で設定"
+  flow_type: "subflow"
+  work_type: "new"
+  environment: "demo"                    # NON-BLOCKER N-2: 仮値
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "ユアCLお茶水$診療"
+      role: "main"
+      description: >
+        冒頭チェーン -> acceptance_times（AI電話/代表転送/時間外の3分岐）
+        -> 問い合わせ内容聴取 -> サブフロー遷移（氏名 -> 電話番号）-> 終話。
+        時間外でもAI聴取を続行する特殊仕様。
+        リトライ失敗時は時間帯により代表転送（9:00-19:00）または終話切断。
+    - name: "ユアCLお茶水$氏名聴取"
+      role: "sub"
+      description: "氏名聴取サブフロー（リファレンスbivr完全コピー）"
+    - name: "ユアCLお茶水$電話番号聴取"
+      role: "sub"
+      description: "電話番号聴取サブフロー（リファレンスbivr完全コピー）。着信番号復唱確認方式"
+  subflows:
+    - name: "ユアCLお茶水$氏名聴取"
+      target: "氏名聴取"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。個人情報サブフロー.bivrの氏名聴取フローを完全コピー"
+    - name: "ユアCLお茶水$電話番号聴取"
+      target: "電話番号聴取"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "CLAUDE.md Rule 9 準拠。個人情報サブフロー.bivrの電話番号聴取フローを完全コピー"
+
+# --- セクション3: フローの目的 ---
+purpose: >
+  患者からの電話を受け、お問い合わせ内容（自由発話）・氏名・連絡先電話番号の3項目を聴取し、
+  折り返し受付を自動化する。時間帯によりAI電話対応・代表転送・時間外案内の3パターンを切り替える。
+  時間外でもAI聴取を続行し、翌営業日に折り返す。
+  リトライ上限到達時、9:00-19:00は代表電話に転送し、それ以外の時間帯は終話切断とする。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "ユアCLお茶水$診療"
+    diagram: |
+      wait(2000ms)
+        -> saveContextModel2DB
+        -> incoming-classifier
+            |-- 非通知 -> 非通知_アナウンス(TTS) -> 完了フラグ_非通知(status=2, smsFlag=-1) -> 切断
+            +-- 通常/携帯/固定 -> acceptance_times
+                  |-- 転送時間帯(true_transfer) -> 転送_アナウンス(TTS) -> Call Transfer(03-3259-1190)
+                  |     +-- 転送失敗(timeout/error) -> 転送失敗_アナウンス(TTS) -> 完了フラグ_転送失敗(status=2, smsFlag=-1) -> 切断
+                  |-- 時間外(false) -> 時間外_アナウンス(TTS) -> saveContext_時間帯種別(timeSlot="時間外") -> [問い合わせ内容聴取に合流]
+                  +-- AI電話時間帯(true_ai) -> 冒頭_アナウンス(TTS) -> saveContext_時間帯種別(timeSlot="営業時間内")
+                        +-> [問い合わせ内容聴取に合流]
+
+      --- 時間帯種別の保存 ---
+      # acceptance_timesの結果（AI電話 or 時間外）をsaveContext2DBで保存。
+      # リトライ上限到達時に参照して転送/終話を切り替える。
+      # AI電話時間帯: timeSlot="営業時間内" / 時間外: timeSlot="時間外"
+
+      --- 問い合わせ内容聴取（冒頭アナウンス/時間外アナウンスの両方から合流）---
+      問い合わせ内容(TTS)
+        -> 入力_問い合わせ内容(AmiVoice STT)
+        -> OpenAI_問い合わせ内容(generate_by_OpenAI: summarize)
+            |-- success -> saveContext_問い合わせ内容 -> 氏名聴取へ
+            +-- NO_RESULT -> リトライ_問い合わせ内容
+                              |-- Retry -> 問い合わせ内容(TTS)
+                              +-- No more -> script_時間帯判定
+                                              |-- 営業時間内 -> 転送_リトライ失敗_アナウンス(TTS) -> Call Transfer(03-3259-1190)
+                                              |     +-- 転送失敗 -> 転送失敗_アナウンス(TTS) -> 完了フラグ_転送失敗 -> 切断
+                                              +-- 時間外 -> END_上限エラー(TTS) -> 完了フラグ_上限エラー(status=2, smsFlag=-1) -> 切断
+
+      --- 氏名聴取（サブフロー遷移）---
+      saveContext_問い合わせ内容
+        -> サブフロー遷移_氏名聴取(Custom Jump to Flow -> ユアCLお茶水$氏名聴取)
+            -> [氏名聴取サブフロー: 結果 .* -> 次へ]
+
+      --- 電話番号聴取（サブフロー遷移）---
+      -> サブフロー遷移_電話番号聴取(Custom Jump to Flow -> ユアCLお茶水$電話番号聴取)
+            -> [電話番号聴取サブフロー: 結果 .* -> 終話判定へ]
+
+      --- 終話判定 ---
+      -> script_終話判定
+          |-- 営業時間内 -> END_受付完了(TTS) -> 完了フラグ_受付完了(status=1, smsFlag=1) -> 切断
+          +-- 時間外 -> END_時間外受付完了(TTS) -> 完了フラグ_時間外受付完了(status=1, smsFlag=1) -> 切断
+
+      --- メインフロー内終話パターン ---
+      END_受付完了: status=1, smsFlag=1（通常時間帯の正常終話）
+      END_時間外受付完了: status=1, smsFlag=1（時間外の正常終話。折り返し期限が異なる文言）
+      非通知: status=2, smsFlag=-1
+      転送: status=3, smsFlag=-1（Call Transfer成功時は自動）
+      転送失敗: status=2, smsFlag=-1
+      上限エラー: status=2, smsFlag=-1（時間外のリトライ上限到達）
+    notes: |
+      acceptance_timesは3パターン（AI電話/代表転送/時間外）の分岐を制御。
+      Dr.JOY側で時間帯スケジュールを設定する。
+      時間外でもAI聴取を続行する特殊仕様（P4/P12フロー図、P3/P17アナウンス文言に明記）。
+      リトライ失敗時: 9:00-19:00は代表転送（P4/P12に記載）、それ以外は終話切断。
+      時間帯種別をsaveContext2DBで保存し、リトライ上限・終話時に参照して分岐。
+
+  - flow_name: "ユアCLお茶水$氏名聴取"
+    diagram: |
+      --- 完全コピー対象（CLAUDE.md Rule 9） ---
+      docs/reference/bivr/samples/個人情報サブフロー.bivr の「氏名聴取」フローを完全コピーする。
+      フロー名プレフィックスのみ「ユアCLお茶水$」に置換。構造・接続・スクリプトは一切変更不可。
+
+      聴取ステップ:
+        1. 氏名（AmiVoice STT -- 音声のみ）
+      出口: script_結果返却_氏名 -> メインフローに返却
+    notes: "CLAUDE.md Rule 9/11 準拠。独自のモジュール追加・削除・接続変更は禁止。"
+
+  - flow_name: "ユアCLお茶水$電話番号聴取"
+    diagram: |
+      --- 完全コピー対象（CLAUDE.md Rule 9） ---
+      docs/reference/bivr/samples/個人情報サブフロー.bivr の「電話番号聴取」フローを完全コピーする。
+      フロー名プレフィックスのみ「ユアCLお茶水$」に置換。構造・接続・スクリプトは一切変更不可。
+
+      アーキテクチャ:
+        1. incoming-classifier -> 携帯パス / 固定・その他パス
+        2. 携帯パス: 着信番号をそのまま保存 -> Phone Normalization -> 復唱確認（DTMF 1=はい/2=いいえ）
+           肯定 -> phonetype=携帯。否定 -> 連絡先聴取パスに合流
+        3. 固定・その他パス: 連絡先番号を聴取 -> Phone Normalization -> 復唱確認
+        4. script_携帯判別 -> 携帯(phonetype=携帯) / その他(phonetype=その他)
+        5. 結果返却: 1=携帯 / 2=その他
+      出口: script_結果返却_電話番号 -> メインフローに返却
+    notes: "CLAUDE.md Rule 9/10/11 準拠。独自のモジュール追加・削除・接続変更は禁止。"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - order: "1"
+        value: "お問い合わせ"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件区分。本フローでは「お問い合わせ」のみ（NON-BLOCKER N-7）"
+
+  - context_name: "inquiry"
+    context_name_jp: "問い合わせ内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "患者が自由発話した問い合わせ内容をOpenAIで要約して保存"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "患者氏名（フルネーム）"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "聴取する連絡先電話番号"
+
+  - context_name: "timeSlot"
+    context_name_jp: "時間帯種別"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: false
+    deletable: true
+    notes: "acceptance_timesの結果を保存。リトライ上限到達時・終話時の分岐に使用。値: 営業時間内 / 時間外"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "0"
+        order: "0"
+        value: "途中切断"
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "転送"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "0=途中切断 1=未処理 2=代表案内 3=転送 6=時間外"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "受電日時自動格納"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: true
+    notes: "通話ID自動格納"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "問い合わせ内容"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "inquiry"
+    openai_processing: "summarize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "自由発話。OpenAIで要約して保存。分岐なし（NON-BLOCKER N-4）"
+
+  - order: 2
+    name: "氏名"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "patientName"
+    openai_processing: "normalize"
+    output_format: "free_text"
+    output_labels: []
+    notes: "サブフロー内（リファレンスbivr完全コピー）。profile_words: 氏名辞書"
+
+  - order: 3
+    name: "電話番号"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 11
+    retry_count: 2
+    echo_back: true
+    save_to: "additionalPhoneNumber"
+    openai_processing: "normalize"
+    output_format: "number"
+    output_labels: []
+    notes: "サブフロー内（リファレンスbivr完全コピー）。incoming-classifierで携帯/その他分岐。着信番号の復唱確認方式"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "問い合わせ内容"
+    tts_announcement: "まずは1つ目の質問です。本日のお問い合わせ内容をお話ください。それではどうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "要約テキスト"
+        - "NO_RESULT"
+      mapping:
+        - input: "音声認識結果（自由発話）"
+          output: "要約テキスト（問い合わせ内容を簡潔に要約）"
+        - input: "音声認識結果が空または認識不能"
+          output: "NO_RESULT"
+      no_result_condition: "音声認識結果が空または認識不能"
+    save_to: "inquiry"
+    next_step: "サブフロー遷移_氏名聴取"
+    retry_failure: "conditional_transfer"
+    retry_failure_detail: >
+      リトライ上限到達時、timeSlot（時間帯種別）を参照して分岐:
+      - 営業時間内 -> 代表電話に転送（03-3259-1190）
+      - 時間外 -> 終話切断（END_上限エラー）
+
+  - step_name: "氏名"
+    tts_announcement: "かしこまりました。続いて2つ目の質問です。お名前をフルネームでお話ください。それではどうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "氏名テキスト"
+      mapping:
+        - input: "音声認識結果"
+          output: "氏名テキスト（フリーテキスト）"
+      no_result_condition: "音声認識結果が空"
+    save_to: "patientName"
+    next_step: "サブフロー遷移_電話番号聴取"
+    retry_failure: "skip"
+
+  - step_name: "電話番号"
+    tts_announcement: >
+      ありがとうございます。それでは、最後の質問です。
+      ご連絡先のお電話番号をお伺いします。折返しの電話番号は、○○○-○○○○-○○○○でよろしいでしょうか？
+      はいの場合は、1を、いいえの場合は、2を、ダイヤルプッシュで入力してください。
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "正規化済み電話番号"
+      mapping:
+        - input: "10-11桁の数値（先頭0）"
+          output: "正規化済み電話番号"
+      no_result_condition: "電話番号として不正な形式"
+    save_to: "additionalPhoneNumber"
+    next_step: "終話チェーン"
+    retry_failure: "conditional_transfer"
+    retry_failure_detail: >
+      問い合わせ内容と同じ条件付き転送ロジック:
+      - 営業時間内 -> 代表電話に転送（03-3259-1190）
+      - 時間外 -> 終話切断（END_上限エラー）
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  - name: "END_受付完了"
+    condition: "全聴取完了（正常終話 -- AI電話時間帯）"
+    tts_announcement: "ありがとうございます。質問は以上です。内容確認後、院内スタッフから土・日、祝日を除く2日以内にショートメッセージもしくはお電話にてご連絡いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了"
+
+  - name: "END_時間外受付完了"
+    condition: "全聴取完了（時間外でAI聴取が完了した場合）"
+    tts_announcement: "ありがとうございます。質問は以上です。内容確認後、院内スタッフから翌営業日終了までにショートメッセージもしくはお電話にてご連絡いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_時間外受付完了"
+
+  - name: "END_非通知"
+    condition: "incoming-classifier で非通知と判定"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+    # NON-BLOCKER N-3: 文言は仮値
+
+  - name: "END_転送"
+    condition: "acceptance_times で代表転送時間帯と判定"
+    tts_announcement: "只今のお時間は、スタッフへお繋ぎいたします。代表電話に転送いたしますのでそのままお待ちください。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_転送"
+
+  - name: "END_転送失敗"
+    condition: "Call Transfer が失敗（転送先回線に空きがない場合）"
+    tts_announcement: "申し訳ございません。只今お電話が込み合っております。恐れ入りますが、お時間を空けて再度おかけなおしください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_転送失敗"
+
+  - name: "END_リトライ転送"
+    condition: "リトライ上限到達 かつ 9:00-19:00（営業時間内）"
+    tts_announcement: "申し訳ございません、うまく認識ができませんでした。代表電話に転送いたしますのでそのままお待ちください。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_リトライ転送"
+
+  - name: "END_上限エラー"
+    condition: "リトライ上限到達 かつ 時間外"
+    tts_announcement: "大変申し訳ございません。ご回答を聞き取ることができませんでした。恐れ入りますが、改めておかけなおしください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_上限エラー"
+
+# smsFlag分岐設計
+sms_flag_routing:
+  enabled: false
+  routing_keys: []
+  patterns: []
+  # smsFlag分岐は不要。受付完了（status=1）のみSMS送信
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  # メインフロー
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内（AI電話時間帯用）"
+    announcement: "お電話ありがとうございます。ユアクリニックお茶の水のAI電話です。全部で3つ質問をさせていただきます。"
+
+  - module_name: "時間外_アナウンス"
+    purpose: "時間外案内（聴取続行型）"
+    announcement: "ただいまのお時間は診療時間外です。救急の方は東京都医療機関案内サービス、ひまわり03-5272-0303におかけください。当院へお問い合わせの方は、この後にご用件をお伺いいたします。内容確認後、院内スタッフから翌営業日終了までにショートメッセージもしくはお電話にてご連絡いたします。全部で3つ質問をさせていただきます。"
+
+  - module_name: "非通知_アナウンス"
+    purpose: "非通知案内"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。"
+    # NON-BLOCKER N-3: 仮値
+
+  - module_name: "転送_アナウンス"
+    purpose: "代表転送案内"
+    announcement: "只今のお時間は、スタッフへお繋ぎいたします。代表電話に転送いたしますのでそのままお待ちください。"
+
+  - module_name: "転送失敗_アナウンス"
+    purpose: "転送先回線混雑案内"
+    announcement: "申し訳ございません。只今お電話が込み合っております。恐れ入りますが、お時間を空けて再度おかけなおしください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "問い合わせ内容"
+    purpose: "問い合わせ内容聴取案内"
+    announcement: "まずは1つ目の質問です。本日のお問い合わせ内容をお話ください。それではどうぞ。"
+
+  - module_name: "転送_リトライ失敗_アナウンス"
+    purpose: "リトライ上限到達時の転送案内（9:00-19:00用）"
+    announcement: "申し訳ございません、うまく認識ができませんでした。代表電話に転送いたしますのでそのままお待ちください。"
+
+  - module_name: "END_受付完了"
+    purpose: "受付完了終話（通常時間帯）"
+    announcement: "ありがとうございます。質問は以上です。内容確認後、院内スタッフから土・日、祝日を除く2日以内にショートメッセージもしくはお電話にてご連絡いたします。"
+
+  - module_name: "END_時間外受付完了"
+    purpose: "時間外受付完了終話"
+    announcement: "ありがとうございます。質問は以上です。内容確認後、院内スタッフから翌営業日終了までにショートメッセージもしくはお電話にてご連絡いたします。"
+
+  - module_name: "END_上限エラー"
+    purpose: "リトライ上限終話（時間外用）"
+    announcement: "大変申し訳ございません。ご回答を聞き取ることができませんでした。恐れ入りますが、改めておかけなおしください。お電話ありがとうございました。それでは失礼いたします。"
+
+  # サブフロー（リファレンスbivr完全コピーのため、メインフロー側のTTSのみ記載）
+  # 氏名聴取・電話番号聴取サブフロー内のTTSはリファレンスbivrに含まれる
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "問い合わせ内容"
+    words: |
+      予約 よやく
+      変更 へんこう
+      キャンセル きゃんせる
+      検査 けんさ
+      紹介状 しょうかいじょう
+      処方箋 しょほうせん
+      診察 しんさつ
+      受診 じゅしん
+      相談 そうだん
+      問い合わせ といあわせ
+      初診 しょしん
+      再診 さいしん
+      健康診断 けんこうしんだん
+      予防接種 よぼうせっしゅ
+      インフルエンザ いんふるえんざ
+      コロナ ころな
+
+  - step_name: "氏名"
+    words: |
+      （氏名辞書を設定 -- リファレンスbivrに含まれる）
+
+  - step_name: "電話番号復唱確認"
+    words: |
+      はい はい
+      いいえ いいえ
+      （リファレンスbivrに含まれる）
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "用件区分は「お問い合わせ」1種のみ。用件選択の分岐ステップはない"
+  - "問い合わせ内容は自由発話でOpenAIが要約して保存する方式。分岐用途ではない"
+  - "時間外でもAI聴取を続行する特殊仕様。時間外アナウンス内に「この後にご用件をお伺いいたします」「全部で3つ質問をさせていただきます」と明記されている（P4/P12フロー図、P3/P17アナウンス）"
+  - "acceptance_timesはAI電話/代表転送/時間外の3パターン分岐。Dr.JOY側で時間帯スケジュールを設定。P15の受付時間設定（250904-）が最新"
+  - "代表転送先: 03-3259-1190（代表直通電話）。Call Transferモジュールで転送。転送失敗時（回線混雑）のアナウンスあり"
+  - "リトライ上限到達時の挙動が時間帯により異なる: 9:00-19:00は代表電話に転送（P4/P12フロー図に記載）、それ以外は終話切断。timeSlotコンテキストを参照して分岐"
+  - "終話文言が通常時間帯と時間外で異なる: 通常「土・日、祝日を除く2日以内」/ 時間外「翌営業日終了まで」"
+  - "生年月日・診察券番号の聴取はなし。聴取項目は問い合わせ内容・氏名・電話番号の3項目のみ"
+  - "個人情報聴取サブフローはリファレンスbivrを完全コピー（CLAUDE.md Rule 9）。氏名聴取+電話番号聴取の2サブフロー"
+  - "電話番号聴取はincoming-classifierで携帯/その他を分岐（CLAUDE.md Rule 10）"
+  - "サブフローの出口に結果返却スクリプトを必ず配置（CLAUDE.md Rule 11）"
+  - "P16（最新版基本設定）で無回答ガイダンスと通話切断ガイダンスの文言が統一されている（P2初版では異なっていた）"
+  - "P16最新版でデモ050番号・SMS送信番号が空欄になっている（P2初版ではデモ=なし/SMS=050-1721-0927だった）"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+# 詳細は確認レポート（output/scenarios/ユアクリニックお茶の水_診療/確認レポート_20260402.md）を参照。
+confirmation_items:
+  - item: "office_id（BLOCKER B-1）"
+    resolved: false
+  - item: "デモ環境050番号（BLOCKER B-2）"
+    resolved: false
+  - item: "グループ名（NON-BLOCKER N-1）: 仮値「ユアCLお茶水」"
+    resolved: false
+  - item: "環境（NON-BLOCKER N-2）: 仮値「demo」"
+    resolved: false
+  - item: "非通知アナウンス文言（NON-BLOCKER N-3）: 汎用文言で仮設定"
+    resolved: false
+  - item: "問い合わせ内容のOpenAI処理方式（NON-BLOCKER N-4）: summarize（要約保存）"
+    resolved: false
+  - item: "無回答ガイダンスの版差分（NON-BLOCKER N-5）: P16版を採用"
+    resolved: false
+  - item: "転送先回線混雑時の挙動（NON-BLOCKER N-6）"
+    resolved: false
+  - item: "用件区分の値（NON-BLOCKER N-7）: 「お問い合わせ」で仮設定"
+    resolved: false
+  - item: "時間外AI聴取の継続仕様（NON-BLOCKER N-8）: フロー図・アナウンス文言から続行と判断"
+    resolved: false
+  - item: "リトライ失敗時転送（NON-BLOCKER N-9）: 9:00-19:00は代表転送、それ以外は終話切断"
+    resolved: false

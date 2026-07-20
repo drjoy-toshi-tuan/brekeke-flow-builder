@@ -1,0 +1,373 @@
+# =============================================================================
+# シナリオテンプレート: 診療
+# =============================================================================
+# 用途: draw.io でシナリオを起こすための雛形 YAML。
+#   1. 本ファイルをコピーし {施設名} 等のプレースホルダを実値に置換
+#   2. python .claude/skills/yaml-to-drawio/yaml_to_drawio.py <このファイル> で drawio 化
+#   3. diagrams.net で開いて顧客と確認 → YAML 修正 → 再生成
+# ベース実例: output/scenarios/中頭病院_診療/設計書_中頭病院_診療.yaml
+# 構造: 用件分岐（予約/変更/キャンセル/確認）+ 個人情報サブフロー
+#       + 電話種別(phonetype)で携帯/固定の終話を分ける
+# =============================================================================
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "{施設名}"
+  scenario_name: "診療"
+  group_name: "{施設名}_診療_{YYYYMMDD}"   # 末尾に作業日。日付はグループ名のみに付ける（naming_convention.md）
+  flow_name: "{施設名}_診療_{YYYYMMDD}$診療"   # $ より前は group_name と完全一致（T-2d）
+  target_facility: "{施設名}（本院）"
+  office_id: "TODO_要確認"
+  phone_number: "{代表電話番号}"
+  business_hours: "祝日除く月〜金 9:00〜17:00"   # 施設に合わせて変更
+  flow_type: "subflow"
+  work_type: "new"
+  environment: "demo"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "{施設名}$診療"
+      role: "main"
+      description: "診療予約系（新規予約・予約変更・予約キャンセル・予約確認）の一次受付フロー"
+  subflows:
+    - name: "{施設名}$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "個人情報サブフロー.bivr を完全コピー（CLAUDE.md Rule 9）"
+    - name: "{施設名}$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+    - name: "{施設名}$診察券番号聴取"
+      target: "診察券番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+    - name: "{施設名}$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "incoming-classifier で phonetype（携帯/その他）を判定し戻り値とする"
+
+# --- セクション3: フローの目的 ---
+purpose: >
+  {施設名} に着信した診療予約系の電話を AI が受付し、用件（診察予約・予約変更・予約キャンセル・
+  予約確認）を識別したうえで、氏名・生年月日・診察券番号・診療科・希望日・連絡先を聴取して
+  Dr.JOY に登録する。完了後は電話種別（携帯/固定）で SMS 送信有無を分けて終話する。
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+# 営業時間判定が必要な施設 (曜日別営業時間 / 祝日休 / 固定休 / 年末年始 等):
+# script_template: business_hour_classifier を script ブロックで使用可能。
+# 曜日別営業時間 + 祝日 (Brekeke Note `drjoy.holidays` 連携) + 固定休を 1 ブロックで判定し、
+# 営業中/営業時間外/定休日/祝日/固定休/ERROR の 6 分岐に仕分ける。
+# 使用例: docs/brekeke/script_templates/README.md、詳細仕様: modules/business_hour_classifier/REQUIREMENTS.md
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 用件確認
+
+  # 用件分岐（予約/変更/キャンセル → 共通受付路、確認 → WEB 案内路）
+  - step: 用件確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "予約"
+        next: 氏名聴取
+      - match: "予約変更"
+        next: 氏名聴取
+      - match: "予約キャンセル"
+        next: 氏名聴取
+      - match: "予約確認"
+        next: WEB確認_アナウンス
+
+  # 共通受付路（個人情報サブフロー → 診療科 → 希望日 → 連絡先 → phonetype 分岐）
+  - step: 氏名聴取
+    type: subflow
+    flowname: "{施設名}$氏名聴取"
+    next: 生年月日聴取
+
+  - step: 生年月日聴取
+    type: subflow
+    flowname: "{施設名}$生年月日聴取"
+    next: 診察券番号聴取
+
+  - step: 診察券番号聴取
+    type: subflow
+    flowname: "{施設名}$診察券番号聴取"
+    next: 診療科
+
+  - step: 診療科
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    conditions:
+      - match: "default"
+        next: 希望日
+
+  - step: 希望日
+    type: hearing
+    output_format: datetime
+    next: 電話番号聴取
+
+  - step: 電話番号聴取
+    type: subflow
+    flowname: "{施設名}$電話番号聴取"
+    next: CMR_phonetype
+
+  - step: CMR_phonetype
+    type: context_match_router
+    reference_module: "電話番号聴取"
+    conditions:
+      - match: "携帯"
+        next: END_受付完了_携帯
+      - match: "other"
+        next: END_受付完了_固定
+
+  # 予約確認路（WEB 案内 → 連絡先 → 終話）
+  - step: WEB確認_アナウンス
+    type: announcement
+    next: 電話番号聴取_確認
+
+  - step: 電話番号聴取_確認
+    type: subflow
+    flowname: "{施設名}$電話番号聴取"
+    next: CMR_確認_phonetype
+
+  - step: CMR_確認_phonetype
+    type: context_match_router
+    reference_module: "電話番号聴取_確認"
+    conditions:
+      - match: "携帯"
+        next: END_予約確認_SMS
+      - match: "other"
+        next: END_予約確認_HP
+
+  # 終話
+  - step: END_受付完了_携帯
+    type: termination
+    termination_ref: "END_受付完了_携帯"
+  - step: END_受付完了_固定
+    type: termination
+    termination_ref: "END_受付完了_固定"
+  - step: END_予約確認_SMS
+    type: termination
+    termination_ref: "END_予約確認_SMS"
+  - step: END_予約確認_HP
+    type: termination
+    termination_ref: "END_予約確認_HP"
+
+# --- セクション5: コンテキストフィールド一覧（抜粋。施設に合わせて拡張）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "診察予約"
+      - id: "2"
+        order: "2"
+        value: "予約変更"
+      - id: "3"
+        order: "3"
+        value: "予約キャンセル"
+      - id: "4"
+        order: "4"
+        value: "予約確認"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件区分"
+  - context_name: "patientName"
+    context_name_jp: "患者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日(和暦)"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values: []   # 施設の診療科一覧 + 末尾「登録なし」を設定
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "rangeValues は施設の診療科一覧から作成。no_result_default は「登録なし」"
+  - context_name: "reservationDate"
+    context_name_jp: "希望日"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+  - context_name: "phonetype"
+    context_name_jp: "電話種別"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "電話番号聴取サブフローの戻り値（携帯/その他）"
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "転送"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "システム自動取得"
+
+# --- セクション7: ステップ詳細（TTS 発話文言。施設に合わせて編集）---
+step_details:
+  - step_name: "冒頭_アナウンス"
+    tts_announcement: "お電話ありがとうございます。{施設名}の予約専用、AI電話です。"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "用件確認"
+    retry_failure: "skip"
+  - step_name: "用件確認"
+    tts_announcement: "ご用件を、次の4つのうちのいずれかでお話しください。診察の予約を取る、予約を変更する、予約をキャンセルする、予約を確認する。"
+    input_method: "voice_only"
+    save_to: "classification"
+    next_step: "氏名聴取 / WEB確認_アナウンス"
+    retry_failure: "end_failure"
+  - step_name: "診療科"
+    tts_announcement: "診療科をおっしゃってください。わからない場合は「わからない」とお答えください。"
+    input_method: "voice_only"
+    save_to: "clinicalDepartment"
+    next_step: "希望日"
+    retry_failure: "end_failure"
+  - step_name: "希望日"
+    tts_announcement: "受診を希望される日を、「4月1日」のように日付でおっしゃってください。AIが正しく認識しない場合はダイヤルプッシュで月と日にちの4桁を入力してください。"
+    input_method: "dtmf_voice"
+    save_to: "reservationDate"
+    next_step: "電話番号聴取"
+    retry_failure: "end_failure"
+  - step_name: "WEB確認_アナウンス"
+    tts_announcement: "お電話での予約確認は承っておりません。ショートメールでウェブサイトのご案内をお送りしますので、ご連絡先のお電話番号をお伺いします。"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "電話番号聴取_確認"
+    retry_failure: "skip"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # 異常系（デフォルト必須 — 削除禁止）
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+  # 正常系
+  - name: "END_受付完了_携帯"
+    condition: "受付完了 かつ phonetype=携帯"
+    tts_announcement: "ご予約のお申し込みを受付いたしました。3診療日以内に担当者から折り返し電話、もしくはショートメールにてご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_受付完了_携帯"
+  - name: "END_受付完了_固定"
+    condition: "受付完了 かつ phonetype=その他"
+    tts_announcement: "ご予約のお申し込みを受付いたしました。3診療日以内に担当者から折り返し電話にてご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_受付完了_固定"
+  - name: "END_予約確認_SMS"
+    condition: "予約確認 かつ phonetype=携帯"
+    tts_announcement: "お電話終了後、ショートメールをお送りします。記載されたURLにアクセスいただきご確認をお願いいたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_予約確認_SMS"
+  - name: "END_予約確認_HP"
+    condition: "予約確認 かつ phonetype=その他"
+    tts_announcement: "現在の番号ではショートメールが送信できません。ご自身でホームページをご確認いただくか、携帯電話からおかけ直しください。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_予約確認_HP"
+
+# --- セクション8b: RAG/FAQ 検索サブフロー ---
+rag_subflow:
+  pattern: "none"        # FAQ 検索を入れる場合は 1/2/3 に変更
+  inquiry_insertion_point: ""
+  pre_termination: false

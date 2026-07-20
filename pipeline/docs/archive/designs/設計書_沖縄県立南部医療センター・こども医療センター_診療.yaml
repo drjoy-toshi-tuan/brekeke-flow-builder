@@ -1,0 +1,2442 @@
+# 設計書 — 沖縄県立南部医療センター・こども医療センター 診療
+# 生成元: @director エージェント（Gen2→Gen3 移管）
+# 生成日: 2026/04/23
+# 確認レポート: docs/designs/確認レポート_沖縄県立南部医療センター_診療_20260423.md
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "沖縄県立南部医療センター・こども医療センター"
+  scenario_name: "診療"
+  group_name: "沖縄県立南部医療センター・こども医療センター"
+  flow_name: "沖縄県立南部医療センター・こども医療センター$診療"
+  target_facility: "本院のみ"
+  office_id: "TODO_要確認"
+  phone_number: "TODO_要確認"
+  business_hours: "なし（24時間受付 / customer_doc に時刻判定の記載なし）"
+  flow_type: "subflow"
+  work_type: "gen2_migration"
+  environment: "prod"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "沖縄県立南部医療センター・こども医療センター$診療"
+      role: "main"
+      description: "小児/成人分岐 → 用件分岐（新規/変更/キャンセル/予約日の確認）→ 共通個人情報聴取 → smsFlag 別終話のメインフロー"
+  subflows:
+    - name: "沖縄県立南部医療センター・こども医療センター$診察券番号聴取"
+      target: "診察券番号聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "個人情報サブフロー.bivr の診察券番号聴取を完全コピー。「わからない／持っていない」→ 空文字格納。customer_doc 1. 復唱ルールで echo_back 対象外（3 項目のみ）"
+    - name: "沖縄県立南部医療センター・こども医療センター$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "customer_doc §1「患者名は絶対に復唱をしてはいけない」に従い recitation=なし。全角カタカナ格納・推定補正禁止"
+    - name: "沖縄県立南部医療センター・こども医療センター$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "customer_doc §1 echo_back 対象。DOB Re-confirmation で正規化＋読み上げ復唱。和暦（大正/昭和/平成/令和）対応"
+    - name: "沖縄県立南部医療センター・こども医療センター$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "incoming-classifier で 090/080/070/060=携帯、050=IP電話、それ以外=固定。携帯/IPは11桁、固定は10桁バリデーション。先頭0必須、「C/for/ふぉー/フォー/しー/しい/し→4」「ごー/ごお/ご→5」救済。再質問2回失敗時は incoming_phone_number 流用＋「連絡先電話番号を聞き取る事ができませんでしたので、今おかけの番号をご連絡先として登録いたします」TTS"
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  沖縄県立南部医療センター・こども医療センターの診療予約専用 AI 電話窓口。
+  入電者から以下を聴取し、Dr.JOY に連携する:
+    - 年齢区分（小児／成人）
+    - 用件（新規／変更／キャンセル／予約日の確認）
+    - 用件別の聴取項目（新規: 診療科・紹介状・医療機関名(成人のみ)・都合が悪い日、変更/キャンセル: 薬服用中・薬残数・診療科・予約日・理由・(変更のみ都合が悪い日)、確認: 診療科・確認事項）
+    - 個人情報（診察券番号／氏名／生年月日／連絡先電話番号）
+    - 最後の問い合わせ（1 ターンの単純聴取、FAQ ループなし）
+  用件に応じて smsFlag を 1（新規）/ 2（変更）/ 3（キャンセル）/ 4（予約日の確認）で出し分け、キャンセルのみ専用終話 TTS を流す。
+  病理診断科（成人のみ）/ 紹介状無し（新規のみ）/ 残薬無し（変更・キャンセル）は AI 予約不可で代表案内終話（status=2）。非通知着信は status=7 専用終話。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "沖縄県立南部医療センター・こども医療センター$診療"
+    diagram: |
+      冒頭(wait)
+        → コンテキスト設定(saveContextModel2DB)
+        → 着信電話番号分類(incoming-classifier)
+            ├─ 非通知 → END_非通知(status=7, smsFlag=-1) → 切断
+            └─ 通常   → 冒頭_アナウンス
+                          → 年齢確認（enum 小児/成人 を age に保存）
+                            → 用件聴取（echo_back, enum 4 分岐）
+                                ├─ 新規 → 分岐_新規_年齢 (context_match_router: age)
+                                │           ├─ 小児 → 診療科_新規_小児 → 紹介状有無_新規
+                                │           └─ 成人 → 診療科_新規_成人（病理→END_病理診断科）→ 紹介状有無_新規
+                                │         紹介状有無_新規:
+                                │           ├─ あり → 分岐_新規_紹介状あり_年齢
+                                │           │           ├─ 小児 → 都合が悪い日_新規
+                                │           │           └─ 成人 → 医療機関名_新規 → 都合が悪い日_新規
+                                │           └─ なし → END_紹介状無し案内
+                                │         都合が悪い日_新規 → (共通) jump_診察券番号聴取
+                                │
+                                ├─ 変更   → 薬服用中か_変更
+                                │             ├─ はい → 薬残数確認_変更
+                                │             │           ├─ なし → END_残薬無し案内
+                                │             │           └─ あり → 分岐_変更_年齢
+                                │             └─ いいえ → 分岐_変更_年齢
+                                │           分岐_変更_年齢:
+                                │             ├─ 小児 → 診療科_変更_小児 → 予約日_変更(echo_back)
+                                │             └─ 成人 → 診療科_変更_成人（病理→END）→ 予約日_変更(echo_back)
+                                │           → 理由_変更 → 都合が悪い日_変更 → (共通) jump_診察券番号聴取
+                                │
+                                ├─ キャンセル → 薬服用中か_キャンセル
+                                │             ├─ はい → 薬残数確認_キャンセル
+                                │             │           ├─ なし → END_残薬無し案内
+                                │             │           └─ あり → 分岐_キャンセル_年齢
+                                │             └─ いいえ → 分岐_キャンセル_年齢
+                                │           分岐_キャンセル_年齢:
+                                │             ├─ 小児 → 診療科_キャンセル_小児 → 予約日_キャンセル(echo_back)
+                                │             └─ 成人 → 診療科_キャンセル_成人（病理→END）→ 予約日_キャンセル(echo_back)
+                                │           → 理由_キャンセル → (共通) jump_診察券番号聴取
+                                │
+                                └─ 予約日の確認 → 分岐_確認_年齢
+                                          ├─ 小児 → 診療科_確認_小児 → 確認事項_確認(reason)
+                                          └─ 成人 → 診療科_確認_成人（病理→END）→ 確認事項_確認(reason)
+                                                → (共通) jump_診察券番号聴取
+                            (共通) jump_診察券番号聴取 → jump_氏名聴取 → jump_生年月日聴取(復唱) → jump_電話番号聴取(復唱)
+                            → 最後の問い合わせ(enum: なし/default)
+                                ├─ なし → 分岐_終話_用件
+                                └─ default → FAQ不可_案内 → 分岐_終話_用件
+                            分岐_終話_用件 (context_match_router: classification):
+                                ├─ 新規         → END_通常_新規(status=1, smsFlag=1)
+                                ├─ 変更         → END_通常_変更(status=1, smsFlag=2)
+                                ├─ キャンセル   → END_通常_キャンセル(status=1, smsFlag=3, 専用TTS)
+                                └─ 予約日の確認 → END_通常_確認(status=1, smsFlag=4)
+    notes: |
+      - 非通知 status=7 は customer 固有運用（director.md standard の 2 ではない）
+      - 病理診断科は成人 診療科 hearing でのみ enum 分岐（小児リストには存在しない）
+      - 小児歯科口腔外科は復唱時「歯科口腔外科」と言い換える customer 仕様があるが、本設計では診療科 echo_back なしのため発話には現れない（prompter メモに残す）
+      - 診療科 hearing は全て no_result_default="登録なし"（モジュール選定ガイド 2.5）
+      - 全 hearing の retry 失敗時は skip（空文字格納して次ステップへ）。customer_doc 2.5 準拠で「かしこまりました」TTS を挟む
+      - 最後の問い合わせは RAG 化しない 1 ターン聴取。default で FAQ不可_案内 を 1 回流すだけ
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭ブロック ---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: false
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 年齢確認
+
+  # --- 年齢確認（小児/成人 を age に保存。両方とも用件聴取へ合流）---
+  - step: 年齢確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "default"
+        next: 用件聴取
+
+  # --- 用件聴取（Pattern A 直接分岐、echo_back あり）---
+  - step: 用件聴取
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "新規"
+        next: 分岐_新規_年齢
+      - match: "変更"
+        next: 薬服用中か_変更
+      - match: "キャンセル"
+        next: 薬服用中か_キャンセル
+      - match: "予約日の確認"
+        next: 分岐_確認_年齢
+
+  # ============ 新規ルート ============
+  - step: 分岐_新規_年齢
+    type: context_match_router
+    reference_module: "age"
+    conditions:
+      - match: "小児"
+        next: 診療科_新規_小児
+      - match: "default"
+        next: 診療科_新規_成人
+
+  - step: 診療科_新規_小児
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    conditions:
+      - match: "default"
+        next: 紹介状有無_新規
+
+  - step: 診療科_新規_成人
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    conditions:
+      - match: "病理診断科"
+        next: END_病理診断科案内
+      - match: "default"
+        next: 紹介状有無_新規
+
+  - step: 紹介状有無_新規
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "あり"
+        next: 分岐_新規_紹介状あり_年齢
+      - match: "なし"
+        next: END_紹介状無し案内
+
+  - step: 分岐_新規_紹介状あり_年齢
+    type: context_match_router
+    reference_module: "age"
+    conditions:
+      - match: "小児"
+        next: 都合が悪い日_新規
+      - match: "default"
+        next: 医療機関名_新規
+
+  - step: 医療機関名_新規
+    type: hearing
+    output_format: text
+    next: 都合が悪い日_新規
+
+  - step: 都合が悪い日_新規
+    type: hearing
+    output_format: text
+    next: jump_診察券番号聴取
+
+  # ============ 変更ルート ============
+  - step: 薬服用中か_変更
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "はい"
+        next: 薬残数確認_変更
+      - match: "いいえ"
+        next: 分岐_変更_年齢
+
+  - step: 薬残数確認_変更
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "なし"
+        next: END_残薬無し案内
+      - match: "あり"
+        next: 分岐_変更_年齢
+
+  - step: 分岐_変更_年齢
+    type: context_match_router
+    reference_module: "age"
+    conditions:
+      - match: "小児"
+        next: 診療科_変更_小児
+      - match: "default"
+        next: 診療科_変更_成人
+
+  - step: 診療科_変更_小児
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    conditions:
+      - match: "default"
+        next: 予約日_変更
+
+  - step: 診療科_変更_成人
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    conditions:
+      - match: "病理診断科"
+        next: END_病理診断科案内
+      - match: "default"
+        next: 予約日_変更
+
+  - step: 予約日_変更
+    type: hearing
+    output_format: datetime
+    next: 理由_変更
+
+  - step: 理由_変更
+    type: hearing
+    output_format: text
+    next: 都合が悪い日_変更
+
+  - step: 都合が悪い日_変更
+    type: hearing
+    output_format: text
+    next: jump_診察券番号聴取
+
+  # ============ キャンセルルート ============
+  - step: 薬服用中か_キャンセル
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "はい"
+        next: 薬残数確認_キャンセル
+      - match: "いいえ"
+        next: 分岐_キャンセル_年齢
+
+  - step: 薬残数確認_キャンセル
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "なし"
+        next: END_残薬無し案内
+      - match: "あり"
+        next: 分岐_キャンセル_年齢
+
+  - step: 分岐_キャンセル_年齢
+    type: context_match_router
+    reference_module: "age"
+    conditions:
+      - match: "小児"
+        next: 診療科_キャンセル_小児
+      - match: "default"
+        next: 診療科_キャンセル_成人
+
+  - step: 診療科_キャンセル_小児
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    conditions:
+      - match: "default"
+        next: 予約日_キャンセル
+
+  - step: 診療科_キャンセル_成人
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    conditions:
+      - match: "病理診断科"
+        next: END_病理診断科案内
+      - match: "default"
+        next: 予約日_キャンセル
+
+  - step: 予約日_キャンセル
+    type: hearing
+    output_format: datetime
+    next: 理由_キャンセル
+
+  - step: 理由_キャンセル
+    type: hearing
+    output_format: text
+    next: jump_診察券番号聴取
+
+  # ============ 予約日の確認ルート ============
+  - step: 分岐_確認_年齢
+    type: context_match_router
+    reference_module: "age"
+    conditions:
+      - match: "小児"
+        next: 診療科_確認_小児
+      - match: "default"
+        next: 診療科_確認_成人
+
+  - step: 診療科_確認_小児
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    conditions:
+      - match: "default"
+        next: 確認事項_確認
+
+  - step: 診療科_確認_成人
+    type: hearing
+    output_format: enum
+    no_result_default: "登録なし"
+    conditions:
+      - match: "病理診断科"
+        next: END_病理診断科案内
+      - match: "default"
+        next: 確認事項_確認
+
+  - step: 確認事項_確認
+    type: hearing
+    output_format: text
+    next: jump_診察券番号聴取
+
+  # ============ 共通個人情報聴取（合流点） ============
+  - step: jump_診察券番号聴取
+    type: subflow
+    flowname: "沖縄県立南部医療センター・こども医療センター$診察券番号聴取"
+    next: jump_氏名聴取
+
+  - step: jump_氏名聴取
+    type: subflow
+    flowname: "沖縄県立南部医療センター・こども医療センター$氏名聴取"
+    next: jump_生年月日聴取
+
+  - step: jump_生年月日聴取
+    type: subflow
+    flowname: "沖縄県立南部医療センター・こども医療センター$生年月日聴取"
+    next: jump_電話番号聴取
+
+  - step: jump_電話番号聴取
+    type: subflow
+    flowname: "沖縄県立南部医療センター・こども医療センター$電話番号聴取"
+    next: 最後の問い合わせ
+
+  - step: 最後の問い合わせ
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "なし"
+        next: 分岐_終話_用件
+      - match: "default"
+        next: FAQ不可_案内
+
+  - step: FAQ不可_案内
+    type: announcement
+    next: 分岐_終話_用件
+
+  # ============ 終話分岐 & 終話 ============
+  - step: 分岐_終話_用件
+    type: context_match_router
+    reference_module: "classification"
+    conditions:
+      - match: "新規"
+        next: END_通常_新規
+      - match: "変更"
+        next: END_通常_変更
+      - match: "キャンセル"
+        next: END_通常_キャンセル
+      - match: "予約日の確認"
+        next: END_通常_確認
+      - match: "default"
+        next: END_通常_新規
+
+  - step: END_通常_新規
+    type: termination
+    termination_ref: "END_通常_新規"
+  - step: END_通常_変更
+    type: termination
+    termination_ref: "END_通常_変更"
+  - step: END_通常_キャンセル
+    type: termination
+    termination_ref: "END_通常_キャンセル"
+  - step: END_通常_確認
+    type: termination
+    termination_ref: "END_通常_確認"
+  - step: END_紹介状無し案内
+    type: termination
+    termination_ref: "END_紹介状無し案内"
+  - step: END_残薬無し案内
+    type: termination
+    termination_ref: "END_残薬無し案内"
+  - step: END_病理診断科案内
+    type: termination
+    termination_ref: "END_病理診断科案内"
+
+# --- セクション5: コンテキストフィールド一覧（saveContextModel2DB 用）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "新規"
+      - id: "2"
+        order: "2"
+        value: "変更"
+      - id: "3"
+        order: "3"
+        value: "キャンセル"
+      - id: "4"
+        order: "4"
+        value: "予約日の確認"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件聴取で Pattern A 直接分岐"
+
+  - context_name: "patientName"
+    context_name_jp: "患者名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "全角カタカナ。推定補正禁止・復唱絶対禁止（customer_doc §1）"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "YYYY-MM-DD 00:00。和暦対応（大正/昭和/平成/令和）。サブフロー DOB Re-confirmation で復唱"
+
+  - context_name: "medicalCardNumber"
+    context_name_jp: "診察券番号"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "「わからない／持っていない」時は空文字格納。数字救済（C/for/しー→4, ごー/ご→5）"
+
+  - context_name: "clinicalDepartment"
+    context_name_jp: "診療科"
+    display_type: "DEPARTMENT"
+    range_values:
+      # 成人リスト 30 科
+      - { id: "1",  order: "1",  value: "救急集中治療科" }
+      - { id: "2",  order: "2",  value: "感染症内科" }
+      - { id: "3",  order: "3",  value: "血液腫瘍内科" }
+      - { id: "4",  order: "4",  value: "消化器内科" }
+      - { id: "5",  order: "5",  value: "リウマチ膠原病科" }
+      - { id: "6",  order: "6",  value: "総合診療科" }
+      - { id: "7",  order: "7",  value: "成人先天性心疾患外来" }
+      - { id: "8",  order: "8",  value: "脳卒中センター" }
+      - { id: "9",  order: "9",  value: "血管内治療センター" }
+      - { id: "10", order: "10", value: "ぱいかじ大動脈センター" }
+      - { id: "11", order: "11", value: "外科" }
+      - { id: "12", order: "12", value: "耳鼻咽喉科" }
+      - { id: "13", order: "13", value: "皮膚科" }
+      - { id: "14", order: "14", value: "眼科" }
+      - { id: "15", order: "15", value: "歯科口腔外科" }
+      - { id: "16", order: "16", value: "精神科" }
+      - { id: "17", order: "17", value: "放射線科" }
+      - { id: "18", order: "18", value: "リハビリテーション科" }
+      - { id: "19", order: "19", value: "心臓血管外科" }
+      - { id: "20", order: "20", value: "循環器内科" }
+      - { id: "21", order: "21", value: "呼吸器内科" }
+      - { id: "22", order: "22", value: "病理診断科" }
+      - { id: "23", order: "23", value: "脳神経内科" }
+      - { id: "24", order: "24", value: "腎臓内科" }
+      - { id: "25", order: "25", value: "形成外科" }
+      - { id: "26", order: "26", value: "整形外科" }
+      - { id: "27", order: "27", value: "脳神経外科" }
+      - { id: "28", order: "28", value: "麻酔科" }
+      - { id: "29", order: "29", value: "産婦人科" }
+      - { id: "30", order: "30", value: "内科" }
+      # 小児リスト 19 科
+      - { id: "31", order: "31", value: "小児形成外科" }
+      - { id: "32", order: "32", value: "小児眼科" }
+      - { id: "33", order: "33", value: "小児感染症内科" }
+      - { id: "34", order: "34", value: "小児血液・腫瘍内科" }
+      - { id: "35", order: "35", value: "新生児内科" }
+      - { id: "36", order: "36", value: "小児歯科口腔外科" }
+      - { id: "37", order: "37", value: "小児神経内科こころ科" }
+      - { id: "38", order: "38", value: "小児腎臓科" }
+      - { id: "39", order: "39", value: "小児整形外科" }
+      - { id: "40", order: "40", value: "小児内分泌・代謝内科" }
+      - { id: "41", order: "41", value: "小児脳神経外科" }
+      - { id: "42", order: "42", value: "小児外科" }
+      - { id: "43", order: "43", value: "小児心臓血管外科" }
+      - { id: "44", order: "44", value: "小児集中治療科" }
+      - { id: "45", order: "45", value: "小児循環器内科" }
+      - { id: "46", order: "46", value: "小児麻酔科" }
+      - { id: "47", order: "47", value: "小児泌尿器科" }
+      - { id: "48", order: "48", value: "小児総合診療科" }
+      - { id: "49", order: "49", value: "小児科" }
+      # フォールバック
+      - { id: "50", order: "50", value: "登録なし" }
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "成人 30 + 小児 19 + 登録なし = 50 値。成人側でのみ病理診断科→END_病理診断科案内 分岐。no_result_default=\"登録なし\""
+
+  - context_name: "reservationDate"
+    context_name_jp: "予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "YYYY-MM-DD 00:00。変更/キャンセル時のみ聴取。10 月以降で 1〜9 月の日付は翌年補完"
+
+  - context_name: "reason"
+    context_name_jp: "理由／確認内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "変更・キャンセルの理由、および「予約日の確認」用件の確認事項をこの 1 フィールドに格納（Gen2 互換運用、移管ノート L.37）"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "incoming_phone_number を自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "10/11 桁半角数字。先頭0必須。再質問 2 回失敗時は incoming_phone_number 流用"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "受付完了"
+      - id: "2"
+        order: "2"
+        value: "電話案内"
+      - id: "3"
+        order: "3"
+        value: "聴取失敗"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+      - id: "7"
+        order: "7"
+        value: "非通知"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=受付完了 / 2=電話案内（紹介状無し・残薬無し・病理診断科） / 3=聴取失敗（template 必須） / 6=時間外（use_acceptance_times=false のため到達しない） / 7=非通知（customer固有）"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "システム自動取得"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値"
+
+  # --- 案件固有フィールド ---
+  - context_name: "age"
+    context_name_jp: "年齢区分"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "小児／成人 の 2 値。用件より前に確定し、後段 context_match_router で診療科リスト切替・紹介状あり後の医療機関名聴取有無に使用"
+
+  - context_name: "referral"
+    context_name_jp: "紹介状"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "あり／なし。新規ルートのみ聴取"
+
+  - context_name: "facility"
+    context_name_jp: "医療機関名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "自由テキスト。成人の新規ルートで紹介状ありの場合のみ聴取"
+
+  - context_name: "leftover_medicine"
+    context_name_jp: "薬服用中"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "はい／いいえ の 2 値。変更・キャンセルで聴取"
+
+  - context_name: "checking_leftover_medecine"
+    context_name_jp: "薬残数"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "あり／なし の 2 値（OpenAI 分類結果）。具体日数は保存しない運用（移管ノート L.15 + NON-BLOCKER N-3）"
+
+  - context_name: "notAvailableDate"
+    context_name_jp: "都合が悪い日"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "自由テキスト。新規（小児/成人）・変更で聴取。キャンセル・予約日の確認では聴取しない"
+
+  - context_name: "question"
+    context_name_jp: "最後の問い合わせ"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "なし（否定回答）か自由テキスト（その他質問）を格納。RAG 化しない 1 ターン聴取"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "年齢確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "age"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "小児"
+      - "成人"
+    notes: |
+      - 肯定（はい／そう／そうです／肺/そう二 等） → 小児
+      - 否定（いいえ／違います／ちがう 等） → 成人
+      - 肺＝はい救済（customer_doc 最優先適用二択正規化）
+      - 救済語: 「そう二」 → 小児（customer_doc 4 章）
+
+  - order: 2
+    name: "用件聴取"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: true
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "新規"
+      - "変更"
+      - "キャンセル"
+      - "予約日の確認"
+    notes: |
+      - 復唱フォーマット:「用件は、〇〇 でよろしいでしょうか。はい、そうです、または、いいえ、違います、のようにお答えください。」
+      - 救済語: 「印刷／定期／新薬／再診／最新／禁忌」→ 診察相当、「薬／お薬」→ 予約、「電気／でんき」→ 新規（customer_doc 4 章）
+      - customer_doc §1 echo_back 対象 3 項目の 1 つ
+
+  - order: 3
+    name: "診療科_新規_小児"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "小児形成外科"
+      - "小児眼科"
+      - "小児感染症内科"
+      - "小児血液・腫瘍内科"
+      - "新生児内科"
+      - "小児歯科口腔外科"
+      - "小児神経内科こころ科"
+      - "小児腎臓科"
+      - "小児整形外科"
+      - "小児内分泌・代謝内科"
+      - "小児脳神経外科"
+      - "小児外科"
+      - "小児心臓血管外科"
+      - "小児集中治療科"
+      - "小児循環器内科"
+      - "小児麻酔科"
+      - "小児泌尿器科"
+      - "小児総合診療科"
+      - "小児科"
+      - "登録なし"
+    notes: |
+      - no_result_default="登録なし"（モジュール選定ガイド 2.5）
+      - 復唱なし。小児歯科口腔外科は復唱仕様上「歯科口腔外科」に言い換えるが本設計は echo_back=false のため発話には現れない
+
+  - order: 4
+    name: "診療科_新規_成人"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "救急集中治療科"
+      - "感染症内科"
+      - "血液腫瘍内科"
+      - "消化器内科"
+      - "リウマチ膠原病科"
+      - "総合診療科"
+      - "成人先天性心疾患外来"
+      - "脳卒中センター"
+      - "血管内治療センター"
+      - "ぱいかじ大動脈センター"
+      - "外科"
+      - "耳鼻咽喉科"
+      - "皮膚科"
+      - "眼科"
+      - "歯科口腔外科"
+      - "精神科"
+      - "放射線科"
+      - "リハビリテーション科"
+      - "心臓血管外科"
+      - "循環器内科"
+      - "呼吸器内科"
+      - "病理診断科"
+      - "脳神経内科"
+      - "腎臓内科"
+      - "形成外科"
+      - "整形外科"
+      - "脳神経外科"
+      - "麻酔科"
+      - "産婦人科"
+      - "内科"
+      - "登録なし"
+    notes: |
+      - no_result_default="登録なし"
+      - 病理診断科 → END_病理診断科案内
+      - 救済語: 「癌化」→ 眼科（customer_doc 4 章）
+
+  - order: 5
+    name: "紹介状有無_新規"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "referral"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "あり"
+      - "なし"
+    notes: |
+      - 肯定 → あり、否定 → なし（肺＝はい救済）
+      - なし → END_紹介状無し案内（選定療養費 7,000 円の固定文言）
+
+  - order: 6
+    name: "医療機関名_新規"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "facility"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "成人の新規ルート専用。自由テキスト格納"
+
+  - order: 7
+    name: "都合が悪い日_新規"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "notAvailableDate"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "無い場合は「無いです」と発話。自由テキスト格納"
+
+  - order: 8
+    name: "薬服用中か_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "leftover_medicine"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "肺＝はい救済。肯定 → 薬残数確認_変更、否定 → 分岐_変更_年齢"
+
+  - order: 9
+    name: "薬残数確認_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "checking_leftover_medecine"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "あり"
+      - "なし"
+    notes: |
+      - 「ない／無い／残っていない／ゼロ／0 日」等 → なし → END_残薬無し案内
+      - それ以外（「30 日分あります」等）→ あり → 分岐_変更_年齢
+      - 具体日数は保存しない（移管ノート L.15、NON-BLOCKER N-3）
+
+  - order: 10
+    name: "診療科_変更_小児"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "小児形成外科"
+      - "小児眼科"
+      - "小児感染症内科"
+      - "小児血液・腫瘍内科"
+      - "新生児内科"
+      - "小児歯科口腔外科"
+      - "小児神経内科こころ科"
+      - "小児腎臓科"
+      - "小児整形外科"
+      - "小児内分泌・代謝内科"
+      - "小児脳神経外科"
+      - "小児外科"
+      - "小児心臓血管外科"
+      - "小児集中治療科"
+      - "小児循環器内科"
+      - "小児麻酔科"
+      - "小児泌尿器科"
+      - "小児総合診療科"
+      - "小児科"
+      - "登録なし"
+    notes: "診療科_新規_小児 と同じ enum。no_result_default=\"登録なし\""
+
+  - order: 11
+    name: "診療科_変更_成人"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "救急集中治療科"
+      - "感染症内科"
+      - "血液腫瘍内科"
+      - "消化器内科"
+      - "リウマチ膠原病科"
+      - "総合診療科"
+      - "成人先天性心疾患外来"
+      - "脳卒中センター"
+      - "血管内治療センター"
+      - "ぱいかじ大動脈センター"
+      - "外科"
+      - "耳鼻咽喉科"
+      - "皮膚科"
+      - "眼科"
+      - "歯科口腔外科"
+      - "精神科"
+      - "放射線科"
+      - "リハビリテーション科"
+      - "心臓血管外科"
+      - "循環器内科"
+      - "呼吸器内科"
+      - "病理診断科"
+      - "脳神経内科"
+      - "腎臓内科"
+      - "形成外科"
+      - "整形外科"
+      - "脳神経外科"
+      - "麻酔科"
+      - "産婦人科"
+      - "内科"
+      - "登録なし"
+    notes: "診療科_新規_成人 と同じ enum。病理診断科 → END_病理診断科案内"
+
+  - order: 12
+    name: "予約日_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: true
+    save_to: "reservationDate"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: |
+      - YYYY-MM-DD 00:00 に正規化
+      - 10 月以降で 1〜9 月日付 → 翌年補完（customer_doc 4 章）
+      - 復唱フォーマット:「現在の予約日は、{yyyy年M月d日}で、よろしいですか？」
+      - customer_doc §1 echo_back 対象 3 項目の 1 つ
+
+  - order: 13
+    name: "理由_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: |
+      - [理由の主体]+[事象] 形式の名詞句に要約
+      - AI は復唱・同情発話（お大事に等）禁止（customer_doc §1 絶対的な聞き直し禁止 + prompter 明示必要）
+
+  - order: 14
+    name: "都合が悪い日_変更"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "notAvailableDate"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "自由テキスト。変更ルート専用（キャンセルでは聴取しない）"
+
+  - order: 15
+    name: "薬服用中か_キャンセル"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "leftover_medicine"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "はい"
+      - "いいえ"
+    notes: "薬服用中か_変更 と同じロジック。キャンセル分岐へ合流"
+
+  - order: 16
+    name: "薬残数確認_キャンセル"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "checking_leftover_medecine"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "あり"
+      - "なし"
+    notes: "薬残数確認_変更 と同じロジック。なし → END_残薬無し案内、あり → 分岐_キャンセル_年齢"
+
+  - order: 17
+    name: "診療科_キャンセル_小児"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "小児形成外科"
+      - "小児眼科"
+      - "小児感染症内科"
+      - "小児血液・腫瘍内科"
+      - "新生児内科"
+      - "小児歯科口腔外科"
+      - "小児神経内科こころ科"
+      - "小児腎臓科"
+      - "小児整形外科"
+      - "小児内分泌・代謝内科"
+      - "小児脳神経外科"
+      - "小児外科"
+      - "小児心臓血管外科"
+      - "小児集中治療科"
+      - "小児循環器内科"
+      - "小児麻酔科"
+      - "小児泌尿器科"
+      - "小児総合診療科"
+      - "小児科"
+      - "登録なし"
+    notes: "診療科_新規_小児 と同じ enum"
+
+  - order: 18
+    name: "診療科_キャンセル_成人"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "救急集中治療科"
+      - "感染症内科"
+      - "血液腫瘍内科"
+      - "消化器内科"
+      - "リウマチ膠原病科"
+      - "総合診療科"
+      - "成人先天性心疾患外来"
+      - "脳卒中センター"
+      - "血管内治療センター"
+      - "ぱいかじ大動脈センター"
+      - "外科"
+      - "耳鼻咽喉科"
+      - "皮膚科"
+      - "眼科"
+      - "歯科口腔外科"
+      - "精神科"
+      - "放射線科"
+      - "リハビリテーション科"
+      - "心臓血管外科"
+      - "循環器内科"
+      - "呼吸器内科"
+      - "病理診断科"
+      - "脳神経内科"
+      - "腎臓内科"
+      - "形成外科"
+      - "整形外科"
+      - "脳神経外科"
+      - "麻酔科"
+      - "産婦人科"
+      - "内科"
+      - "登録なし"
+    notes: "診療科_新規_成人 と同じ enum。病理診断科 → END_病理診断科案内"
+
+  - order: 19
+    name: "予約日_キャンセル"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: true
+    save_to: "reservationDate"
+    openai_processing: "normalize"
+    output_format: "datetime"
+    output_labels: []
+    notes: "予約日_変更 と同じロジック。echo_back あり（customer_doc §1 echo_back 対象 3 項目の 1 つ）"
+
+  - order: 20
+    name: "理由_キャンセル"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: "理由_変更 と同じ要約仕様。AI 復唱・同情発話禁止"
+
+  - order: 21
+    name: "診療科_確認_小児"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "小児形成外科"
+      - "小児眼科"
+      - "小児感染症内科"
+      - "小児血液・腫瘍内科"
+      - "新生児内科"
+      - "小児歯科口腔外科"
+      - "小児神経内科こころ科"
+      - "小児腎臓科"
+      - "小児整形外科"
+      - "小児内分泌・代謝内科"
+      - "小児脳神経外科"
+      - "小児外科"
+      - "小児心臓血管外科"
+      - "小児集中治療科"
+      - "小児循環器内科"
+      - "小児麻酔科"
+      - "小児泌尿器科"
+      - "小児総合診療科"
+      - "小児科"
+      - "登録なし"
+    notes: "予約日の確認用件 × 小児"
+
+  - order: 22
+    name: "診療科_確認_成人"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "clinicalDepartment"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "救急集中治療科"
+      - "感染症内科"
+      - "血液腫瘍内科"
+      - "消化器内科"
+      - "リウマチ膠原病科"
+      - "総合診療科"
+      - "成人先天性心疾患外来"
+      - "脳卒中センター"
+      - "血管内治療センター"
+      - "ぱいかじ大動脈センター"
+      - "外科"
+      - "耳鼻咽喉科"
+      - "皮膚科"
+      - "眼科"
+      - "歯科口腔外科"
+      - "精神科"
+      - "放射線科"
+      - "リハビリテーション科"
+      - "心臓血管外科"
+      - "循環器内科"
+      - "呼吸器内科"
+      - "病理診断科"
+      - "脳神経内科"
+      - "腎臓内科"
+      - "形成外科"
+      - "整形外科"
+      - "脳神経外科"
+      - "麻酔科"
+      - "産婦人科"
+      - "内科"
+      - "登録なし"
+    notes: "予約日の確認用件 × 成人。病理診断科 → END"
+
+  - order: 23
+    name: "確認事項_確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reason"
+    openai_processing: "summarize"
+    output_format: "text"
+    output_labels: []
+    notes: |
+      - 「予約日の確認」用件の確認事項を reason フィールドに格納（Gen2 互換、移管ノート L.37）
+      - 「次回の予約日時を教えて欲しい」等の短い内容に要約
+
+  - order: 24
+    name: "最後の問い合わせ"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "question"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "なし"
+      - "default"
+    notes: |
+      - 「なし／ない／大丈夫／いいえ／結構です／質問ありません／以上」等 → なし
+      - それ以外（実際の問い合わせ内容）→ default（発話原文を格納）
+      - RAG 化しない 1 ターン聴取（移管ノート L.16）。default は FAQ不可_案内 を 1 回流して終話
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "年齢確認"
+    tts_announcement: "お問い合わせの内容は、「小児科」でしょうか？はい、そうです、いいえ、違います、のようにお答えください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["小児", "成人"]
+      mapping:
+        - input: "はい／そう／そうです／そう二／肺／大丈夫です／お願いします／小児／子ども／子供／乳児／幼児"
+          output: "小児"
+        - input: "いいえ／いえ／いや／違う／違います／ちがう／ちがいます／成人／大人"
+          output: "成人"
+      no_result_condition: "上記いずれにも該当しない場合（OpenAI が判定不能）"
+    save_to: "age"
+    next_step: "用件聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "用件聴取"
+    tts_announcement: "ご用件を、『新規予約』、『予約変更』、『キャンセル』、『予約日の確認』、の中からお選びください。それではどうぞ。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["新規", "変更", "キャンセル", "予約日の確認"]
+      mapping:
+        - input: "新規／新規予約／予約／予約取りたい／初診／薬／お薬／電気／でんき"
+          output: "新規"
+        - input: "変更／予約変更／変えたい／取り直し／日時変更"
+          output: "変更"
+        - input: "キャンセル／取り消し／取消／やめる／解約"
+          output: "キャンセル"
+        - input: "確認／予約日の確認／予約確認／予約日時／今の予約／いつだった／印刷／定期／新薬／再診／最新／禁忌"
+          output: "予約日の確認"
+      no_result_condition: "上記いずれにも該当しない場合"
+    save_to: "classification"
+    next_step: "（scenario_flow の conditions を参照）"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "診療科_新規_小児"
+    tts_announcement: "診療科をお話しください。わからない場合は、わからない、とお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "小児形成外科"
+        - "小児眼科"
+        - "小児感染症内科"
+        - "小児血液・腫瘍内科"
+        - "新生児内科"
+        - "小児歯科口腔外科"
+        - "小児神経内科こころ科"
+        - "小児腎臓科"
+        - "小児整形外科"
+        - "小児内分泌・代謝内科"
+        - "小児脳神経外科"
+        - "小児外科"
+        - "小児心臓血管外科"
+        - "小児集中治療科"
+        - "小児循環器内科"
+        - "小児麻酔科"
+        - "小児泌尿器科"
+        - "小児総合診療科"
+        - "小児科"
+        - "登録なし"
+      mapping:
+        - input: "【診療科一覧（小児）】の正式名称・類義語（customer_doc 3-1 L.416-543）に合致"
+          output: "該当正式名称"
+        - input: "癌化"
+          output: "小児眼科"
+      no_result_condition: "小児リストの正式名称・類義語にも合致せず、「わからない」「未登録」等の場合 → 登録なし（saveContext2DB 経由でリトライへ）"
+    save_to: "clinicalDepartment"
+    next_step: "紹介状有無_新規"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "診療科_新規_成人"
+    tts_announcement: "診療科をお話しください。わからない場合は、わからない、とお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "救急集中治療科"
+        - "感染症内科"
+        - "血液腫瘍内科"
+        - "消化器内科"
+        - "リウマチ膠原病科"
+        - "総合診療科"
+        - "成人先天性心疾患外来"
+        - "脳卒中センター"
+        - "血管内治療センター"
+        - "ぱいかじ大動脈センター"
+        - "外科"
+        - "耳鼻咽喉科"
+        - "皮膚科"
+        - "眼科"
+        - "歯科口腔外科"
+        - "精神科"
+        - "放射線科"
+        - "リハビリテーション科"
+        - "心臓血管外科"
+        - "循環器内科"
+        - "呼吸器内科"
+        - "病理診断科"
+        - "脳神経内科"
+        - "腎臓内科"
+        - "形成外科"
+        - "整形外科"
+        - "脳神経外科"
+        - "麻酔科"
+        - "産婦人科"
+        - "内科"
+        - "登録なし"
+      mapping:
+        - input: "【診療科一覧（成人）】の正式名称・類義語（customer_doc 3-2 L.553-725）に合致"
+          output: "該当正式名称"
+        - input: "癌化"
+          output: "眼科"
+      no_result_condition: "成人リストの正式名称・類義語にも合致せず「わからない」等 → 登録なし"
+    save_to: "clinicalDepartment"
+    next_step: "病理診断科 → END_病理診断科案内 / default → 紹介状有無_新規"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "紹介状有無_新規"
+    tts_announcement: "紹介状はお持ちでしょうか。『はい』または『いいえ』でお答えください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["あり", "なし"]
+      mapping:
+        - input: "はい／そう／そうです／持っています／持ってる／肺／ある／持参／あります"
+          output: "あり"
+        - input: "いいえ／いえ／ちがう／違います／持っていません／ない／ありません／持ってない"
+          output: "なし"
+      no_result_condition: "肯定・否定いずれも判定できない場合"
+    save_to: "referral"
+    next_step: "あり → 分岐_新規_紹介状あり_年齢 / なし → END_紹介状無し案内"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "医療機関名_新規"
+    tts_announcement: "医療機関名をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["自由テキスト"]
+      mapping:
+        - input: "任意の医療機関名発話"
+          output: "発話原文をそのまま格納（不要語「さん」「クリニックの」等は除外）"
+      no_result_condition: "無音・無関係 → 空文字"
+    save_to: "facility"
+    next_step: "都合が悪い日_新規"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "都合が悪い日_新規"
+    tts_announcement: "予約日に関して、ご来院できないお日にちがあればお話しください。無い場合は、無いです、とお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["自由テキスト"]
+      mapping:
+        - input: "日付／曜日／時期表現／「無いです」「ありません」等"
+          output: "発話をそのまま格納"
+      no_result_condition: "無音・無関係 → 空文字"
+    save_to: "notAvailableDate"
+    next_step: "jump_診察券番号聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "薬服用中か_変更"
+    tts_announcement: "現在、薬を服用してますか？「はい、しています」　「いいえ、していません。」　どちらかでお答えください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["はい", "いいえ"]
+      mapping:
+        - input: "はい／そう／しています／飲んでいる／服用中／肺／あります／毎日飲んでる"
+          output: "はい"
+        - input: "いいえ／いえ／していない／飲んでない／飲んでいません／ありません"
+          output: "いいえ"
+      no_result_condition: "いずれも判定できない場合"
+    save_to: "leftover_medicine"
+    next_step: "はい → 薬残数確認_変更 / いいえ → 分岐_変更_年齢"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "薬残数確認_変更"
+    tts_announcement: "現在、薬は何日分残ってますか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["あり", "なし"]
+      mapping:
+        - input: "ない／無い／残っていない／ゼロ／0 日／切れている／残りなし／もうない"
+          output: "なし"
+        - input: "数値＋「日分」／「残ってます」／「まだある」／「30 日分」等"
+          output: "あり"
+      no_result_condition: "判定不能 → あり扱い（安全側）"
+    save_to: "checking_leftover_medecine"
+    next_step: "なし → END_残薬無し案内 / あり → 分岐_変更_年齢"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "診療科_変更_小児"
+    tts_announcement: "診療科をお話しください。わからない場合は、わからない、とお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "小児形成外科"
+        - "小児眼科"
+        - "小児感染症内科"
+        - "小児血液・腫瘍内科"
+        - "新生児内科"
+        - "小児歯科口腔外科"
+        - "小児神経内科こころ科"
+        - "小児腎臓科"
+        - "小児整形外科"
+        - "小児内分泌・代謝内科"
+        - "小児脳神経外科"
+        - "小児外科"
+        - "小児心臓血管外科"
+        - "小児集中治療科"
+        - "小児循環器内科"
+        - "小児麻酔科"
+        - "小児泌尿器科"
+        - "小児総合診療科"
+        - "小児科"
+        - "登録なし"
+      mapping:
+        - input: "診療科_新規_小児 と同じ"
+          output: "該当正式名称"
+      no_result_condition: "診療科_新規_小児 と同じ"
+    save_to: "clinicalDepartment"
+    next_step: "予約日_変更"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "診療科_変更_成人"
+    tts_announcement: "診療科をお話しください。わからない場合は、わからない、とお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "救急集中治療科"
+        - "感染症内科"
+        - "血液腫瘍内科"
+        - "消化器内科"
+        - "リウマチ膠原病科"
+        - "総合診療科"
+        - "成人先天性心疾患外来"
+        - "脳卒中センター"
+        - "血管内治療センター"
+        - "ぱいかじ大動脈センター"
+        - "外科"
+        - "耳鼻咽喉科"
+        - "皮膚科"
+        - "眼科"
+        - "歯科口腔外科"
+        - "精神科"
+        - "放射線科"
+        - "リハビリテーション科"
+        - "心臓血管外科"
+        - "循環器内科"
+        - "呼吸器内科"
+        - "病理診断科"
+        - "脳神経内科"
+        - "腎臓内科"
+        - "形成外科"
+        - "整形外科"
+        - "脳神経外科"
+        - "麻酔科"
+        - "産婦人科"
+        - "内科"
+        - "登録なし"
+      mapping:
+        - input: "診療科_新規_成人 と同じ"
+          output: "該当正式名称"
+      no_result_condition: "診療科_新規_成人 と同じ"
+    save_to: "clinicalDepartment"
+    next_step: "病理診断科 → END_病理診断科案内 / default → 予約日_変更"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "予約日_変更"
+    tts_announcement: "現在の予約日をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["YYYY-MM-DD HH:MM"]
+      mapping:
+        - input: "4月1日／令和7年4月1日／2026年4月1日／来月15日 等"
+          output: "YYYY-MM-DD 00:00 形式に正規化。10 月以降で 1〜9 月日付 → 翌年補完"
+      no_result_condition: "日付が特定できない → 空文字"
+    save_to: "reservationDate"
+    next_step: "理由_変更"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "理由_変更"
+    tts_announcement: "キャンセルや変更をご希望される理由をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["名詞句（例: 本人体調不良, 仕事の都合, 予定重複, 他院受診）"]
+      mapping:
+        - input: "任意の理由発話"
+          output: "[理由の主体]+[事象] の簡潔名詞句に要約"
+      no_result_condition: "無音・無関係 → 空文字"
+    save_to: "reason"
+    next_step: "都合が悪い日_変更"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "都合が悪い日_変更"
+    tts_announcement: "予約日に関して、ご来院できないお日にちがあればお話しください。無い場合は、無いです、とお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["自由テキスト"]
+      mapping:
+        - input: "都合が悪い日_新規 と同じ"
+          output: "発話をそのまま格納"
+      no_result_condition: "無音・無関係 → 空文字"
+    save_to: "notAvailableDate"
+    next_step: "jump_診察券番号聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "薬服用中か_キャンセル"
+    tts_announcement: "現在、薬を服用してますか？「はい、しています」　「いいえ、していません。」　どちらかでお答えください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["はい", "いいえ"]
+      mapping:
+        - input: "薬服用中か_変更 と同じ"
+          output: "はい／いいえ"
+      no_result_condition: "薬服用中か_変更 と同じ"
+    save_to: "leftover_medicine"
+    next_step: "はい → 薬残数確認_キャンセル / いいえ → 分岐_キャンセル_年齢"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "薬残数確認_キャンセル"
+    tts_announcement: "現在、薬は何日分残ってますか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["あり", "なし"]
+      mapping:
+        - input: "薬残数確認_変更 と同じ"
+          output: "あり／なし"
+      no_result_condition: "薬残数確認_変更 と同じ"
+    save_to: "checking_leftover_medecine"
+    next_step: "なし → END_残薬無し案内 / あり → 分岐_キャンセル_年齢"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "診療科_キャンセル_小児"
+    tts_announcement: "診療科をお話しください。わからない場合は、わからない、とお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "小児形成外科"
+        - "小児眼科"
+        - "小児感染症内科"
+        - "小児血液・腫瘍内科"
+        - "新生児内科"
+        - "小児歯科口腔外科"
+        - "小児神経内科こころ科"
+        - "小児腎臓科"
+        - "小児整形外科"
+        - "小児内分泌・代謝内科"
+        - "小児脳神経外科"
+        - "小児外科"
+        - "小児心臓血管外科"
+        - "小児集中治療科"
+        - "小児循環器内科"
+        - "小児麻酔科"
+        - "小児泌尿器科"
+        - "小児総合診療科"
+        - "小児科"
+        - "登録なし"
+      mapping:
+        - input: "診療科_新規_小児 と同じ"
+          output: "該当正式名称"
+      no_result_condition: "診療科_新規_小児 と同じ"
+    save_to: "clinicalDepartment"
+    next_step: "予約日_キャンセル"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "診療科_キャンセル_成人"
+    tts_announcement: "診療科をお話しください。わからない場合は、わからない、とお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "救急集中治療科"
+        - "感染症内科"
+        - "血液腫瘍内科"
+        - "消化器内科"
+        - "リウマチ膠原病科"
+        - "総合診療科"
+        - "成人先天性心疾患外来"
+        - "脳卒中センター"
+        - "血管内治療センター"
+        - "ぱいかじ大動脈センター"
+        - "外科"
+        - "耳鼻咽喉科"
+        - "皮膚科"
+        - "眼科"
+        - "歯科口腔外科"
+        - "精神科"
+        - "放射線科"
+        - "リハビリテーション科"
+        - "心臓血管外科"
+        - "循環器内科"
+        - "呼吸器内科"
+        - "病理診断科"
+        - "脳神経内科"
+        - "腎臓内科"
+        - "形成外科"
+        - "整形外科"
+        - "脳神経外科"
+        - "麻酔科"
+        - "産婦人科"
+        - "内科"
+        - "登録なし"
+      mapping:
+        - input: "診療科_新規_成人 と同じ"
+          output: "該当正式名称"
+      no_result_condition: "診療科_新規_成人 と同じ"
+    save_to: "clinicalDepartment"
+    next_step: "病理診断科 → END_病理診断科案内 / default → 予約日_キャンセル"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "予約日_キャンセル"
+    tts_announcement: "現在の予約日をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["YYYY-MM-DD HH:MM"]
+      mapping:
+        - input: "予約日_変更 と同じ"
+          output: "YYYY-MM-DD 00:00 形式"
+      no_result_condition: "日付が特定できない → 空文字"
+    save_to: "reservationDate"
+    next_step: "理由_キャンセル"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "理由_キャンセル"
+    tts_announcement: "キャンセルや変更をご希望される理由をお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["名詞句"]
+      mapping:
+        - input: "理由_変更 と同じ"
+          output: "[主体]+[事象] の簡潔名詞句"
+      no_result_condition: "無音・無関係 → 空文字"
+    save_to: "reason"
+    next_step: "jump_診察券番号聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "診療科_確認_小児"
+    tts_announcement: "診療科をお話しください。わからない場合は、わからない、とお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "小児形成外科"
+        - "小児眼科"
+        - "小児感染症内科"
+        - "小児血液・腫瘍内科"
+        - "新生児内科"
+        - "小児歯科口腔外科"
+        - "小児神経内科こころ科"
+        - "小児腎臓科"
+        - "小児整形外科"
+        - "小児内分泌・代謝内科"
+        - "小児脳神経外科"
+        - "小児外科"
+        - "小児心臓血管外科"
+        - "小児集中治療科"
+        - "小児循環器内科"
+        - "小児麻酔科"
+        - "小児泌尿器科"
+        - "小児総合診療科"
+        - "小児科"
+        - "登録なし"
+      mapping:
+        - input: "診療科_新規_小児 と同じ"
+          output: "該当正式名称"
+      no_result_condition: "診療科_新規_小児 と同じ"
+    save_to: "clinicalDepartment"
+    next_step: "確認事項_確認"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "診療科_確認_成人"
+    tts_announcement: "診療科をお話しください。わからない場合は、わからない、とお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "救急集中治療科"
+        - "感染症内科"
+        - "血液腫瘍内科"
+        - "消化器内科"
+        - "リウマチ膠原病科"
+        - "総合診療科"
+        - "成人先天性心疾患外来"
+        - "脳卒中センター"
+        - "血管内治療センター"
+        - "ぱいかじ大動脈センター"
+        - "外科"
+        - "耳鼻咽喉科"
+        - "皮膚科"
+        - "眼科"
+        - "歯科口腔外科"
+        - "精神科"
+        - "放射線科"
+        - "リハビリテーション科"
+        - "心臓血管外科"
+        - "循環器内科"
+        - "呼吸器内科"
+        - "病理診断科"
+        - "脳神経内科"
+        - "腎臓内科"
+        - "形成外科"
+        - "整形外科"
+        - "脳神経外科"
+        - "麻酔科"
+        - "産婦人科"
+        - "内科"
+        - "登録なし"
+      mapping:
+        - input: "診療科_新規_成人 と同じ"
+          output: "該当正式名称"
+      no_result_condition: "診療科_新規_成人 と同じ"
+    save_to: "clinicalDepartment"
+    next_step: "病理診断科 → END_病理診断科案内 / default → 確認事項_確認"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "確認事項_確認"
+    tts_announcement: "それでは、ご確認内容についてお伺いします。次回の予約日時を教えて欲しい、など、内容を簡潔にお話しください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["名詞句（例: 次回予約日時の確認, 駐車場の確認, 持ち物の確認）"]
+      mapping:
+        - input: "任意の確認内容発話"
+          output: "[対象]+[確認したい事項] の簡潔名詞句に要約"
+      no_result_condition: "無音・無関係 → 空文字"
+    save_to: "reason"
+    next_step: "jump_診察券番号聴取"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+  - step_name: "FAQ不可_案内"
+    tts_announcement: "申し訳ありませんが、ご選択いただきました内容に関しては、AI電話でお受けすることができません。当院の代表番号、098-888-0123 へ、この電話が終わってからおかけ直しをお願いいたします。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping: []
+      no_result_condition: ""
+    save_to: ""
+    next_step: "分岐_終話_用件"
+    retry_failure: "skip"
+
+  - step_name: "最後の問い合わせ"
+    tts_announcement: "そのほかに何かお問い合わせは有りませんか？"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: ["なし", "default"]
+      mapping:
+        - input: "なし／ない／ありません／大丈夫／いいえ／いえ／結構です／質問ありません／いいえありません／もう大丈夫／以上／以上です"
+          output: "なし"
+        - input: "それ以外（具体的な質問や問い合わせ内容）"
+          output: "default（発話原文をそのまま格納）"
+      no_result_condition: "判定不能 → default 扱いで FAQ不可_案内 へ"
+    save_to: "question"
+    next_step: "なし → 分岐_終話_用件 / default → FAQ不可_案内 → 分岐_終話_用件"
+    retry_failure: "skip"
+    retry_failure_announcement: "かしこまりました。"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須 — 削除禁止）---
+  - name: "END_非通知"
+    condition: "非通知着信（customer_doc 1-4: anonymous / unknown）"
+    tts_announcement: "お電話ありがとうございます。沖縄県立南部医療センター・こども医療センターの、予約専用AI電話です。お手数をおかけしますが、発信者番号を通知して再度お電話ください。電話番号の前に、 「1、8、6」を追加いただくことで発信者番号を通知していただくことができます。それでは失礼いたします。"
+    status: "7"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外（use_acceptance_times=false のため到達しないが template 必須項目として保持）"
+    tts_announcement: "お電話ありがとうございます。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達（customer_doc 2.5 で空文字格納方針のため実質到達しない）"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系（受付完了 4 パターン）---
+  - name: "END_通常_新規"
+    condition: "classification=新規 で全聴取完了"
+    tts_announcement: "かしこまりました。内容を確認のうえ、5日以内にショートメール、もしくはお電話にてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_新規"
+  - name: "END_通常_変更"
+    condition: "classification=変更 で全聴取完了"
+    tts_announcement: "かしこまりました。内容を確認のうえ、5日以内にショートメール、もしくはお電話にてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "2"
+    completion_flag_name: "完了フラグ_変更"
+  - name: "END_通常_キャンセル"
+    condition: "classification=キャンセル で全聴取完了"
+    tts_announcement: "かしこまりました。予約キャンセルのお申し込みを受付いたしました。内容の確認が必要な場合のみ、当院スタッフよりご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "3"
+    completion_flag_name: "完了フラグ_キャンセル"
+  - name: "END_通常_確認"
+    condition: "classification=予約日の確認 で全聴取完了"
+    tts_announcement: "かしこまりました。内容を確認のうえ、5日以内にショートメール、もしくはお電話にてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+    status: "1"
+    sms_flag: "4"
+    completion_flag_name: "完了フラグ_確認"
+
+  # --- 予約不可系（AI 対応不可 → 代表電話案内）---
+  - name: "END_紹介状無し案内"
+    condition: "新規ルートで紹介状なし"
+    tts_announcement: "恐れ入りますが、当院は紹介状をお持ちでない場合の新規予約は受け付けておりません。地域の医療機関や、かかりつけ医の受診をお願いいたします。紹介状をお持ちでなく緊急を要する方は、救急センターを直接受診くださいませ。またその場合は、通常の診療費とは別に、選定療養費として、7,000円をご負担いただいております。あらかじめご了承ください。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_紹介状無し"
+  - name: "END_残薬無し案内"
+    condition: "変更・キャンセルで薬残数確認＝なし"
+    tts_announcement: "お薬の残りが無い方の予約については、AI電話では受付できません。恐れ入りますが、代表電話の 098-888-0123 へおかけなおしください。お電話ありがとうございました。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_残薬無し"
+  - name: "END_病理診断科案内"
+    condition: "成人ルートで clinicalDepartment=病理診断科（小児リストには病理診断科なし）"
+    tts_announcement: "申し訳ございません。病理診断科については、AI電話でお受けすることができません。当院の代表番号の 098-888-0123 へおかけ直しをお願いいたします。それでは失礼いたします。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_病理診断科"
+
+# smsFlag 分岐設計
+sms_flag_routing:
+  enabled: true
+  routing_keys: ["classification"]
+  patterns:
+    - condition: "classification=新規"
+      sms_flag: "1"
+      notes: "受付完了（新規）"
+    - condition: "classification=変更"
+      sms_flag: "2"
+      notes: "受付完了（変更）"
+    - condition: "classification=キャンセル"
+      sms_flag: "3"
+      notes: "受付完了（キャンセル、専用 TTS）"
+    - condition: "classification=予約日の確認"
+      sms_flag: "4"
+      notes: "受付完了（予約日の確認）"
+    - condition: "非通知/紹介状無し/残薬無し/病理診断科案内/聴取失敗/時間外"
+      sms_flag: "-1"
+      notes: "SMS 送信なし"
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。沖縄県立南部医療センター・こども医療センターの、予約専用AI電話です。"
+
+  - module_name: "年齢確認"
+    purpose: "小児科か否かの確認"
+    announcement: "お問い合わせの内容は、「小児科」でしょうか？はい、そうです、いいえ、違います、のようにお答えください。"
+
+  - module_name: "用件聴取"
+    purpose: "用件分類"
+    announcement: "ご用件を、『新規予約』、『予約変更』、『キャンセル』、『予約日の確認』、の中からお選びください。それではどうぞ。"
+
+  - module_name: "診療科_新規_小児"
+    purpose: "診療科聴取（新規×小児）"
+    announcement: "診療科をお話しください。わからない場合は、わからない、とお話しください。"
+
+  - module_name: "診療科_新規_成人"
+    purpose: "診療科聴取（新規×成人）"
+    announcement: "診療科をお話しください。わからない場合は、わからない、とお話しください。"
+
+  - module_name: "紹介状有無_新規"
+    purpose: "紹介状有無（新規）"
+    announcement: "紹介状はお持ちでしょうか。『はい』または『いいえ』でお答えください。"
+
+  - module_name: "医療機関名_新規"
+    purpose: "医療機関名（成人の新規で紹介状ありの場合のみ）"
+    announcement: "医療機関名をお話しください。"
+
+  - module_name: "都合が悪い日_新規"
+    purpose: "都合が悪い日（新規）"
+    announcement: "予約日に関して、ご来院できないお日にちがあればお話しください。無い場合は、無いです、とお話しください。"
+
+  - module_name: "薬服用中か_変更"
+    purpose: "薬服用中か（変更）"
+    announcement: "現在、薬を服用してますか？「はい、しています」　「いいえ、していません。」　どちらかでお答えください。"
+
+  - module_name: "薬残数確認_変更"
+    purpose: "薬残数確認（変更）"
+    announcement: "現在、薬は何日分残ってますか？"
+
+  - module_name: "診療科_変更_小児"
+    purpose: "診療科聴取（変更×小児）"
+    announcement: "診療科をお話しください。わからない場合は、わからない、とお話しください。"
+
+  - module_name: "診療科_変更_成人"
+    purpose: "診療科聴取（変更×成人）"
+    announcement: "診療科をお話しください。わからない場合は、わからない、とお話しください。"
+
+  - module_name: "予約日_変更"
+    purpose: "予約日（変更）"
+    announcement: "現在の予約日をお話しください。"
+
+  - module_name: "理由_変更"
+    purpose: "変更理由"
+    announcement: "キャンセルや変更をご希望される理由をお話しください。"
+
+  - module_name: "都合が悪い日_変更"
+    purpose: "都合が悪い日（変更）"
+    announcement: "予約日に関して、ご来院できないお日にちがあればお話しください。無い場合は、無いです、とお話しください。"
+
+  - module_name: "薬服用中か_キャンセル"
+    purpose: "薬服用中か（キャンセル）"
+    announcement: "現在、薬を服用してますか？「はい、しています」　「いいえ、していません。」　どちらかでお答えください。"
+
+  - module_name: "薬残数確認_キャンセル"
+    purpose: "薬残数確認（キャンセル）"
+    announcement: "現在、薬は何日分残ってますか？"
+
+  - module_name: "診療科_キャンセル_小児"
+    purpose: "診療科聴取（キャンセル×小児）"
+    announcement: "診療科をお話しください。わからない場合は、わからない、とお話しください。"
+
+  - module_name: "診療科_キャンセル_成人"
+    purpose: "診療科聴取（キャンセル×成人）"
+    announcement: "診療科をお話しください。わからない場合は、わからない、とお話しください。"
+
+  - module_name: "予約日_キャンセル"
+    purpose: "予約日（キャンセル）"
+    announcement: "現在の予約日をお話しください。"
+
+  - module_name: "理由_キャンセル"
+    purpose: "キャンセル理由"
+    announcement: "キャンセルや変更をご希望される理由をお話しください。"
+
+  - module_name: "診療科_確認_小児"
+    purpose: "診療科聴取（予約日の確認×小児）"
+    announcement: "診療科をお話しください。わからない場合は、わからない、とお話しください。"
+
+  - module_name: "診療科_確認_成人"
+    purpose: "診療科聴取（予約日の確認×成人）"
+    announcement: "診療科をお話しください。わからない場合は、わからない、とお話しください。"
+
+  - module_name: "確認事項_確認"
+    purpose: "確認内容聴取（reason に格納）"
+    announcement: "それでは、ご確認内容についてお伺いします。次回の予約日時を教えて欲しい、など、内容を簡潔にお話しください。"
+
+  - module_name: "最後の問い合わせ"
+    purpose: "最後の問い合わせ（1 ターン聴取）"
+    announcement: "そのほかに何かお問い合わせは有りませんか？"
+
+  - module_name: "FAQ不可_案内"
+    purpose: "FAQ 回答不可の代表電話案内（最後の問い合わせ default 分岐）"
+    announcement: "申し訳ありませんが、ご選択いただきました内容に関しては、AI電話でお受けすることができません。当院の代表番号、098-888-0123 へ、この電話が終わってからおかけ直しをお願いいたします。"
+
+  # --- 終話 TTS ---
+  - module_name: "END_非通知"
+    purpose: "非通知着信の終話アナウンス"
+    announcement: "お電話ありがとうございます。沖縄県立南部医療センター・こども医療センターの、予約専用AI電話です。お手数をおかけしますが、発信者番号を通知して再度お電話ください。電話番号の前に、 「1、8、6」を追加いただくことで発信者番号を通知していただくことができます。それでは失礼いたします。"
+
+  - module_name: "END_通常_新規"
+    purpose: "新規受付完了（smsFlag=1）"
+    announcement: "かしこまりました。内容を確認のうえ、5日以内にショートメール、もしくはお電話にてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_通常_変更"
+    purpose: "変更受付完了（smsFlag=2）"
+    announcement: "かしこまりました。内容を確認のうえ、5日以内にショートメール、もしくはお電話にてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_通常_キャンセル"
+    purpose: "キャンセル受付完了（smsFlag=3、専用 TTS）"
+    announcement: "かしこまりました。予約キャンセルのお申し込みを受付いたしました。内容の確認が必要な場合のみ、当院スタッフよりご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_通常_確認"
+    purpose: "予約日の確認受付完了（smsFlag=4）"
+    announcement: "かしこまりました。内容を確認のうえ、5日以内にショートメール、もしくはお電話にてご連絡いたします。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_紹介状無し案内"
+    purpose: "紹介状なしの新規予約不可案内（選定療養費7,000円言及）"
+    announcement: "恐れ入りますが、当院は紹介状をお持ちでない場合の新規予約は受け付けておりません。地域の医療機関や、かかりつけ医の受診をお願いいたします。紹介状をお持ちでなく緊急を要する方は、救急センターを直接受診くださいませ。またその場合は、通常の診療費とは別に、選定療養費として、7,000円をご負担いただいております。あらかじめご了承ください。それでは失礼いたします。"
+
+  - module_name: "END_残薬無し案内"
+    purpose: "残薬なしの予約不可案内（代表電話098-888-0123）"
+    announcement: "お薬の残りが無い方の予約については、AI電話では受付できません。恐れ入りますが、代表電話の 098-888-0123 へおかけなおしください。お電話ありがとうございました。それでは失礼いたします。"
+
+  - module_name: "END_病理診断科案内"
+    purpose: "病理診断科 AI 予約不可（代表電話098-888-0123）"
+    announcement: "申し訳ございません。病理診断科については、AI電話でお受けすることができません。当院の代表番号の 098-888-0123 へおかけ直しをお願いいたします。それでは失礼いたします。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "年齢確認"
+    words: |
+      小児科 しょうにか
+      小児 しょうに
+      そう二 そうに
+      成人 せいじん
+      大人 おとな
+      子ども こども
+      子供 こども
+      乳児 にゅうじ
+      幼児 ようじ
+
+  - step_name: "用件聴取"
+    words: |
+      新規 しんき
+      新規予約 しんきよやく
+      予約 よやく
+      予約変更 よやくへんこう
+      変更 へんこう
+      キャンセル きゃんせる
+      取り消し とりけし
+      取消 とりけし
+      解約 かいやく
+      予約日 よやくび
+      予約日の確認 よやくびのかくにん
+      確認 かくにん
+      問い合わせ といあわせ
+      お薬 おくすり
+      薬 くすり
+      電気 でんき
+      再診 さいしん
+      印刷 いんさつ
+      定期 ていき
+      新薬 しんやく
+      最新 さいしん
+      禁忌 きんき
+
+  - step_name: "紹介状有無_新規"
+    words: |
+      紹介状 しょうかいじょう
+      持っています もっています
+      持っていません もっていません
+      あり あり
+      なし なし
+
+  - step_name: "薬服用中か_変更"
+    words: |
+      薬 くすり
+      服用 ふくよう
+      飲んでいる のんでいる
+      飲んでません のんでません
+
+  - step_name: "薬服用中か_キャンセル"
+    words: |
+      薬 くすり
+      服用 ふくよう
+      飲んでいる のんでいる
+      飲んでません のんでません
+
+  - step_name: "薬残数確認_変更"
+    words: |
+      日分 にちぶん
+      残り のこり
+      ない ない
+      ゼロ ぜろ
+
+  - step_name: "薬残数確認_キャンセル"
+    words: |
+      日分 にちぶん
+      残り のこり
+      ない ない
+      ゼロ ぜろ
+
+  # --- 診療科_新規_小児 / 診療科_変更_小児 / 診療科_キャンセル_小児 / 診療科_確認_小児 は同一辞書 ---
+  - step_name: "診療科_新規_小児"
+    words: |
+      小児形成外科 しょうにけいせいげか
+      形成外科 けいせいげか
+      形成 けいせい
+      小児形成 しょうにけいせい
+      小児眼科 しょうにがんか
+      眼科 がんか
+      子供の眼科 こどものがんか
+      がんか がんか
+      ガンカ がんか
+      癌化 がんか
+      小児感染症内科 しょうにかんせんしょうないか
+      感染症内科 かんせんしょうないか
+      感染症 かんせんしょう
+      感染内科 かんせんないか
+      感染 かんせん
+      小児感染 しょうにかんせん
+      小児感染症 しょうにかんせんしょう
+      感染症科 かんせんしょうか
+      小児血液・腫瘍内科 しょうにけつえきしゅようないか
+      小児血液 しょうにけつえき
+      腫瘍内科 しゅようないか
+      血液内科 けつえきないか
+      血内 けつない
+      新生児内科 しんせいじないか
+      新生児 しんせいじ
+      内科 ないか
+      小児歯科口腔外科 しょうにしかこうくうげか
+      歯科口腔外科 しかこうくうげか
+      歯科 しか
+      口腔 こうくう
+      歯医者 はいしゃ
+      口外 こうげ
+      口腔外科 こうくうげか
+      小児神経内科こころ科 しょうにしんけいないかこころか
+      小児神経 しょうにしんけい
+      こころ科 こころか
+      小児神経内科 しょうにしんけいないか
+      小児こころ科 しょうにこころか
+      小児腎臓科 しょうにじんぞうか
+      腎臓内科 じんぞうないか
+      小児腎臓 しょうにじんぞう
+      小児整形外科 しょうにせいけいげか
+      小児整形 しょうにせいけい
+      整形外科 せいけいげか
+      小児内分泌・代謝内科 しょうにないぶんぴつたいしゃないか
+      内分泌 ないぶんぴつ
+      代謝内科 たいしゃないか
+      小児内分泌 しょうにないぶんぴつ
+      小児内分泌科 しょうにないぶんぴつか
+      小児脳神経外科 しょうにのうしんけいげか
+      小児脳神経 しょうにのうしんけい
+      小児脳外 しょうにのうげ
+      脳神経外科 のうしんけいげか
+      脳外 のうげ
+      小児外科 しょうにげか
+      外科 げか
+      しょうにげか しょうにげか
+      子供の外科 こどものげか
+      小児の外科 しょうにのげか
+      しょうにのげか しょうにのげか
+      こどものげか こどものげか
+      小児心臓血管外科 しょうにしんぞうけっかんげか
+      小児心臓血管 しょうにしんぞうけっかん
+      小児心臓 しょうにしんぞう
+      小児心外 しょうにしんげ
+      心臓血管外科 しんぞうけっかんげか
+      心外 しんげ
+      小児集中治療科 しょうにしゅうちゅうちりょうか
+      小児集中 しょうにしゅうちゅう
+      集中治療科 しゅうちゅうちりょうか
+      小児循環器内科 しょうにじゅんかんきないか
+      小児循環器 しょうにじゅんかんき
+      循環器内科 じゅんかんきないか
+      循環器 じゅんかんき
+      小児麻酔科 しょうにますいか
+      小児麻酔 しょうにますい
+      麻酔 ますい
+      小児泌尿器科 しょうにひにょうきか
+      小児泌尿器 しょうにひにょうき
+      泌尿器 ひにょうき
+      小児総合診療科 しょうにそうごうしんりょうか
+      小児総合 しょうにそうごう
+      総合診療科 そうごうしんりょうか
+      総合診療 そうごうしんりょう
+      小児科 しょうにか
+      しょうにか しょうにか
+      登録なし とうろくなし
+      わからない わからない
+
+  - step_name: "診療科_変更_小児"
+    words: |
+      診療科_新規_小児 と同じ
+
+  - step_name: "診療科_キャンセル_小児"
+    words: |
+      診療科_新規_小児 と同じ
+
+  - step_name: "診療科_確認_小児"
+    words: |
+      診療科_新規_小児 と同じ
+
+  # --- 診療科_新規_成人 / 診療科_変更_成人 / 診療科_キャンセル_成人 / 診療科_確認_成人 は同一辞書 ---
+  - step_name: "診療科_新規_成人"
+    words: |
+      救急集中治療科 きゅうきゅうしゅうちゅうちりょうか
+      救急 きゅうきゅう
+      集中治療科 しゅうちゅうちりょうか
+      感染症内科 かんせんしょうないか
+      感染症科 かんせんしょうか
+      感染症 かんせんしょう
+      感染内科 かんせんないか
+      血液腫瘍内科 けつえきしゅようないか
+      血液内科 けつえきないか
+      腫瘍内科 しゅようないか
+      消化器内科 しょうかきないか
+      消内 しょうない
+      消化器 しょうかき
+      消化器科 しょうかきか
+      リウマチ膠原病科 りうまちこうげんびょうか
+      リウマチ りうまち
+      膠原病 こうげんびょう
+      膠原 こうげん
+      膠原病内科 こうげんびょうないか
+      リウマチ膠原病内科 りうまちこうげんびょうないか
+      リウマチ科 りうまちか
+      膠原病科 こうげんびょうか
+      リウマチ内科 りうまちないか
+      総合診療科 そうごうしんりょうか
+      総合内科 そうごうないか
+      成人先天性心疾患外来 せいじんせんてんせいしんしっかんがいらい
+      成人心疾患外来 せいじんしんしっかんがいらい
+      心疾患外来 しんしっかんがいらい
+      先天性心疾患 せんてんせいしんしっかん
+      先天性心疾患外来 せんてんせいしんしっかんがいらい
+      脳卒中センター のうそっちゅうせんたー
+      脳卒中 のうそっちゅう
+      血管内治療センター けっかんないちりょうせんたー
+      血管内科 けっかんないか
+      血管治療 けっかんちりょう
+      ぱいかじ大動脈センター ぱいかじだいどうみゃくせんたー
+      ぱいかじセンター ぱいかじせんたー
+      大動脈センター だいどうみゃくせんたー
+      外科 げか
+      一般外科 いっぱんげか
+      耳鼻咽喉科 じびいんこうか
+      耳鼻咽喉 じびいんこう
+      耳鼻 じび
+      咽喉 いんこう
+      耳鼻科 じびか
+      皮膚科 ひふか
+      皮膚 ひふ
+      眼科 がんか
+      目科 めか
+      がんか がんか
+      ガンカ がんか
+      癌化 がんか
+      歯科口腔外科 しかこうくうげか
+      歯科 しか
+      口腔 こうくう
+      歯医者 はいしゃ
+      口外 こうげ
+      口腔外科 こうくうげか
+      精神科 せいしんか
+      精神 せいしん
+      放射線科 ほうしゃせんか
+      放射線 ほうしゃせん
+      リハビリテーション科 りはびりてーしょんか
+      リハ りは
+      リハビリ りはびり
+      心臓血管外科 しんぞうけっかんげか
+      心外 しんげ
+      血管外科 けっかんげか
+      心臓外科 しんぞうげか
+      循環器内科 じゅんかんきないか
+      循内 じゅんない
+      循環器 じゅんかんき
+      呼吸器内科 こきゅうきないか
+      呼吸器 こきゅうき
+      呼吸 こきゅう
+      呼内 こない
+      呼吸科 こきゅうか
+      病理診断科 びょうりしんだんか
+      脳神経内科 のうしんけいないか
+      脳内 のうない
+      神経内科 しんけいないか
+      脳神経 のうしんけい
+      神経 しんけい
+      腎臓内科 じんぞうないか
+      腎臓 じんぞう
+      腎内 じんない
+      形成外科 けいせいげか
+      形成 けいせい
+      整形外科 せいけいげか
+      整形 せいけい
+      脳神経外科 のうしんけいげか
+      脳外 のうげ
+      脳血管治療 のうけっかんちりょう
+      脳血管 のうけっかん
+      脳外科 のうげか
+      神経外科 しんけいげか
+      脳血管治療科 のうけっかんちりょうか
+      麻酔科 ますいか
+      麻酔 ますい
+      産婦人科 さんふじんか
+      婦人科 ふじんか
+      産科 さんか
+      内科 ないか
+      ないか ないか
+      登録なし とうろくなし
+      わからない わからない
+
+  - step_name: "診療科_変更_成人"
+    words: |
+      診療科_新規_成人 と同じ
+
+  - step_name: "診療科_キャンセル_成人"
+    words: |
+      診療科_新規_成人 と同じ
+
+  - step_name: "診療科_確認_成人"
+    words: |
+      診療科_新規_成人 と同じ
+
+  - step_name: "予約日_変更"
+    words: |
+      月 がつ
+      日 にち
+      令和 れいわ
+      令和 れーわ
+      平成 へいせい
+      来月 らいげつ
+      再来月 さらいげつ
+
+  - step_name: "予約日_キャンセル"
+    words: |
+      月 がつ
+      日 にち
+      令和 れいわ
+      令和 れーわ
+      平成 へいせい
+      来月 らいげつ
+      再来月 さらいげつ
+
+  - step_name: "都合が悪い日_新規"
+    words: |
+      無いです ないです
+      ありません ありません
+      来週 らいしゅう
+      来月 らいげつ
+      連休 れんきゅう
+
+  - step_name: "都合が悪い日_変更"
+    words: |
+      無いです ないです
+      ありません ありません
+      来週 らいしゅう
+      来月 らいげつ
+      連休 れんきゅう
+
+  - step_name: "医療機関名_新規"
+    words: |
+      病院 びょういん
+      クリニック くりにっく
+      医院 いいん
+      診療所 しんりょうじょ
+
+  - step_name: "最後の問い合わせ"
+    words: |
+      なし なし
+      ない ない
+      ありません ありません
+      大丈夫 だいじょうぶ
+      結構です けっこうです
+      以上 いじょう
+      以上です いじょうです
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "【サブフロー完全コピー】氏名・生年月日・診察券番号・電話番号の 4 サブフローは `docs/reference/bivr/samples/個人情報サブフロー.bivr` を完全コピーし、プレフィックスのみ「沖縄県立南部医療センター・こども医療センター」に置換する（CLAUDE.md Rule 9 準拠）。サブフロー内部の構造改変は禁止"
+  - "【status 体系】customer 固有の非通知=7 を維持（director.md standard の 2 ではない）。Gen2 の 0 / 5 は禁止のため 2（電話案内）に置換。3（聴取失敗）は template 必須項目として保持（実質到達しない）。6（時間外）は use_acceptance_times=false のため到達しないが template 必須"
+  - "【smsFlag 体系】新規=1 / 変更=2 / キャンセル=3 / 予約日の確認=4（customer_doc 1-7）。SMS 送信なし = -1（Gen3 標準。customer の 0 から変換）"
+  - "【echo_back 対象 3 項目】用件・生年月日（サブフロー内）・予約日（変更/キャンセル）のみ復唱あり。患者名は絶対復唱禁止（customer_doc §1）。診療科は復唱禁止（小児歯科口腔外科の「歯科口腔外科」言い換え仕様は本設計 echo_back=false のため発話に現れない）"
+  - "【Yes/No 肯定語「肺」救済】すべての Yes/No 判定ブロック（年齢確認 / 紹介状有無 / 薬服用中か / 用件聴取の再提示）で「肺」「杯」「配」「敗」「牌」「灰」を肯定同義語として扱う（customer_doc 最優先適用 二択回答正規化）。prompter は SKILL_A〜E_*.md の Yes/No テンプレで明示"
+  - "【用件救済語】印刷／定期／新薬／再診／最新／禁忌 → 予約日の確認相当、薬／お薬 → 新規予約、電気／でんき → 新規（customer_doc 4 章）。prompter の用件聴取プロンプトに明示"
+  - "【年齢救済語】診療科聴取時の「そう二」→「小児」。本設計では年齢確認で既に age=小児 がセット済みのため、後段の診療科リストが自動的に小児になる。救済語は年齢確認プロンプトにも含める"
+  - "【診療科救済語】「癌化」→「眼科」（成人）または「小児眼科」（小児）。診療科_*_* の mapping に明示"
+  - "【数字正規化】電話番号・診察券番号で C/c/Ｃ/ｃ/for/ふぉー/フォー/しー/しい/し → 4、ごー/ごお/ご → 5（customer_doc 1-9）。prompter の数値テンプレで吸収。「電気」「でんき」は用件の新規への救済語と区別する"
+  - "【SSML 完全削除】customer_doc の `<speak type=\"telephone\">` `<speak type=\"digits\">` `<break time=\"...\">` は Gen3 では全削除。TTS は `{tts_g:...}`（全小文字）形式。電話番号・診察券番号の桁区切り読み上げは tts_g の読み方調整で代替"
+  - "【予約日の年補完】10 月以降で 1〜9 月の日付を言われたら翌年扱い（customer_doc 4 章）。OpenAI normalize プロンプト内で今日の日付を参照して補完"
+  - "【「以上」扱い】単独発話（句読点除いて「以上」or「以上です」）は無視して同質問を繰り返す。末尾付きなら切り落として採用。最後の問い合わせへの返答としての「以上」のみ終話合図（→「なし」として分岐）"
+  - "【reason / facility の発話厳禁】ユーザーに対して reason（理由・確認事項）／facility（医療機関名）の内容を読み上げたり、同情発話（「お大事に」等）や意見を一切行わない。prompter の SKILL_E_*.md 自由テキスト抽出テンプレに明示"
+  - "【成人の新規のみ医療機関名】紹介状あり直後に、成人の新規ルートでのみ医療機関名を聴取する。小児の新規ルートには医療機関名聴取が無いため共通化不可。`分岐_新規_紹介状あり_年齢` (context_match_router) で実装"
+  - "【病理診断科の AI 不可（成人のみ）】病理診断科は成人の診療科リストにのみ存在。検出時は END_病理診断科案内 で代表電話 098-888-0123 案内終話（status=2）"
+  - "【変更／キャンセルの共通化と終話分離】変更の薬残あり側とキャンセルの薬残あり側で、診療科〜都合が悪い日（変更のみ）〜個人情報〜最後の問い合わせは共通化。終話 TTS のみ classification で分岐（変更=通常 / キャンセル=専用）"
+  - "【予約日の確認用件の reason 流用】customer_doc 6 章明示「確認事項は reason に格納する」。Gen2 互換のため reason 1 フィールドに 変更・キャンセルの理由と予約日の確認の確認事項を共存させる"
+  - "【最後の問い合わせの RAG 非採用】1 ターンの単純聴取で「なし／default」判定のみ。default の場合は FAQ不可_案内 を 1 回流して直接終話へ。customer_doc 1-6 のループ仕様は不採用（移管ノート L.16）"
+  - "【未聴取 function フィールド】customer function required に含まれる `medicine` / `checkout` / `endpoint` / `smsFlag` のうち、`medicine` は本フロー未使用のため saveContextModel2DB から除外、`checkout` は Gen3 未対応のため除外、`endpoint` / `smsFlag` は saveCompletionFlag2db のパラメータとして終話ブロックで設定"
+  - "【リトライ回数】retry_count=2（customer_doc 2.4）。2 回失敗時は聴取失敗アナウンス「申し訳ございません。ご回答を確認できませんでした。次の内容をお伺いします。」を出力して skip（空文字格納で次ステップ）。customer_doc は「かしこまりました。」を挿入しない仕様だが、Gen3 標準の skip フォールバックで対応"
+  - "【function 1 通話 1 回 / endpoint 制約】customer_doc「function は 1 通話 1 回のみ」「endpoint=通話完了は終話アナウンス出力後のみ」は Gen3 では termination ブロック側（saveCompletionFlag2db）で自動担保される。prompter のプロンプト禁則には含めない"
+  - "【Dr.JOY 側設定事項】SMS 送信文面 4 パターン / STATUS マスター（7=非通知など）/ DEPARTMENT マスター 49 値 / 認証設定優先順位 / office_id / 本番 050 番号は Dr.JOY 管理画面・Brekeke 側設定で別途対応。設計書・フローJSON には含めない"
+
+# --- セクション12: 要確認事項 ---
+confirmation_items:
+  - item: "office_id（Dr.JOY 管理画面で取得）"
+    resolved: false
+  - item: "本番 050 番号（IVR 着信番号、Brekeke 側設定時に確定）"
+    resolved: false
+  - item: "薬残数確認を enum（あり／なし）保存とする運用で業務要件を満たすか確認（具体日数を残すなら別 context 追加が必要）"
+    resolved: false
+  - item: "status=7（非通知）が Dr.JOY function enum と整合するか確認。enum 拡張が必要な場合は運用側で対応"
+    resolved: false
+  - item: "smsFlag=-1（Gen3 標準、SMS 送信なし）で Dr.JOY 側が正しく SMS 不送信として扱うか確認（customer_doc は 0 を使用）"
+    resolved: false
+  - item: "status=2 の表示名「電話案内」で Dr.JOY STATUS マスターと整合するか確認"
+    resolved: false
+  - item: "customer function required の `medicine` フィールドを saveContextModel2DB から除外する運用で Dr.JOY 側に影響がないか確認（本フロー未使用）"
+    resolved: false
+  - item: "SMS 送信文面（新規/変更/キャンセル/予約日の確認 の 4 パターン）を Dr.JOY 管理画面で設定"
+    resolved: false
+  - item: "小児歯科口腔外科の復唱時「歯科口腔外科」言い換え仕様について、本設計は診療科 echo_back なしのため発話には現れない。将来復唱を有効化する場合は prompter に明示必要"
+    resolved: false

@@ -1,0 +1,358 @@
+# =============================================================================
+# シナリオテンプレート: 地域連携
+# =============================================================================
+# 用途: draw.io でシナリオを起こすための雛形 YAML。
+#   コピー → {施設名} 等を置換 → yaml_to_drawio.py で drawio 化 → diagrams.net で確認。
+# ベース実例: output/scenarios/深川市立病院_地域連携/設計書_深川市立病院_地域連携.yaml
+# 構造: 医療機関・施設からの電話を受け、受診申込か否かを判定。
+#       受診申込 → 代表案内/予約フォーム案内、その他問合せ → 所属氏名・患者情報・
+#       内容・連絡先を聴取して折り返し受付。発信者は医療機関スタッフ想定。
+# =============================================================================
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "{施設名}"
+  scenario_name: "地域連携"
+  group_name: "{施設名}_地域連携_{YYYYMMDD}"   # 末尾に作業日。日付はグループ名のみに付ける（naming_convention.md）
+  flow_name: "{施設名}_地域連携_{YYYYMMDD}$地域連携"   # $ より前は group_name と完全一致（T-2d）
+  target_facility: "{施設名}（地域連携室）"
+  office_id: "TODO_要確認"
+  phone_number: "{代表電話番号}"
+  business_hours: "祝日除く月〜金 8:30〜17:00"
+  flow_type: "subflow"
+  work_type: "new"
+  environment: "demo"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "{施設名}$地域連携"
+      role: "main"
+      description: "受診申込確認 → 受診申込ルート（本日/明日以降）/ その他問合せルート（所属氏名→患者問合せ→外来入院→患者情報→内容→電話番号）→ 終話"
+  subflows:
+    - name: "{施設名}$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+
+# --- セクション3: フローの目的 ---
+purpose: >
+  {施設名} 地域連携室専用 AI 電話。医療機関・施設からの問い合わせを受け、受診申込か否かを
+  判定したうえで、受診申込は代表電話案内または予約フォーム案内、その他問い合わせは所属・氏名・
+  患者情報・内容・連絡先を聴取して折り返し受付を自動化する。
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+# 営業時間判定が必要な施設 (曜日別営業時間 / 祝日休 / 固定休 / 年末年始 等):
+# script_template: business_hour_classifier を script ブロックで使用可能。
+# 曜日別営業時間 + 祝日 (Brekeke Note `drjoy.holidays` 連携) + 固定休を 1 ブロックで判定し、
+# 営業中/営業時間外/定休日/祝日/固定休/ERROR の 6 分岐に仕分ける。
+# 使用例: docs/brekeke/script_templates/README.md、詳細仕様: modules/business_hour_classifier/REQUIREMENTS.md
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 受診申込確認
+
+  # 受診申込か否か
+  - step: 受診申込確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "はい"
+        next: 本日受診確認
+      - match: "いいえ"
+        next: 所属氏名
+
+  # 受診申込ルート（本日 → 代表案内 / 明日以降 → 予約フォーム）
+  - step: 本日受診確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "本日"
+        next: END_代表案内
+      - match: "明日以降"
+        next: END_予約フォーム
+
+  # その他問合せルート
+  - step: 所属氏名
+    type: hearing
+    output_format: text
+    next: 患者問合せ確認
+
+  - step: 患者問合せ確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "はい"
+        next: 外来入院確認
+      - match: "いいえ"
+        next: 内容聴取
+
+  - step: 外来入院確認
+    type: hearing
+    output_format: enum
+    conditions:
+      - match: "外来"
+        next: 患者氏名
+      - match: "入院"
+        next: 患者氏名
+
+  - step: 患者氏名
+    type: hearing
+    output_format: text
+    next: 患者生年月日
+
+  - step: 患者生年月日
+    type: hearing
+    output_format: datetime
+    next: 内容聴取
+
+  - step: 内容聴取
+    type: hearing
+    output_format: text
+    next: 電話番号聴取
+
+  - step: 電話番号聴取
+    type: subflow
+    flowname: "{施設名}$電話番号聴取"
+    next: END_正常終話
+
+  # 終話
+  - step: END_代表案内
+    type: termination
+    termination_ref: "END_代表案内"
+  - step: END_予約フォーム
+    type: termination
+    termination_ref: "END_予約フォーム"
+  - step: END_正常終話
+    type: termination
+    termination_ref: "END_正常終話"
+
+# --- セクション5: コンテキストフィールド一覧（抜粋）---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "受診申込_本日"
+      - id: "2"
+        order: "2"
+        value: "受診申込_明日以降"
+      - id: "3"
+        order: "3"
+        value: "その他問合せ"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+  - context_name: "DepartmentAndName"
+    context_name_jp: "所属と氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "発信者（医療機関スタッフ）の所属施設名と氏名"
+  - context_name: "patientOrNot"
+    context_name_jp: "患者問合せ"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "患者に関する問合せか（はい/いいえ）"
+  - context_name: "hospitalizationCheck"
+    context_name_jp: "外来/入院"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: ""
+  - context_name: "patientName"
+    context_name_jp: "患者氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "患者生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+  - context_name: "details"
+    context_name_jp: "問い合わせ内容"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: ""
+  - context_name: "telephoneNumber"
+    context_name_jp: "電話番号（着信）"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "電話番号聴取サブフローで保存"
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "聴取失敗"
+      - id: "6"
+        order: "6"
+        value: "時間外"
+      - id: "7"
+        order: "7"
+        value: "予約フォーム案内"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: ""
+  - context_name: "dateOfCall"
+    context_name_jp: "受電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "システム自動取得"
+
+# --- セクション7: ステップ詳細（TTS 発話文言）---
+step_details:
+  - step_name: "冒頭_アナウンス"
+    tts_announcement: "お電話ありがとうございます。{施設名}地域連携室のAI電話受付です。"
+    input_method: "voice_only"
+    save_to: ""
+    next_step: "受診申込確認"
+    retry_failure: "skip"
+  - step_name: "受診申込確認"
+    tts_announcement: "受診のお申し込みでしょうか。受診のお申し込みの場合は1を、それ以外のお問い合わせの場合は2を押してください。"
+    input_method: "dtmf_voice"
+    save_to: "classification"
+    next_step: "本日受診確認 / 所属氏名"
+    retry_failure: "end_failure"
+  - step_name: "本日受診確認"
+    tts_announcement: "本日の受診をご希望でしょうか。本日の場合は1を、明日以降の場合は2を押してください。"
+    input_method: "dtmf_voice"
+    save_to: "classification"
+    next_step: "END_代表案内 / END_予約フォーム"
+    retry_failure: "end_failure"
+  - step_name: "所属氏名"
+    tts_announcement: "ご所属とお名前をお話しください。"
+    input_method: "voice_only"
+    save_to: "DepartmentAndName"
+    next_step: "患者問合せ確認"
+    retry_failure: "end_failure"
+  - step_name: "患者問合せ確認"
+    tts_announcement: "患者さんに関するお問い合わせでしょうか。患者さんに関するお問い合わせの場合は1を、それ以外の場合は2を押してください。"
+    input_method: "dtmf_voice"
+    save_to: "patientOrNot"
+    next_step: "外来入院確認 / 内容聴取"
+    retry_failure: "skip"
+  - step_name: "外来入院確認"
+    tts_announcement: "外来の患者さんですか、入院中の患者さんですか。外来の場合は1を、入院の場合は2を押してください。"
+    input_method: "dtmf_voice"
+    save_to: "hospitalizationCheck"
+    next_step: "患者氏名"
+    retry_failure: "skip"
+  - step_name: "患者氏名"
+    tts_announcement: "患者さんのお名前をフルネームでお話しください。"
+    input_method: "voice_only"
+    save_to: "patientName"
+    next_step: "患者生年月日"
+    retry_failure: "skip"
+  - step_name: "患者生年月日"
+    tts_announcement: "患者さんの生年月日をお話しください。ダイヤルプッシュの場合は8桁で入力してください。"
+    input_method: "dtmf_voice"
+    save_to: "patientDateOfBirth"
+    next_step: "内容聴取"
+    retry_failure: "skip"
+  - step_name: "内容聴取"
+    tts_announcement: "お問い合わせ内容をお話しください。"
+    input_method: "voice_only"
+    save_to: "details"
+    next_step: "電話番号聴取"
+    retry_failure: "skip"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # 異常系（デフォルト必須 — 削除禁止）
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+  - name: "END_時間外"
+    condition: "受付時間外"
+    tts_announcement: "お電話ありがとうございます。{施設名}地域連携室のAI電話受付です。ただいまの時間は受付時間外です。受付時間内におかけ直しください。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+  - name: "END_聴取失敗"
+    condition: "リトライ上限到達"
+    tts_announcement: "申し訳ございません。ご回答を正しく聞き取ることができませんでした。恐れ入りますが、おかけ直しください。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+  # 正常系
+  - name: "END_代表案内"
+    condition: "受診申込=はい かつ 本日受診=本日"
+    tts_announcement: "本日の受診をご希望の場合は、恐れ入りますが{施設名}の代表電話、{代表電話番号}にお電話をお願いいたします。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_代表案内"
+  - name: "END_予約フォーム"
+    condition: "受診申込=はい かつ 本日受診=明日以降"
+    tts_announcement: "明日以降の受診をご希望の場合は、予約申込書をFAXにてお送りください。お電話ありがとうございました。"
+    status: "7"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_予約フォーム"
+  - name: "END_正常終話"
+    condition: "その他問合せルート全聴取完了"
+    tts_announcement: "お問い合わせを承りました。担当者から折り返しご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_正常終話"
+
+# --- セクション8b: RAG/FAQ 検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false

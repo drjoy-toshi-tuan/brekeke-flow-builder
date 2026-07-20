@@ -1,0 +1,904 @@
+# 設計書 -- 愛仁会健診センター 健診
+# 生成元: @director エージェント
+# 生成日: 2026/05/07
+# 確認レポート: output/scenarios/愛仁会健診センター_健診/確認レポート_愛仁会健診センター_健診_20260507.md
+# 作業種別: Gen1→Gen3 移管
+version: "1.0"
+
+# --- セクション1: 基本情報 ---
+basic_info:
+  facility_name: "愛仁会健診センター"
+  scenario_name: "健診"
+  group_name: "愛仁会健診センター"
+  flow_name: "愛仁会健診センター$健診"
+  target_facility: "愛仁会総合健康センター（健康管理センター）"
+  office_id: "TODO_要確認"
+  phone_number: "072-692-9291"
+  business_hours: "祝日・年末年始除く 月〜金 9:00〜15:00、土 9:00〜12:00（acceptance_times、NON-BLOCKER N-1）"
+  flow_type: "subflow"
+  work_type: "gen1_migration"
+  environment: "prod"
+  tts_platform: "GOOGLE"
+  stt_platform: "AMIVOICE"
+  openai_platform: "OPENAI"
+
+# --- セクション2: フロー構成 ---
+flow_structure:
+  type: "subflow"
+  flows:
+    - name: "愛仁会健診センター$健診"
+      role: "main"
+      description: |
+        冒頭 → 用件確認(DTMF 1=新規 / 2=予約以外、echo_back) →
+        新規ルート: 氏名→生年月日→連絡先→受診希望日→終話分岐(phonetype) → END。
+        予約以外ルート: 氏名→生年月日→連絡先→用件詳細確認(OpenAI 2-way) →
+          - 予約以外(アクセス/書類等): phonetype分岐 → 携帯=WEB予約フォーム案内SMS / その他=代表電話案内
+          - 変更/キャンセル/予約確認: 現在の予約日 → 終話分岐(phonetype) → END。
+        転送無し（番号案内型）。代表電話 072-692-9291 を CP 系終話で 3 回繰り返し読み上げ。
+  subflows:
+    - name: "愛仁会健診センター$氏名聴取"
+      target: "氏名聴取"
+      recitation: "なし"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "PatientName サブフロー（director.md §3.1.1）。Gen1「受診者名（担当者名）聴取」を PatientName 1 枠に充当（受診者と担当者の分離設計は無し）"
+    - name: "愛仁会健診センター$生年月日聴取"
+      target: "生年月日聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "DOB Re-confirmation 使用。和暦/西暦両対応・大正/昭和元年/昭和/平成元年/平成/令和元年/令和の自動判定"
+    - name: "愛仁会健診センター$電話番号聴取"
+      target: "電話番号聴取"
+      recitation: "あり"
+      transition_module: "drjoy^Custom Module$Custom Jump to Flow"
+      termination: "return"
+      notes: "Phone Normalization + Re-confirmation。incoming-classifier で携帯/固定/その他を分岐し phonetype を設定。SMS 送信可否の判断に使用。非通知は冒頭 opening で既に弾いているためここには到達しない"
+
+# --- セクション3: フローの目的 ---
+purpose: |
+  愛仁会総合健康センター（健康管理センター）健診予約専用ダイヤルへの着信を受け、
+  健康診断の新規予約 または 予約以外（変更／キャンセル／予約確認／その他問い合わせ）の用件を聴取し、
+  氏名・生年月日・連絡先電話番号を収集して、3 営業日以内の担当者折り返し電話または
+  ショートメールでの連絡につなげる。
+  「予約以外」と判定された場合（アクセス／書類／症状／会計等の問い合わせ全般）で、
+  着信が携帯電話の場合は WEB 予約フォーム URL を SMS 送信して案内、
+  固定電話の場合は代表電話 072-692-9291 を 3 回繰り返し読み上げて再度かけ直しを案内する。
+  時間外・聴取失敗・非通知は同代表電話を案内する。転送機能は無し。
+
+# --- セクション4: シナリオフロー図 ---
+flow_diagrams:
+  - flow_name: "愛仁会健診センター$健診"
+    diagram: |
+      冒頭(wait 2000ms)
+        → コンテキスト設定(saveContextModel2DB)
+          → 着信分類(incoming-classifier)
+              ├─ 非通知 → END_非通知 → 完了フラグ_非通知(status=2, smsFlag=-1) → 切断
+              └─ 通常/携帯/固定 → 営業時間チェック(acceptance_times)
+                                    ├─ 時間外 → END_時間外(072-692-9291案内) → 完了フラグ_時間外(status=6, smsFlag=-1) → 切断
+                                    └─ 受付可 → 冒頭_アナウンス(TTS)
+                                                  → 用件確認
+
+      用件確認(hearing DTMF 2-value, echo_back: true)
+        ├─ 新規(DTMF 1) → 氏名聴取 → 生年月日聴取 → 電話番号聴取 → 受診希望日(text)
+        │                          → 終話_phonetype分岐
+        │                            ├─ 携帯 → END_新規受付_携帯(SMS送信あり, status=1, smsFlag=1)
+        │                            └─ other → END_新規受付_その他(SMS送信なし, status=1, smsFlag=-1)
+        │
+        └─ 予約以外(DTMF 2) → 氏名聴取 → 生年月日聴取 → 電話番号聴取 → 用件詳細確認(enum 2-way)
+                              ├─ 予約以外(アクセス/書類等) → 予約以外_phonetype分岐
+                              │                              ├─ 携帯 → WEB予約フォーム案内 → END_WEB案内(SMS送信あり, status=1, smsFlag=1)
+                              │                              └─ other → END_予約以外_代表案内(072-692-9291案内, status=2, smsFlag=-1)
+                              │
+                              └─ other(=変更/キャンセル/予約確認) → 現在の予約日(datetime)
+                                                                  → 変更_phonetype分岐
+                                                                    ├─ 携帯 → END_変更受付_携帯(SMS送信あり, status=1, smsFlag=1)
+                                                                    └─ other → END_変更受付_その他(SMS送信なし, status=1, smsFlag=-1)
+
+      ─── サブフロー遷移 ───
+      氏名聴取    = Custom Jump to Flow → 愛仁会健診センター$氏名聴取（return）
+      生年月日聴取 = Custom Jump to Flow → 愛仁会健診センター$生年月日聴取（return）
+      電話番号聴取 = Custom Jump to Flow → 愛仁会健診センター$電話番号聴取（return、phonetype を設定）
+
+      ─── 異常終話 ───
+      END_非通知       : 非通知着信     → status=2, smsFlag=-1
+      END_時間外       : 受付時間外     → status=6, smsFlag=-1（072-692-9291 を 3 回繰返）
+      END_聴取失敗     : リトライ上限到達 → status=3, smsFlag=-1（072-692-9291 を 3 回繰返）
+    notes: |
+      Pattern A 採用箇所: 用件確認（DTMF 2-way enum 直後分岐）、用件詳細確認（OpenAI enum 直後分岐: 予約以外 vs other）。
+      Pattern B 採用箇所: 終話_phonetype分岐 / 予約以外_phonetype分岐 / 変更_phonetype分岐（context_match_router: 電話番号聴取 の phonetype 出力を参照）。
+      用件確認は echo_back: true で内蔵復唱（NON-BLOCKER N-2）。Gen1 では DTMF 1 → 「予約を取る、ですね。」/ DTMF 2 → 「ご予約以外の用件、ですね。」の個別文言だが、scaffold の echo_back は #data# 埋め込みの汎用復唱に置換される。
+      Gen1 の「時間外 → 携帯チェック → WEB予約案内」分岐は director 判断で **本初版では未実装** とし、時間外は END_時間外（072-692-9291 案内）に集約（NON-BLOCKER N-3）。
+      Gen1 の「予約以外ルート開始時に携帯あり=WEB予約希望確認(DTMF 1=WEB / 2=TEL) → 1=即終話」の早期 WEB 離脱パスも director 判断で **本初版では未実装** とし、全員 氏名→生年月日→連絡先 を聴取してから用件詳細確認 → WEB案内 / 代表電話案内 に振り分ける（NON-BLOCKER N-4）。
+
+# --- セクション4b: シナリオフロー定義（ブロック構成）---
+scenario_flow:
+  # --- 冒頭ブロック（opening + 冒頭_アナウンス は 2 ブロック 1 セット）---
+  - step: 冒頭
+    type: opening
+    use_acceptance_times: true
+    next: 冒頭_アナウンス
+
+  - step: 冒頭_アナウンス
+    type: announcement
+    next: 用件確認
+
+  # --- 用件確認（DTMF 2-value, echo_back, Pattern A）---
+  - step: 用件確認
+    type: hearing
+    output_format: enum
+    save_to: classification
+    echo_back: true
+    conditions:
+      - match: "新規"
+        next: 氏名聴取
+      - match: "予約以外"
+        next: 氏名聴取_予約以外
+      - match: "other"
+        next: 氏名聴取
+
+  # --- 個人情報聴取サブフロー連鎖（新規ルート用）---
+  # 新規 / 予約以外 で氏名→生年月日→電話番号 までは共通だが、
+  # サブフロー後の遷移先（受診希望日 vs 用件詳細確認）が異なるため
+  # 別系統で配置する
+  - step: 氏名聴取
+    type: subflow
+    flowname: "愛仁会健診センター$氏名聴取"
+    target: 氏名聴取
+    next: 生年月日聴取
+
+  - step: 生年月日聴取
+    type: subflow
+    flowname: "愛仁会健診センター$生年月日聴取"
+    target: 生年月日聴取
+    next: 電話番号聴取
+
+  - step: 電話番号聴取
+    type: subflow
+    flowname: "愛仁会健診センター$電話番号聴取"
+    target: 電話番号聴取
+    next: 用件分岐_新規予約以外
+
+  # --- 用件分岐（新規 / 予約以外 を classification context で再分岐）---
+  - step: 用件分岐_新規予約以外
+    type: context_match_router
+    reference_module: "用件確認"
+    conditions:
+      - match: "新規"
+        next: 受診希望日
+      - match: "予約以外"
+        next: 用件詳細確認
+      - match: "other"
+        next: 受診希望日
+
+  # --- 個人情報聴取サブフロー連鎖（予約以外ルート用 — 同フロー内で別 step として配置）---
+  # ↑ 予約以外ルートの氏名聴取_予約以外 は scaffold で生成される個別ジャンプ
+  - step: 氏名聴取_予約以外
+    type: subflow
+    flowname: "愛仁会健診センター$氏名聴取"
+    target: 氏名聴取
+    next: 生年月日聴取_予約以外
+
+  - step: 生年月日聴取_予約以外
+    type: subflow
+    flowname: "愛仁会健診センター$生年月日聴取"
+    target: 生年月日聴取
+    next: 電話番号聴取_予約以外
+
+  - step: 電話番号聴取_予約以外
+    type: subflow
+    flowname: "愛仁会健診センター$電話番号聴取"
+    target: 電話番号聴取
+    next: 用件詳細確認
+
+  # --- 新規ルート: 受診希望日 → 終話分岐 ---
+  - step: 受診希望日
+    type: hearing
+    output_format: text
+    save_to: desiredDate
+    next: 新規_終話分岐
+    retry_failure: skip
+
+  - step: 新規_終話分岐
+    type: context_match_router
+    reference_module: "電話番号聴取"
+    conditions:
+      - match: "携帯"
+        next: END_新規受付_携帯
+      - match: "other"
+        next: END_新規受付_その他
+
+  # --- 予約以外ルート: 用件詳細確認（OpenAI 2-way）→ 分岐 ---
+  - step: 用件詳細確認
+    type: hearing
+    output_format: enum
+    save_to: classification
+    conditions:
+      - match: "予約以外"
+        next: 予約以外_phonetype分岐
+      - match: "other"
+        next: 現在の予約日
+
+  # --- 予約以外（アクセス/書類等）→ phonetype分岐 ---
+  - step: 予約以外_phonetype分岐
+    type: context_match_router
+    reference_module: "電話番号聴取"
+    conditions:
+      - match: "携帯"
+        next: WEB予約フォーム案内
+      - match: "other"
+        next: END_予約以外_代表案内
+
+  - step: WEB予約フォーム案内
+    type: announcement
+    next: END_WEB案内
+
+  # --- 変更/キャンセル/予約確認 → 現在の予約日 → 終話分岐 ---
+  - step: 現在の予約日
+    type: hearing
+    output_format: datetime
+    save_to: reservationDate
+    next: 変更_終話分岐
+    retry_failure: skip
+
+  - step: 変更_終話分岐
+    type: context_match_router
+    reference_module: "電話番号聴取"
+    conditions:
+      - match: "携帯"
+        next: END_変更受付_携帯
+      - match: "other"
+        next: END_変更受付_その他
+
+  # --- 終話ブロック ---
+  - step: END_新規受付_携帯
+    type: termination
+    termination_ref: "END_新規受付_携帯"
+
+  - step: END_新規受付_その他
+    type: termination
+    termination_ref: "END_新規受付_その他"
+
+  - step: END_変更受付_携帯
+    type: termination
+    termination_ref: "END_変更受付_携帯"
+
+  - step: END_変更受付_その他
+    type: termination
+    termination_ref: "END_変更受付_その他"
+
+  - step: END_WEB案内
+    type: termination
+    termination_ref: "END_WEB案内"
+
+  - step: END_予約以外_代表案内
+    type: termination
+    termination_ref: "END_予約以外_代表案内"
+
+# --- セクション5: コンテキストフィールド一覧 ---
+context_fields:
+  - context_name: "classification"
+    context_name_jp: "用件区分"
+    display_type: "CLASSIFICATION"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "新規"
+      - id: "2"
+        order: "2"
+        value: "変更"
+      - id: "3"
+        order: "3"
+        value: "キャンセル"
+      - id: "4"
+        order: "4"
+        value: "予約確認"
+      - id: "5"
+        order: "5"
+        value: "予約以外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "用件確認(DTMF) → 新規 or 予約以外。予約以外の場合は 用件詳細確認(voice OpenAI) で 予約以外/変更/キャンセル/予約確認 に再分類して classification を上書き"
+
+  - context_name: "patientName"
+    context_name_jp: "氏名"
+    display_type: "TEXT"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "氏名聴取サブフローで聴取。Gen1「受診者名（担当者名）」を PatientName 1 枠に充当（director.md §3.1.1）"
+
+  - context_name: "patientDateOfBirth"
+    context_name_jp: "生年月日"
+    display_type: "DATE_OF_BIRTH"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "生年月日聴取サブフロー。和暦/西暦対応・大正〜令和の元号自動判定（DOB Re-confirmation）"
+
+  - context_name: "telephoneNumber"
+    context_name_jp: "着信元電話番号"
+    display_type: "PHONE_NUMBER_CALL"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "着信番号自動格納"
+
+  - context_name: "additionalPhoneNumber"
+    context_name_jp: "連絡先電話番号"
+    display_type: "PHONE_NUMBER"
+    range_values: []
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "電話番号聴取サブフロー。携帯着信は着信番号自動格納＋復唱、固定/その他は手動聴取＋正規化＋復唱"
+
+  - context_name: "phonetype"
+    context_name_jp: "電話種別"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "電話番号聴取サブフロー内で設定（携帯=ショートメール送信可 / その他=送信不可）。CMR で SMS 送信可否の判断に使用"
+
+  - context_name: "desiredDate"
+    context_name_jp: "受診希望日"
+    display_type: "TEXT"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "新規ルートのみ聴取。「10月10日」のような日程または「10月中旬」のような時期など曖昧表現を許容するためフリーワード保存（NON-BLOCKER N-5）"
+
+  - context_name: "reservationDate"
+    context_name_jp: "現在の予約日"
+    display_type: "DATE"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: true
+    notes: "予約以外ルート（変更/キャンセル/予約確認）で聴取。YYYY-MM-DD HH:MM 形式。Gen1 仕様の DTMF 西暦8桁入力を Gen3 では音声 datetime hearing に置換"
+
+  - context_name: "status"
+    context_name_jp: "状態"
+    display_type: "STATUS"
+    range_values:
+      - id: "1"
+        order: "1"
+        value: "未処理"
+      - id: "2"
+        order: "2"
+        value: "代表案内"
+      - id: "3"
+        order: "3"
+        value: "聴取失敗"
+      - id: "6"
+        order: "4"
+        value: "時間外"
+    item_default: true
+    editable: true
+    deletable: false
+    notes: "1=未処理（受付完了）/ 2=代表案内（予約以外その他・非通知）/ 3=聴取失敗 / 6=時間外。Gen3 で 0/5 は使用禁止"
+
+  - context_name: "dateOfCall"
+    context_name_jp: "入電日時"
+    display_type: "DATE"
+    range_values: []
+    item_default: true
+    editable: false
+    deletable: false
+    notes: "システム自動取得"
+
+  - context_name: "callId"
+    context_name_jp: "通話ID"
+    display_type: "NUMBER"
+    range_values: []
+    item_default: false
+    editable: true
+    deletable: false
+    notes: "システム固定値"
+
+# --- セクション6: 聴取項目一覧 ---
+hearing_items:
+  - order: 1
+    name: "用件確認"
+    stt_type: "DTMF_AmiVoice"
+    dtmf_max_length: 1
+    retry_count: 2
+    echo_back: true
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "新規"
+      - "予約以外"
+      - "other"
+    notes: |
+      DTMF 1=新規（健診の予約） / 2=予約以外（変更・キャンセル・問い合わせ等）。
+      音声入力は受け付けず DTMF のみで確定（Gen1 仕様、director 判断ログ #1）。
+      OpenAI synonyms（Gen1 entity_openai_synonyms.md より、prompter が反映）:
+        - 新規: 取りたい / 取得 / 紹介状 / 診察の予約 / 診療予約 / 健診の予約 / 健診予約 / 検査 / 検査の予約 / 雇い入れ / 事業主 / 就職 / 進学 / 生活習慣病 / 全身 / 特定健診 / 人間ドック / 健診 / 検診 / 検針
+        - 予約以外: 取り消す / キャンセル / やめる / 取消 / 変更 / 延期 / 時間 / 日程 / 日付 / 別の / 変えたい / 変えて / 変える / 予約の変更 / 確認 / 教えて / 調べて / 分からない / 紛失 / 問い合わせ / 問合せ / 予約票 / アクセス / お見舞い / くすり / 会計 / 行き方 / 質問 / 処方箋 / 書類 / 症状 / 証明書 / 診断書 / 病棟 / 副作用 / 文書 / 聞きたい
+      echo_back: true により Re-confirmation node が #data# 埋め込みで「ご用件は #data#、でよろしいですか?」を発話（NON-BLOCKER N-2）
+
+  - order: 2
+    name: "受診希望日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "desiredDate"
+    openai_processing: "none"
+    output_format: "text"
+    output_labels: []
+    notes: "新規ルートのみ聴取。「10月10日のように日程や、10月中旬のように時期など、自由におっしゃってください」 フリーワード保存。失敗時は skip（NON-BLOCKER N-5）"
+
+  - order: 3
+    name: "用件詳細確認"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "classification"
+    openai_processing: "classify"
+    output_format: "enum"
+    output_labels:
+      - "予約以外"
+      - "other"
+    notes: |
+      予約以外ルート（DTMF=2）でのみ聴取。Gen3 新設の OpenAI 分類点（Gen1 では「用件の分岐」が dead code として残っており、director 判断 #2 で active 化）。
+      OpenAI 2-way 判定:
+        - 予約以外（アクセス/書類/症状/会計等）: アクセス / お見舞い / くすり / 会計 / 行き方 / 伺い / 質問 / 処方箋 / 書類 / 症状 / 証明書 / 診断書 / 病棟 / 副作用 / 文書 / 聞きたい / その他 / なくした / 確認 / 教えて / 調べて / 分からない / 分からん / 紛失 / 忘れた / 問い合わせ / 問合せ / 予約票
+        - other（=変更/キャンセル/予約確認）: 変更 / 取り消し / 取り消す / 取消 / 延期 / 時間 / 日程 / 日付 / 別の / 変えたい / 変えて / 変える / 予約の変更 / キャンセル / やめる / 予約のキャンセル / 確認 / 予約確認
+      予約以外 → 予約以外_phonetype分岐（携帯=WEB案内 / その他=代表電話案内）。
+      other → 現在の予約日 → 変更_終話分岐。
+      classification context は用件確認の DTMF 入力で「予約以外」が一旦保存されるが、ここで詳細値（変更/キャンセル/予約確認/予約以外）に上書きされる
+
+  - order: 4
+    name: "現在の予約日"
+    stt_type: "AmiVoice_STT"
+    dtmf_max_length: null
+    retry_count: 2
+    echo_back: false
+    save_to: "reservationDate"
+    openai_processing: "convert"
+    output_format: "datetime"
+    output_labels: []
+    notes: "予約以外ルート（other=変更/キャンセル/予約確認）で聴取。Gen1 仕様の DTMF 西暦8桁入力を Gen3 では音声 datetime hearing に置換（director 判断 #4）。YYYY-MM-DD HH:MM 形式に変換、未来日チェック・10月以降に1-9月指定は翌年扱い"
+
+# --- セクション7: ステップ詳細 ---
+step_details:
+  - step_name: "用件確認"
+    tts_announcement: |
+      ご用件を、次の2つのうちの、いずれかでダイヤルプッシュしてください。
+      「予約を取る」は1を、
+      「予約の変更・キャンセル」は2を、
+      それでは、押してください。
+    input_method: "dtmf_voice"
+    openai_rules:
+      output_values:
+        - "新規"
+        - "予約以外"
+        - "other"
+      mapping:
+        - input: "DTMF 1 / 1番 / 一 / 一番 / 健診 / 検診 / 検針 / 健康診断 / 健診の予約 / 健診予約 / 人間ドック / 特定健診 / 取りたい / 取得 / 紹介状 / 診察の予約 / 診療予約 / 検査 / 検査の予約 / 雇い入れ / 事業主 / 就職 / 進学 / 生活習慣病 / 全身 / 予約 / 予約したい / 予約を取る"
+          output: "新規"
+        - input: "DTMF 2 / 2番 / 二 / 二番 / 変更 / 予約変更 / 予約の変更 / 取り直したい / 取り直す / 別の / 変えたい / 変えて / 変える / 延期 / 日程 / 日付 / 平行 / 並行 / キャンセル / やめる / 取り消し / 取消 / 取り消す / 予約のキャンセル / 確認 / 予約確認 / 問い合わせ / 問合せ / その他 / アクセス / お見舞い / くすり / 会計 / 行き方 / 質問 / 処方箋 / 書類 / 症状 / 証明書 / 診断書 / 病棟 / 副作用 / 文書 / 聞きたい / 教えて / 調べて / 分からない / なくした / 忘れた / 紛失 / 予約票"
+          output: "予約以外"
+      no_result_condition: "上記いずれにも該当しない場合は other（=新規ルートにフォールバック、安全側）"
+    save_to: "classification"
+    next_step: "新規→氏名聴取／ 予約以外→氏名聴取_予約以外／ other→氏名聴取"
+    retry_failure: "end_failure"
+    retry_failure_announcement: "お電話が遠いようで、回答が確認できませんでした。恐れ入りますが、祝日を除く、月曜日から金曜日の8時45分から17時、土曜日の8時45分から12時に、健康管理センター直通番号、072-692-9291へおかけ直しください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますのでメモをご準備ください。代表電話番号は、072-692-9291です。繰り返します。代表電話番号は、072-692-9291です。繰り返します。代表電話番号は、072-692-9291です。お電話ありがとうございました。"
+
+  - step_name: "受診希望日"
+    tts_announcement: "受診を希望される日を、「10月10日」のように日程や、「10月中旬」のように時期など、自由におっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "日付表現（10月10日 / 来週の月曜日 等）または曖昧表現（10月中旬 / 来月上旬 / なるべく早く 等）"
+          output: "そのままテキスト格納（曖昧表現も許容）"
+      no_result_condition: "聴取不可時は skip（次の終話分岐へ）"
+    save_to: "desiredDate"
+    next_step: "新規_終話分岐"
+    retry_failure: "skip"
+
+  - step_name: "用件詳細確認"
+    tts_announcement: |
+      ご用件を、もう少し詳しくお聞かせください。
+      ご予約の変更、キャンセル、予約内容のご確認、または、アクセス・書類・お会計・症状などその他のお問い合わせ、いずれでしょうか？
+      ご用件をお話しください。
+    input_method: "voice_only"
+    openai_rules:
+      output_values:
+        - "予約以外"
+        - "other"
+      mapping:
+        - input: "アクセス / お見舞い / くすり / 会計 / 行き方 / 伺い / 質問 / 処方箋 / 書類 / 症状 / 証明書 / 診断書 / 病棟 / 副作用 / 文書 / 聞きたい / その他のお問い合わせ / 予約以外 / なくした / 紛失 / 教えて / 調べて / 分からない"
+          output: "予約以外"
+        - input: "変更 / 予約変更 / 予約の変更 / 取り直し / 別の / 変えたい / 日程 / 日付 / キャンセル / 取り消し / 予約のキャンセル / 予約確認 / 確認 / 予約内容を教えて"
+          output: "other"
+      no_result_condition: "判別不可時は other（=変更/キャンセル/予約確認 扱いで現在の予約日聴取へ進む）"
+    save_to: "classification"
+    next_step: "予約以外→予約以外_phonetype分岐／ other→現在の予約日"
+    retry_failure: "end_failure"
+    retry_failure_announcement: "お電話が遠いようで、回答が確認できませんでした。恐れ入りますが、祝日を除く、月曜日から金曜日の8時45分から17時、土曜日の8時45分から12時に、健康管理センター直通番号、072-692-9291へおかけ直しください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますのでメモをご準備ください。代表電話番号は、072-692-9291です。繰り返します。代表電話番号は、072-692-9291です。繰り返します。代表電話番号は、072-692-9291です。お電話ありがとうございました。"
+
+  - step_name: "現在の予約日"
+    tts_announcement: "現在の健診ご予約日を、「10月10日」のように日付でお話しください。わからない場合は、分からない、とおっしゃってください。"
+    input_method: "voice_only"
+    openai_rules:
+      output_values: []
+      mapping:
+        - input: "日付表現（10月10日 / 来週の月曜日 等）"
+          output: "YYYY-MM-DD HH:MM 形式に変換（10月以降に1-9月指定は翌年扱い、未来日チェック）"
+      no_result_condition: "日付として解釈できない場合または「わからない」発話は skip"
+    save_to: "reservationDate"
+    next_step: "変更_終話分岐"
+    retry_failure: "skip"
+
+# --- セクション8: 終話パターン ---
+termination_patterns:
+  # --- 異常系（デフォルト必須）---
+  - name: "END_非通知"
+    condition: "非通知着信"
+    tts_announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_非通知"
+
+  - name: "END_時間外"
+    condition: "受付時間外（acceptance_times による判定）"
+    tts_announcement: "恐れ入りますが、時間内におかけ直しください。本窓口の受付時間は、土日祝日、年末年始を除く月曜から金曜は9時から15時、土曜は9時から12時です。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますのでメモをご準備ください。代表電話番号は、072-692-9291です。繰り返します。代表電話番号は、072-692-9291です。繰り返します。代表電話番号は、072-692-9291です。お電話ありがとうございました。"
+    status: "6"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_時間外"
+
+  - name: "END_聴取失敗"
+    condition: "全 hearing のリトライ上限到達時"
+    tts_announcement: "お電話が遠いようで、回答が確認できませんでした。恐れ入りますが、祝日を除く、月曜日から金曜日の8時45分から17時、土曜日の8時45分から12時に、健康管理センター直通番号へおかけ直しください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますのでメモをご準備ください。代表電話番号は、072-692-9291です。繰り返します。代表電話番号は、072-692-9291です。繰り返します。代表電話番号は、072-692-9291です。お電話ありがとうございました。"
+    status: "3"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_聴取失敗"
+
+  # --- 正常系 ---
+  - name: "END_新規受付_携帯"
+    condition: "新規ルート完了 かつ 携帯（phonetype=携帯）"
+    tts_announcement: "かしこまりました。3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_新規受付_携帯"
+
+  - name: "END_新規受付_その他"
+    condition: "新規ルート完了 かつ 固定/その他（phonetype=other）"
+    tts_announcement: "かしこまりました。3営業日以内に担当者から折り返し電話にてご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_新規受付_その他"
+
+  - name: "END_変更受付_携帯"
+    condition: "予約以外ルート（変更/キャンセル/予約確認） 完了 かつ 携帯"
+    tts_announcement: "かしこまりました。3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_変更受付_携帯"
+
+  - name: "END_変更受付_その他"
+    condition: "予約以外ルート（変更/キャンセル/予約確認） 完了 かつ 固定/その他"
+    tts_announcement: "かしこまりました。3営業日以内に担当者から折り返し電話にてご連絡いたします。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_変更受付_その他"
+
+  - name: "END_WEB案内"
+    condition: "予約以外ルート（アクセス/書類等の問い合わせ） かつ 携帯（WEB案内 → SMS送信）"
+    tts_announcement: "かしこまりました。お電話終了後にショートメールでURLをお送りいたします。URLをタップし、予約申し込みを完了させてください。お電話ありがとうございました。"
+    status: "1"
+    sms_flag: "1"
+    completion_flag_name: "完了フラグ_WEB案内"
+
+  - name: "END_予約以外_代表案内"
+    condition: "予約以外ルート（アクセス/書類等） かつ 固定/その他（SMS送信不可のため代表番号案内）"
+    tts_announcement: "ご予約以外のお問い合わせにつきましては、恐れ入りますが、祝日を除く、月曜日から金曜日の8時45分から17時、土曜日の8時45分から12時に、健康管理センター直通番号へおかけ直しください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますのでメモをご準備ください。代表電話番号は、072-692-9291です。繰り返します。代表電話番号は、072-692-9291です。繰り返します。代表電話番号は、072-692-9291です。お電話ありがとうございました。"
+    status: "2"
+    sms_flag: "-1"
+    completion_flag_name: "完了フラグ_予約以外_代表案内"
+
+# --- smsFlag 分岐設計 ---
+sms_flag_routing:
+  enabled: true
+  routing_keys:
+    - "phonetype"
+    - "classification"
+  patterns:
+    - condition: "新規 かつ phonetype=携帯"
+      sms_flag: "1"
+      notes: "新規予約完了時、携帯ならSMS送信。3営業日以内の折り返し電話 + SMS"
+    - condition: "新規 かつ phonetype=その他"
+      sms_flag: "-1"
+      notes: "固定/その他は SMS 受信不可。折り返し電話のみ"
+    - condition: "予約以外（other=変更/キャンセル/予約確認） かつ phonetype=携帯"
+      sms_flag: "1"
+      notes: "変更/キャンセル受付完了時、携帯ならSMS送信"
+    - condition: "予約以外（other=変更/キャンセル/予約確認） かつ phonetype=その他"
+      sms_flag: "-1"
+      notes: "固定/その他は SMS 受信不可"
+    - condition: "予約以外（=アクセス/書類等） かつ phonetype=携帯"
+      sms_flag: "1"
+      notes: "WEB予約フォーム URL を SMS で送付（施設固有運用）"
+    - condition: "予約以外（=アクセス/書類等） かつ phonetype=その他"
+      sms_flag: "-1"
+      notes: "WEB案内不可のため代表電話を案内"
+    - condition: "非通知・時間外・聴取失敗（異常系）"
+      sms_flag: "-1"
+      notes: "全異常終話で SMS 送信なし"
+
+# --- セクション8b: RAG/FAQ検索サブフロー ---
+rag_subflow:
+  pattern: "none"
+  inquiry_insertion_point: ""
+  pre_termination: false
+
+# --- セクション9: TTSモジュール一覧 ---
+tts_modules:
+  - module_name: "冒頭_アナウンス"
+    purpose: "冒頭施設案内"
+    announcement: "お電話ありがとうございます。愛仁会総合健康センターの、予約専用AI電話です。"
+
+  - module_name: "用件確認"
+    purpose: "用件 DTMF 2-way 分岐 + 復唱"
+    announcement: |
+      ご用件を、次の2つのうちの、いずれかでダイヤルプッシュしてください。
+      「予約を取る」は1を、
+      「予約の変更・キャンセル」は2を、
+      それでは、押してください。
+
+  - module_name: "受診希望日"
+    purpose: "新規ルート 受診希望日聴取"
+    announcement: "受診を希望される日を、「10月10日」のように日程や、「10月中旬」のように時期など、自由におっしゃってください。"
+
+  - module_name: "用件詳細確認"
+    purpose: "予約以外ルート 用件詳細 OpenAI 2-way 分類"
+    announcement: |
+      ご用件を、もう少し詳しくお聞かせください。
+      ご予約の変更、キャンセル、予約内容のご確認、または、アクセス・書類・お会計・症状などその他のお問い合わせ、いずれでしょうか？
+      ご用件をお話しください。
+
+  - module_name: "現在の予約日"
+    purpose: "予約以外ルート（変更/キャンセル/予約確認） 現在の予約日聴取"
+    announcement: "現在の健診ご予約日を、「10月10日」のように日付でお話しください。わからない場合は、分からない、とおっしゃってください。"
+
+  - module_name: "WEB予約フォーム案内"
+    purpose: "予約以外ルート（アクセス/書類等） 携帯あり時 WEB予約案内"
+    announcement: "かしこまりました。お電話終了後にショートメールでURLをお送りいたします。URLをタップし、予約申し込みを完了させてください。"
+
+  - module_name: "END_新規受付_携帯"
+    purpose: "新規受付完了 携帯（SMS あり）"
+    announcement: "かしこまりました。3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。お電話ありがとうございました。"
+
+  - module_name: "END_新規受付_その他"
+    purpose: "新規受付完了 固定/その他（SMS なし）"
+    announcement: "かしこまりました。3営業日以内に担当者から折り返し電話にてご連絡いたします。お電話ありがとうございました。"
+
+  - module_name: "END_変更受付_携帯"
+    purpose: "予約以外（変更/キャンセル/予約確認）受付完了 携帯（SMS あり）"
+    announcement: "かしこまりました。3営業日以内に担当者から折り返し電話、もしくは、ショートメールにてご連絡いたします。お電話ありがとうございました。"
+
+  - module_name: "END_変更受付_その他"
+    purpose: "予約以外（変更/キャンセル/予約確認）受付完了 固定/その他（SMS なし）"
+    announcement: "かしこまりました。3営業日以内に担当者から折り返し電話にてご連絡いたします。お電話ありがとうございました。"
+
+  - module_name: "END_WEB案内"
+    purpose: "予約以外（アクセス/書類等） 携帯あり WEB案内（SMS あり）"
+    announcement: "かしこまりました。お電話終了後にショートメールでURLをお送りいたします。URLをタップし、予約申し込みを完了させてください。お電話ありがとうございました。"
+
+  - module_name: "END_予約以外_代表案内"
+    purpose: "予約以外（アクセス/書類等） 固定/その他 代表電話案内（072-692-9291 を 3 回繰返）"
+    announcement: "ご予約以外のお問い合わせにつきましては、恐れ入りますが、祝日を除く、月曜日から金曜日の8時45分から17時、土曜日の8時45分から12時に、健康管理センター直通番号へおかけ直しください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますのでメモをご準備ください。代表電話番号は、072-692-9291です。繰り返します。代表電話番号は、072-692-9291です。繰り返します。代表電話番号は、072-692-9291です。お電話ありがとうございました。"
+
+  - module_name: "END_時間外"
+    purpose: "受付時間外（072-692-9291 を 3 回繰返）"
+    announcement: "恐れ入りますが、時間内におかけ直しください。本窓口の受付時間は、土日祝日、年末年始を除く月曜から金曜は9時から15時、土曜は9時から12時です。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますのでメモをご準備ください。代表電話番号は、072-692-9291です。繰り返します。代表電話番号は、072-692-9291です。繰り返します。代表電話番号は、072-692-9291です。お電話ありがとうございました。"
+
+  - module_name: "END_聴取失敗"
+    purpose: "リトライ上限到達時（072-692-9291 を 3 回繰返）"
+    announcement: "お電話が遠いようで、回答が確認できませんでした。恐れ入りますが、祝日を除く、月曜日から金曜日の8時45分から17時、土曜日の8時45分から12時に、健康管理センター直通番号へおかけ直しください。電話番号が分かる場合は、そのままお電話をお切りください。分からない場合はご案内いたしますのでメモをご準備ください。代表電話番号は、072-692-9291です。繰り返します。代表電話番号は、072-692-9291です。繰り返します。代表電話番号は、072-692-9291です。お電話ありがとうございました。"
+
+  - module_name: "END_非通知"
+    purpose: "非通知着信"
+    announcement: "恐れ入りますが、電話番号を通知しておかけ直しください。お電話ありがとうございました。"
+
+# --- セクション10: AmiVoice辞書（profile_words）---
+amivoice_dictionary:
+  - step_name: "用件確認"
+    words: |
+      健診 けんしん
+      検診 けんしん
+      検針 けんしん
+      健康診断 けんこうしんだん
+      人間ドック にんげんどっく
+      ドック どっく
+      特定健診 とくていけんしん
+      雇い入れ やといいれ
+      事業主 じぎょうぬし
+      就職 しゅうしょく
+      進学 しんがく
+      生活習慣病 せいかつしゅうかんびょう
+      全身 ぜんしん
+      予約 よやく
+      予約変更 よやくへんこう
+      予約の変更 よやくのへんこう
+      取り直したい とりなおしたい
+      取り直す とりなおす
+      平行 へいこう
+      並行 へいこう
+      別の べつの
+      変えたい かえたい
+      変える かえる
+      日程 にってい
+      日付 ひづけ
+      キャンセル きゃんせる
+      取り消し とりけし
+      取消 とりけし
+      取り消す とりけす
+      予約のキャンセル よやくのきゃんせる
+      予約キャンセル よやくきゃんせる
+      やめる やめる
+      問い合わせ といあわせ
+      問合せ といあわせ
+      アクセス あくせす
+      お見舞い おみまい
+      くすり くすり
+      会計 かいけい
+      行き方 いきかた
+      質問 しつもん
+      処方箋 しょほうせん
+      書類 しょるい
+      症状 しょうじょう
+      証明書 しょうめいしょ
+      診断書 しんだんしょ
+      病棟 びょうとう
+      副作用 ふくさよう
+      文書 ぶんしょ
+      聞きたい ききたい
+      確認 かくにん
+      予約確認 よやくかくにん
+      なくした なくした
+      忘れた わすれた
+      紛失 ふんしつ
+      予約票 よやくひょう
+      教えて おしえて
+      調べて しらべて
+      分からない わからない
+
+  - step_name: "用件詳細確認"
+    words: |
+      アクセス あくせす
+      お見舞い おみまい
+      くすり くすり
+      会計 かいけい
+      行き方 いきかた
+      質問 しつもん
+      処方箋 しょほうせん
+      書類 しょるい
+      症状 しょうじょう
+      証明書 しょうめいしょ
+      診断書 しんだんしょ
+      病棟 びょうとう
+      副作用 ふくさよう
+      文書 ぶんしょ
+      聞きたい ききたい
+      その他 そのた
+      なくした なくした
+      紛失 ふんしつ
+      確認 かくにん
+      予約確認 よやくかくにん
+      予約内容 よやくないよう
+      変更 へんこう
+      予約変更 よやくへんこう
+      予約の変更 よやくのへんこう
+      キャンセル きゃんせる
+      予約のキャンセル よやくのきゃんせる
+      取り消し とりけし
+      取り消す とりけす
+      別の べつの
+      変えたい かえたい
+      日程 にってい
+      日付 ひづけ
+      教えて おしえて
+      調べて しらべて
+      分からない わからない
+
+  - step_name: "現在の予約日"
+    words: |
+      月 がつ
+      日 にち
+      来週 らいしゅん
+      来月 らいげつ
+      今月 こんげつ
+      今週 こんしゅう
+      明日 あした
+      明後日 あさって
+      月曜日 げつようび
+      火曜日 かようび
+      水曜日 すいようび
+      木曜日 もくようび
+      金曜日 きんようび
+      土曜日 どようび
+      分からない わからない
+
+  - step_name: "受診希望日"
+    words: |
+      月 がつ
+      日 にち
+      来週 らいしゅん
+      来月 らいげつ
+      上旬 じょうじゅん
+      中旬 ちゅうじゅん
+      下旬 げじゅん
+      なるべく早く なるべくはやく
+      月曜日 げつようび
+      火曜日 かようび
+      水曜日 すいようび
+      木曜日 もくようび
+      金曜日 きんようび
+      土曜日 どようび
+
+# --- セクション11: 特記事項・制約 ---
+special_notes:
+  - "愛仁会健診固有: 用件入口は DTMF 2 値のみ（1=新規予約 / 2=予約以外）。倉敷の 5 分岐 / 蘇生会の 5 分岐とは異なる極めてシンプルな入口（migration note 第 1 項、director 判断ログ #1）"
+  - "「予約以外」エンティティは予約に関する話ではなく、アクセス/書類/症状/会計等の問い合わせ全般を指す施設固有定義（22 件のキーワード）。Gen3 ではこれらを WEB 予約フォームへ SMS 送信して案内する独自運用（migration note 第 8 項）"
+  - "Gen1 の「時間外 → 携帯チェック → WEB予約案内」分岐は director 判断で本初版では未実装。時間外は END_時間外 (072-692-9291 案内) に集約。NON-BLOCKER N-3 で確認の上、必要なら次版で追加実装"
+  - "Gen1 の「予約以外ルート開始時に携帯あり=WEB予約希望確認(DTMF 1=WEB / 2=TEL) → 1=即終話」の早期 WEB 離脱パスも本初版では未実装。全員 氏名→生年月日→連絡先 を聴取してから 用件詳細確認 → WEB案内 / 代表電話案内 に振り分ける。NON-BLOCKER N-4"
+  - "用件詳細確認は Gen3 新設の OpenAI 分類点（Gen1 main.yaml の「用件の分岐」が dead code として残っており、Gen3 で active 化する設計判断、director 判断ログ #2）"
+  - "用件確認の echo_back: true は scaffold 標準の Re-confirmation node（#data# 埋め込み）を使用。Gen1 の個別文言（DTMF 1→「予約を取る、ですね。」/ DTMF 2→「ご予約以外の用件、ですね。」）は再現しない。NON-BLOCKER N-2"
+  - "代表電話 072-692-9291（健康管理センター直通）は CP 系終話（END_時間外 / END_聴取失敗 / END_予約以外_代表案内）で 3 回繰り返し読み上げる（短縮・省略禁止）"
+  - "電話番号には半角ハイフンを使用（072-692-9291）。Brekeke 仕様で全角や中黒は不可"
+  - "PatientName サブフローは 1 枠のみ。Gen1「受診者名（担当者名）」を PatientName で集約（受診者と担当者の分離設計は無し、director.md §3.1.1）"
+  - "受付時間は 月-金 9:00-15:00、土 9:00-12:00（時間外案内 TTS 値を採用）。代表電話案内 TTS の「8:45-17:00」とは差分あり、director 判断で時間外案内の値を本番受付時間と推定（migration note）"
+  - "Gen1 の動的タグ「<? $連絡先電話番号（ハイフン区切あり） ?>」「<? $入電番号（ハイフン区切りあり） ?>」等は Gen3 では電話番号聴取サブフロー内の Re-confirmation node が #data# 埋め込みで自動処理"
+  - "saveCompletionFlag2db の status 値は Gen3 許可値（1/2/3/6/7/8/9）のみを使用。Gen2 で使われていた 0/5 は禁止"
+  - "TTS は `{tts_g:...}` 形式（小文字、Google TTS デフォルト）。SSML タグは使用禁止（電話番号読み上げ用 say-as は scaffold が自動付与する範囲のみ許容）"
+  - "転送機能は無し（Blind Transfer / Attended Transfer ともに無し）。代表電話番号案内型の終話（番号案内型）"
+  - "「タイトル」「それでは」等の繋ぎ TTS（Gen1 main.yaml）は次段ブロック先頭 TTS にマージしている（director 判断ログ #5）"
+  - "受診希望日 (新規) は datetime ではなく text で保存（曖昧表現「10月中旬」を許容するため、director 判断ログ #3）。現在の予約日 (予約以外) は datetime で正規化（具体的な既存予約日の特定が必要）"
+  - "Gen1 yaml では新規ルートも 受診者名→生年月日→連絡先→受診希望日 を聴取するが、director は migration note 第 1 項『新規ルートは受診希望日のみ聴取』を踏まえつつ、Dr.JOY 側で患者特定が必要なため Gen3 でも氏名・生年月日・連絡先は聴取する設計とした（director 判断ログ #6）"
+
+# --- セクション12: 要確認事項（人間に確認が必要）---
+confirmation_items:
+  - item: "営業時間（祝日・年末年始除く 月〜金 9:00〜15:00、土 9:00〜12:00）— Dr.JOY 側スケジュール設定との一致確認 [N-1]"
+    resolved: false
+  - item: "用件確認 echo_back の実文言（汎用 #data# 埋め込みで顧客 OK か、Gen1 の個別文言「予約を取る、ですね。」/「ご予約以外の用件、ですね。」を再現するか）[N-2]"
+    resolved: false
+  - item: "時間外 → 携帯チェック → WEB予約案内 分岐を実装するか（本初版では未実装、END_時間外 集約）[N-3]"
+    resolved: false
+  - item: "予約以外ルート開始時の早期 WEB 離脱パス（携帯あり時に WEB予約希望確認 DTMF 1=WEB → 即終話）を実装するか（本初版では未実装、全員 氏名→生年月日→連絡先 聴取後に WEB案内/代表電話案内）[N-4]"
+    resolved: false
+  - item: "受診希望日（新規ルート）の output_format（text 維持で曖昧表現許容、または datetime に絞る）[N-5]"
+    resolved: false
+  - item: "現在の予約日（予約以外ルート）の datetime 補正ルール（10月以降に1-9月→翌年）動作確認 [N-6]"
+    resolved: false
+  - item: "office_id の確定 [N-7]"
+    resolved: false
+  - item: "IVR 着信電話番号（ARS 番号）の Brekeke 設定 [N-8]"
+    resolved: false
+  - item: "WEB予約フォームの URL 設定（Dr.JOY 側 SMS 文面）[N-9]"
+    resolved: false
+  - item: "新規ルートで氏名・生年月日・連絡先の聴取を実施する設計でよいか（migration note は『受診希望日のみ聴取』だが director は聴取必要と判断）[N-10]"
+    resolved: false
+  - item: "用件詳細確認（Gen3 新設の OpenAI 2-way 分類）の TTS 文言・分類ルールが顧客要件に適合するか [N-11]"
+    resolved: false
+  - item: "SMS 送信文面（Dr.JOY 管理画面で設定）— 新規受付・変更受付・WEB案内 で文面を分けるか統一するか"
+    resolved: false
+  - item: "稼働休止期間（年末年始）— Dr.JOY 側の acceptance_times 特例期間として登録"
+    resolved: false
+  - item: "Dr.JOY 画面表示設定（確認画面表示の有無）"
+    resolved: false
+  - item: "認証設定（健診フローでは医療機関認証なし。電話番号認証等を後付けする場合に追加）"
+    resolved: false

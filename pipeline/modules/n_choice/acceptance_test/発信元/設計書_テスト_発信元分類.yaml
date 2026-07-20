@@ -1,0 +1,107 @@
+# Pattern 6 (テストフロー) — n_choice 決定論エンジン 単体受入テスト（発信元3分類 config）
+#
+# 検証対象: modules/n_choice/acceptance_test/script_caller_type.js
+#   = 正本テンプレ modules/n_choice/script.js を「発信元3分類」config で充填した具体版
+#     （エンジンは正本と同一。DTMF_MAP/KEYWORD_PATTERNS のみ発信元データ。{{INPUT_MODULE}} は placeholder のまま）。
+#
+# 狙い: n_choice エンジンを Brekeke 実機 (Nashorn/ES5) で単体実行し、オラクル↔実機パリティを確証する。
+#   P7 連結はラベル注入のみで、DTMF 数字入力(1/2/3)・全角・キーワード変種・AmiVoice重複・正規化を実機検証していない。
+#   本テストでそれらを全入力耐性として単体検証する（オラクル test_oracle.py 29/29 と同一ケース）。
+#   ※ n_choice は複数設問で使い回す汎用エンジン。本テストは「発信元 config」で代表検証する
+#     （他設問=患者区分/担当者/F1 は同一エンジン＋config データ差のみ。DTMF/keyword 機構の検証は本テストで担保）。
+#
+# 確認: Brekeke ログを grep "[TEST FAIL]" で 0 件なら全 PASS。末尾 "[TEST DONE]" で全 29 ケース完走。
+
+version: "2.0"
+
+basic_info:
+  facility_name: "テスト"
+  group_name: "テスト$発信元分類"
+  flow_name: "テスト$発信元分類"
+  office_id: ""
+  environment: "demo"
+
+flow_structure:
+  type: standalone
+  flows:
+    - name: "テスト$発信元分類"
+      role: main
+  subflows: []
+
+scenario_flow:
+  - step: 冒頭
+    type: opening
+    next: ログ_開始
+
+  - step: ログ_開始
+    type: inline_script
+    body: |
+      $runner.getLogger().info("============================================");
+      $runner.getLogger().info("[TEST START] n_choice 決定論エンジン 単体受入 (発信元 config, 29 ケース)");
+      $runner.getLogger().info("対象: script_caller_type.js (正本 script.js を発信元 config 充填) / オラクル 29/29 PASS 済");
+      $runner.getLogger().info("grep [TEST FAIL] = 0 なら実機も全 PASS");
+      $runner.getLogger().info("============================================");
+      $runner.setResult("ok");
+    next: matrix
+
+  - step: matrix
+    type: script_test_matrix
+    script_file: "./script_caller_type.js"
+    input_placeholder: "{{INPUT_MODULE}}"
+    final_next: ログ_終了
+    cases:
+      # --- DTMF（単一数字）---
+      - {id: dt1, input: "1", expected: "患者本人・家族"}
+      - {id: dt2, input: "2", expected: "連携医療機関"}
+      - {id: dt3, input: "3", expected: "行政"}
+      - {id: dz1, input: "１", expected: "患者本人・家族"}
+      - {id: dz2, input: "２", expected: "連携医療機関"}
+      - {id: dz3, input: "３", expected: "行政"}
+      - {id: dt9, input: "9", expected: "NO_RESULT"}
+      - {id: dt0, input: "0", expected: "NO_RESULT"}
+      # --- 数字＋語尾 trim ---
+      - {id: ds1, input: "1です", expected: "患者本人・家族"}
+      - {id: ds3, input: "３でお願いします", expected: "行政"}
+      # --- keyword: 患者本人・家族 ---
+      - {id: k01, input: "本人です", expected: "患者本人・家族"}
+      - {id: k02, input: "家族からです", expected: "患者本人・家族"}
+      - {id: k03, input: "母です", expected: "患者本人・家族"}
+      - {id: k04, input: "患者の家族です", expected: "患者本人・家族"}
+      - {id: k05, input: "息子です", expected: "患者本人・家族"}
+      # --- keyword: 連携医療機関 ---
+      - {id: k06, input: "連携先のクリニックです", expected: "連携医療機関"}
+      - {id: k07, input: "近くの病院からお電話しました", expected: "連携医療機関"}
+      - {id: k08, input: "診療所の者です", expected: "連携医療機関"}
+      - {id: k09, input: "医療機関です", expected: "連携医療機関"}
+      # --- keyword: 行政 ---
+      - {id: k10, input: "市役所です", expected: "行政"}
+      - {id: k11, input: "地域包括支援センターから", expected: "行政"}
+      - {id: k12, input: "保健所の者です", expected: "行政"}
+      - {id: k13, input: "福祉課からです", expected: "行政"}
+      # --- AmiVoice 重複正規化 ---
+      - {id: dup1, input: "本人本人", expected: "患者本人・家族"}
+      # --- フィラーのみ / 無関連（NO_RESULT）---
+      - {id: nr1, input: "えーっと", expected: "NO_RESULT"}
+      - {id: nr2, input: "あのー", expected: "NO_RESULT"}
+      - {id: nr3, input: "うーん", expected: "NO_RESULT"}
+      - {id: nr4, input: "よろしくお願いします", expected: "NO_RESULT"}
+      - {id: nr5, input: "今日はいい天気", expected: "NO_RESULT"}
+
+  - step: ログ_終了
+    type: inline_script
+    body: |
+      $runner.getLogger().info("[TEST DONE] n_choice 発信元 config 単体受入 全 29 ケース完走");
+      $runner.setResult("done");
+    next: 終了
+
+  - step: 終了
+    type: termination
+    termination_ref: "END_テスト終了"
+
+termination_patterns:
+  - name: "END_テスト終了"
+    condition: "テスト完走"
+    tts_announcement: "テストを終了します。"
+    status: "1"
+    sms_flag: "0"
+    completion_flag_name: "完了フラグ_テスト終了"
