@@ -42,6 +42,15 @@ import { RegexBranchInput } from './RegexBranchInput';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
 import { HoverTip, useClipTip } from './HoverTip';
 import { AiEditableField } from './AiFieldExtras';
+import { DesignBlockPropertyTab } from './DesignBlockPropertyTab';
+import { isDesignBlockType, type DesignBlockType } from '../ir/designYaml/blockTypeMap';
+
+// Node đến từ 設計書 (pipeline gen_flow) — nhận diện qua node.data.blockType (do
+// fromDesignYaml.ts gắn khi mở file). Node vẽ mới trên canvas (chưa từng có
+// blockType) vẫn coi là node webapp thường (PROPERTY_FIELDS theo NodeType).
+function designBlockTypeOf(data: Record<string, unknown>): DesignBlockType | null {
+  return typeof data.blockType === 'string' && isDesignBlockType(data.blockType) ? data.blockType : null;
+}
 
 // Key giải thích ý nghĩa loại node trong từ điển i18n (exStart, exAnnounce, …).
 function explainKey(type: NodeType): TKey {
@@ -122,7 +131,8 @@ function PanelContent({ node, onClose }: { node: FlowNode; onClose: () => void }
 
   // Màn CS: KHÔNG còn tab Property riêng — field property hiển thị ngay trong
   // tab General (gộp làm 1); TS giữ 3 tab như cũ.
-  const hasProperty = !csMode && !csLogic && PROPERTY_FIELDS[node.type].length > 0;
+  const hasProperty =
+    !csMode && !csLogic && (PROPERTY_FIELDS[node.type].length > 0 || designBlockTypeOf(editing.data) != null);
   const hasBranch = BRANCH_SCHEMA[node.type].mode !== 'none';
 
   const [tab, setTab] = useState<Tab>('general');
@@ -412,6 +422,10 @@ function GeneralTab({
 function PropertyTab({ node, data }: { node: FlowNode; data: Record<string, unknown> }) {
   const t = useT();
   const csMode = useWorkspaceStore((s) => s.mode === 'cs');
+  // Node đến từ 設計書 (pipeline) -> form riêng theo blockType (26 loại), khác
+  // hẳn PROPERTY_FIELDS theo NodeType bên dưới (dùng cho node webapp thường).
+  const blockType = designBlockTypeOf(data);
+  if (blockType) return <DesignBlockPropertyTab node={node} data={data} blockType={blockType} />;
   const fields = propertyFieldsFor(node.type, csMode).filter((f) => !f.showIf || f.showIf(data));
   // Interaction có Template -> các tham số bị mẫu ÉP giá trị + khoá (không cho sửa).
   const locks = node.type === 'interaction' ? templateLocks(data) : {};

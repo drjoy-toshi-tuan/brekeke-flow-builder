@@ -50,6 +50,24 @@ interface RawConditionLike {
   [key: string]: unknown;
 }
 
+// Map handle -> giá trị điều kiện hiện tại (nguồn sự thật khi người dùng sửa qua
+// editor nhánh có sẵn của canvas — giống hệt readDataBranches ở toYaml.ts).
+function readDataBranches(data: Record<string, unknown>): Map<string, { value: string; label?: string }> {
+  const map = new Map<string, { value: string; label?: string }>();
+  const raw = data.branches;
+  if (Array.isArray(raw)) {
+    for (const b of raw) {
+      if (b && typeof b.id === 'string') {
+        map.set(b.id, {
+          value: typeof b.value === 'string' ? b.value : '',
+          label: typeof b.label === 'string' && b.label.trim() ? b.label : undefined,
+        });
+      }
+    }
+  }
+  return map;
+}
+
 export function toDesignYaml(ir: FlowIR, passthrough: DesignYamlPassthrough): string {
   const scenario_flow: OutStep[] = [];
 
@@ -61,26 +79,37 @@ export function toDesignYaml(ir: FlowIR, passthrough: DesignYamlPassthrough): st
 
     const out: OutStep = { step: node.id, type: blockType };
     // Trải phẳng data (output_format/save_to/slot/termination_ref/…) trở lại cấp
-    // step. Bỏ blockType/conditions vì đó là dữ liệu cấu trúc, dựng lại bên dưới.
+    // step. Bỏ blockType/conditions/branches vì đó là dữ liệu cấu trúc (nhánh),
+    // dựng lại bên dưới — KHÔNG được ghi field "branches" thẳng vào 設計書 (schema
+    // đó dùng "conditions").
     for (const [key, value] of Object.entries(node.data)) {
-      if (key === 'blockType' || key === 'conditions') continue;
+      if (key === 'blockType' || key === 'conditions' || key === 'branches') continue;
       out[key] = value;
     }
 
     const edges = outgoing(ir.edges, node.id);
     const oldByTarget = readOldConditionsByTarget(node.data);
+    const byHandle = readDataBranches(node.data);
     const hasBranching = edges.some((e) => (e.sourceHandle ?? 'default') !== 'default') || edges.length > 1;
 
     if (hasBranching) {
       out.conditions = edges.map((e): OutCondition => {
+        const handle = e.sourceHandle ?? 'default';
+        // Nguồn sự thật ƯU TIÊN: node.data.branches (editor nhánh có sẵn của canvas
+        // ghi vào đây) -> rồi edge.condition -> rồi field lạ của conditions cũ.
+        const branchInfo = byHandle.get(handle);
         const old = oldByTarget.get(e.target);
-        const match = e.condition ?? old?.match ?? (e.sourceHandle === 'default' ? 'default' : '');
+        const match = branchInfo?.value || e.condition || old?.match || (handle === 'default' ? 'default' : '');
+        // label: CHỈ lấy từ nguồn THẬT (data.branches do người dùng sửa qua editor,
+        // hoặc conditions gốc) — bỏ qua edge.label vì đó là giá trị hiển thị canvas
+        // có fallback (= match/'default'), lấy nhầm sẽ bịa field label khi xuất YAML.
+        const label = branchInfo?.label ?? old?.label;
         const extra = old ? Object.fromEntries(Object.entries(old).filter(([k]) => k !== 'match' && k !== 'next' && k !== 'label')) : {};
         return {
           ...extra,
           match: match || 'default',
           next: e.target,
-          ...(e.label ? { label: e.label } : {}),
+          ...(label ? { label } : {}),
         };
       });
     } else if (edges[0]) {

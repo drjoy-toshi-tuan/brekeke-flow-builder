@@ -1,5 +1,5 @@
 import { parse } from 'yaml';
-import type { FlowIR, FlowNode, FlowEdge, NodeType } from '../types';
+import { EDITABLE_BRANCH_TYPES, type FlowIR, type FlowNode, type FlowEdge, type NodeType } from '../types';
 import { BLOCK_TO_NODE_TYPE, isDesignBlockType } from './blockTypeMap';
 import { KNOWN_TOP_LEVEL_KEYS, type DesignYamlPassthrough } from './types';
 
@@ -66,6 +66,7 @@ export function fromDesignYaml(text: string, meta: { id: string; name: string; f
   const edges: FlowEdge[] = [];
 
   for (const raw of rawSteps) {
+    const nodeType = coerceNodeType(raw.type);
     const data: Record<string, unknown> = { blockType: raw.type };
     for (const [key, value] of Object.entries(raw)) {
       if (!STRUCTURAL_KEYS.has(key)) data[key] = value;
@@ -76,7 +77,7 @@ export function fromDesignYaml(text: string, meta: { id: string; name: string; f
 
     nodes.push({
       id: raw.step,
-      type: coerceNodeType(raw.type),
+      type: nodeType,
       label: raw.step,
       position: { x: 0, y: 0 }, // auto-layout điền lại khi mở (giống fromYaml.ts)
       data,
@@ -92,20 +93,33 @@ export function fromDesignYaml(text: string, meta: { id: string; name: string; f
     }
 
     if (Array.isArray(raw.conditions)) {
+      // data.branches (id/value/label) -> canvas hiển thị ĐÚNG số chấm nối ở đáy
+      // node và dùng được editor nhánh có sẵn (nexus/logic/classifier/…), giống
+      // hệt quy ước fromYaml.ts — không cần xây editor riêng cho 設計書.
+      const editableBranches = EDITABLE_BRANCH_TYPES.includes(nodeType);
+      const dataBranches: { id: string; value: string; label?: string }[] = [];
       raw.conditions.forEach((cond, index) => {
         if (typeof cond.next !== 'string') return;
         const match = typeof cond.match === 'string' ? cond.match : '';
         const isDefault = match === 'default' || match === '';
         const handle = isDefault ? 'default' : `c${index}`;
+        // Label THẬT (chỉ khi 設計書 có field label rõ ràng) — KHÔNG defaut, để
+        // toDesignYaml phân biệt được "chưa từng có label" với "label = match".
+        // Nếu default hoá ở đây, xuất lại sẽ bịa thêm field label không có gốc.
+        const realLabel = typeof cond.label === 'string' ? cond.label : undefined;
+        dataBranches.push({ id: handle, value: match, ...(realLabel ? { label: realLabel } : {}) });
         edges.push({
           id: edgeId(raw.step, cond.next, handle),
           source: raw.step,
           target: cond.next,
           sourceHandle: handle,
           ...(isDefault ? {} : { condition: match }),
-          label: typeof cond.label === 'string' ? cond.label : match || 'default',
+          // edge.label: CHỈ dùng để canvas hiển thị chữ trên dây, không phải nguồn
+          // sự thật khi ghi lại YAML (xem readOldConditionsByTarget/toDesignYaml.ts).
+          label: realLabel ?? match ?? 'default',
         });
       });
+      if (editableBranches && dataBranches.length > 0) data.branches = dataBranches;
     }
   }
 

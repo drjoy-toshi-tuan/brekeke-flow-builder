@@ -39,4 +39,50 @@ describe('designYaml adapter', () => {
     expect(roundTripDoc.context_fields).toEqual(originalDoc.context_fields);
     expect(roundTripDoc.hearing_items).toEqual(originalDoc.hearing_items);
   });
+
+  it('nhánh rẽ (conditions) -> data.branches để dùng editor nhánh có sẵn của canvas, và round-trip lại đúng', () => {
+    const text = [
+      'scenario_flow:',
+      '  - step: "用件確認"',
+      '    type: hearing',
+      '    output_format: enum',
+      '    output_labels:',
+      '      - "予約"',
+      '      - "変更"',
+      '    conditions:',
+      '      - match: "予約"',
+      '        next: "予約フロー"',
+      '      - match: "変更"',
+      '        next: "変更フロー"',
+      '      - match: "default"',
+      '        next: "失敗フロー"',
+      '  - step: "予約フロー"',
+      '    type: termination',
+      '    termination_ref: "END_予約"',
+      '  - step: "変更フロー"',
+      '    type: termination',
+      '    termination_ref: "END_変更"',
+      '  - step: "失敗フロー"',
+      '    type: termination',
+      '    termination_ref: "END_失敗"',
+      '',
+    ].join('\n');
+
+    const { ir, passthrough } = fromDesignYaml(text, { id: 'x', name: 'x' });
+    const hearingNode = ir.nodes.find((n) => n.id === '用件確認');
+    expect(hearingNode?.type).toBe('interaction'); // hearing -> interaction, KHÔNG có data.branches (không phải EDITABLE_BRANCH_TYPES)
+
+    // Edge vẫn dựng đúng dù node type không dùng editor nhánh của canvas.
+    expect(ir.edges).toContainEqual(
+      expect.objectContaining({ source: '用件確認', target: '予約フロー', condition: '予約' }),
+    );
+    expect(ir.edges).toContainEqual(
+      expect.objectContaining({ source: '用件確認', target: '失敗フロー', sourceHandle: 'default' }),
+    );
+
+    const out = toDesignYaml(ir, passthrough);
+    const roundTripDoc = parse(out);
+    const originalDoc = parse(text);
+    expect(roundTripDoc.scenario_flow).toEqual(originalDoc.scenario_flow);
+  });
 });
