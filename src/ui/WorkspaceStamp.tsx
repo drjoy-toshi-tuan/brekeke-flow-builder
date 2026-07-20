@@ -3,7 +3,8 @@ import { useT } from './i18n';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stamp bộ phận đang làm việc — hiện trên header (cạnh menu) để biết đang ở màn
-// nào: CS (tone xanh blue) / TS (tone cam, cùng tone logo #ff8c30). Hiện HẲN cả
+// nào: CS (tone xanh ngọc, cùng tông chip Status ở Announce List) / TS (tone cam,
+// cùng tone logo #ff8c30). Hiện HẲN cả
 // cụm "CS Working Screen"/"TS作業画面" (theo ngôn ngữ). Nền để hơi TRONG (color-mix
 // với transparent) cho dịu mắt, chữ tô đúng màu bộ phận, viền mảnh cùng tông. Font
 // geometric giống logo/wordmark (Space Grotesk; tiếng Nhật dùng Zen Kaku Gothic New).
@@ -13,7 +14,7 @@ export function WorkspaceStamp({ className = '' }: { className?: string }) {
   const mode = useWorkspaceStore((s) => s.mode);
   const t = useT();
   const cs = mode === 'cs';
-  const color = cs ? '#3b82f6' : '#ff8c30';
+  const color = cs ? '#06b6d4' : '#ff8c30';
   const label = cs ? t('workScreenCs') : t('workScreenTs');
   return (
     <span

@@ -298,11 +298,15 @@ function reconfirmOn(data: Record<string, unknown>): boolean {
   return data.reconfirm === 'yes';
 }
 
-// Retry Announce chỉ hiện khi Retry Count khác 0 (chưa nhập -> mặc định 2 -> hiện).
+// Retry Announce chỉ hiện khi Retry Count khác 0 VÀ khác rỗng (xoá trắng ô nhập
+// cũng coi như tắt retry). Chưa từng nhập (undefined) -> mặc định 2 -> hiện.
 // Áp dụng cho MỌI node có cặp Retry Count / Retry Announce (cả màn TS lẫn CS).
-function retryOn(data: Record<string, unknown>): boolean {
+// Export để tab Announce List dùng chung đúng 1 semantics "retry đang bật".
+export function retryOn(data: Record<string, unknown>): boolean {
   const v = data.retryCount;
-  return String(v ?? '').trim() !== '0';
+  if (v == null) return true; // chưa nhập -> áp default 2
+  const s = String(v).trim();
+  return s !== '' && s !== '0';
 }
 
 // ── Template (テンプレート) của node Interaction ──────────────────────────────
@@ -557,6 +561,12 @@ export const PROPERTY_FIELDS: Record<NodeType, PropertyField[]> = {
 //   - Hangup (終話): thêm Status/SMS Flag (option từ tab Status Settings).
 // Loại không khai báo ở đây dùng bộ chuẩn PROPERTY_FIELDS.
 export const CS_PROPERTY_FIELDS: Partial<Record<NodeType, PropertyField[]>> = {
+  // Announce: thêm Status/SMS Flag (option từ tab Status Settings) như Transfer/Hangup.
+  announce: [
+    { key: 'text', labelKey: 'fAnnounce', kind: 'autoText' },
+    { key: 'statusFlag', labelKey: 'fStatusSelect', kind: 'settingsSelect', settingsOptions: 'statuses' },
+    { key: 'smsFlag', labelKey: 'fSmsFlag', kind: 'settingsSelect', settingsOptions: 'smsFlags' },
+  ],
   interaction: [
     { key: 'announce', labelKey: 'fAnnounce', kind: 'autoText' },
     { key: 'inputType', labelKey: 'fInputType', kind: 'select', options: INPUT_TYPE_OPTIONS, default: 'STT' },
@@ -564,6 +574,11 @@ export const CS_PROPERTY_FIELDS: Partial<Record<NodeType, PropertyField[]>> = {
     { key: 'reconfirmAnnounce', labelKey: 'fReconfirmAnnounce', kind: 'autoText', showIf: reconfirmOn },
     { key: 'retryCount', labelKey: 'fRetryCount', kind: 'number', default: '2' },
     { key: 'retryAnnounce', labelKey: 'fRetryAnnounce', kind: 'autoText', showIf: retryOn },
+    // Status/SMS Flag của Hearing dùng CÙNG key với cột 切断時フラグ ở tab Announce
+    // List (hangup*Flag) -> panel và bảng liên động 2 chiều, kế thừa xuôi dòng
+    // (statusFlow.ts) cũng đọc đúng key này.
+    { key: 'hangupStatusFlag', labelKey: 'fStatusSelect', kind: 'settingsSelect', settingsOptions: 'statuses' },
+    { key: 'hangupSmsFlag', labelKey: 'fSmsFlag', kind: 'settingsSelect', settingsOptions: 'smsFlags' },
   ],
   transfer: [
     { key: 'announce', labelKey: 'fAnnounce', kind: 'autoText' },
