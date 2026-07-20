@@ -11,6 +11,9 @@ import {
 import { ensureSettings } from '../ir/settings';
 import { fromYaml } from '../ir/fromYaml';
 import { toYaml } from '../ir/toYaml';
+import { fromDesignYaml } from '../ir/designYaml/fromDesignYaml';
+import { toDesignYaml } from '../ir/designYaml/toDesignYaml';
+import type { DesignYamlPassthrough } from '../ir/designYaml/types';
 import { toDrawio } from '../ir/toDrawio';
 import { layout } from '../ir/layout';
 import { nodeTypeLabel } from '../ui/nodeConfig';
@@ -114,6 +117,15 @@ interface FlowState {
   exportYaml: () => string;
   // Xuất IR hiện tại ra XML Draw.io (mở được bằng diagrams.net) — export màn CS.
   exportDrawio: () => string;
+
+  // Section 設計書 YAML (basic_info/context_fields/termination_patterns/…) không
+  // thuộc về graph — giữ nguyên vẹn ở đây để exportDesignYaml ghi lại không mất
+  // field nào (xem src/ir/designYaml/). null khi file đang mở là YAML thường.
+  designPassthrough: DesignYamlPassthrough | null;
+  // Nạp 設計書 YAML (pipeline gen_flow) -> IR -> auto-layout, rồi set vào store.
+  loadDesignYaml: (text: string, meta: { id: string; name: string; facility?: string }) => Promise<void>;
+  // Xuất IR hiện tại ra 設計書 YAML (round-trip với designPassthrough đã nạp).
+  exportDesignYaml: () => string;
 
   // Cập nhật metadata flow (name/facility/author/createdAt/updatedAt) — dùng khi
   // lưu về repo để đóng dấu 更新日時/作成者. Không ghi vào lịch sử Undo.
@@ -500,6 +512,8 @@ export const useFlowStore = create<FlowState>((set, get) => {
           : ivr;
       set({
         ir: laidOut,
+        // File YAML thường (không phải 設計書 pipeline) -> không còn passthrough cũ.
+        designPassthrough: null,
         selectedNodeId: null,
         draft: null,
         pendingSelect: null,
@@ -528,6 +542,43 @@ export const useFlowStore = create<FlowState>((set, get) => {
       // Xuất TÀI LIỆU đầy đủ (main + sub flow), kể cả khi đang mở 1 sub flow.
       const doc = assembleDoc();
       return doc ? toYaml(doc) : '';
+    },
+
+    designPassthrough: null,
+
+    loadDesignYaml: async (text, meta) => {
+      const { ir: parsed, passthrough } = fromDesignYaml(text, meta);
+      // 設計書 không lưu toạ độ -> luôn auto-layout khi mở (khác loadYaml, file
+      // FlowIR thường đã có position từ lần lưu trước).
+      const laidOut = parsed.nodes.length > 0 ? await layout(parsed) : parsed;
+      const { ivr } = get();
+      const nextIvr =
+        !ivr.facilityName && laidOut.meta.facility
+          ? { ...ivr, facilityName: laidOut.meta.facility }
+          : ivr;
+      set({
+        ir: laidOut,
+        designPassthrough: passthrough,
+        selectedNodeId: null,
+        draft: null,
+        pendingSelect: null,
+        pendingDelete: null,
+        activeFlowId: 'main',
+        mainStash: null,
+        canvasPanel: null,
+        canvasTab: 'flow',
+        past: [],
+        future: [],
+        ivr: nextIvr,
+        ivrCreatedAt: formatDateTime(new Date()),
+      });
+    },
+
+    exportDesignYaml: () => {
+      // 設計書 không có khái niệm sub flow riêng (khác FlowIR) — chỉ xuất graph
+      // đang mở (main flow); designPassthrough giữ mọi section khác nguyên vẹn.
+      const { ir, designPassthrough } = get();
+      return ir ? toDesignYaml(ir, designPassthrough ?? {}) : '';
     },
 
     exportDrawio: () => {

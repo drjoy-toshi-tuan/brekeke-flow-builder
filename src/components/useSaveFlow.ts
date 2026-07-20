@@ -10,15 +10,20 @@ import { useT } from '../ui/i18n';
 import { useToast } from '../ui/toast';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Hook lưu flow hiện tại (export IR -> YAML) về Google Drive: ghi đè nội dung
-// file version đang mở — 更新日時 (modifiedTime) tự nhảy; tạo version MỚI là
-// thao tác riêng ở màn quản lý.
+// Hook lưu flow hiện tại (export IR -> YAML) — 2 nguồn tuỳ currentFile.source:
+//   - 'drive'         : ghi đè nội dung file version đang mở trên Google Drive
+//                       (như trước). 更新日時 (modifiedTime) tự nhảy.
+//   - 'local-design'  : ghi đè TRỰC TIẾP file 設計書 YAML trên đĩa qua File System
+//                       Access API (handle mở từ LocalDesignImportButton). Trình
+//                       duyệt không hỗ trợ (handle=null) -> canSave=false, người
+//                       dùng tự export rồi ghi đè thủ công (chưa làm UI export tay).
 // Dùng chung cho HeaderMenu (nút Lưu + Ctrl/⌘+Shift+S) và FlowsPanel.
 // Mỗi component gọi hook có state saving/savedAt/saveError riêng — độc lập nhau.
 // ─────────────────────────────────────────────────────────────────────────────
 export function useSaveFlow() {
   const ir = useFlowStore((s) => s.ir);
   const exportYaml = useFlowStore((s) => s.exportYaml);
+  const exportDesignYaml = useFlowStore((s) => s.exportDesignYaml);
   const setMeta = useFlowStore((s) => s.setMeta);
   const currentFile = useFileStore((s) => s.current);
   const driveTokenState = useDriveToken();
@@ -33,12 +38,44 @@ export function useSaveFlow() {
 
   const driveToken = validDriveToken(driveTokenState);
 
-  // Có đủ điều kiện để lưu (đã mở file + có token Drive còn hạn + có IR).
-  const canSave = !!(ir && currentFile && driveToken);
+  // Có đủ điều kiện để lưu: Drive cần token còn hạn; local-design cần có handle
+  // (trình duyệt hỗ trợ File System Access API và đã mở qua picker, không phải
+  // fallback <input type=file>).
+  const canSave = !!(
+    ir &&
+    currentFile &&
+    (currentFile.source === 'local-design' ? currentFile.handle : driveToken)
+  );
 
   // Trả về true khi lưu thành công (nút điều hướng dựa vào đây để đi tiếp/ở lại).
   const saveToRepo = async (): Promise<boolean> => {
     if (!currentFile || saving) return false;
+
+    if (currentFile.source === 'local-design') {
+      const handle = currentFile.handle;
+      if (!handle) {
+        setSaveError('gdErrAuth'); // chưa có key riêng — tái dùng thông báo "không lưu được"
+        return false;
+      }
+      setSaving(true);
+      setSaveError(null);
+      try {
+        const yaml = exportDesignYaml();
+        const writable = await handle.createWritable();
+        await writable.write(yaml);
+        await writable.close();
+        const now = formatDateTime(new Date());
+        setSavedAt(now);
+        showToast(t('fmSaved'));
+        return true;
+      } catch {
+        setSaveError('gdErrAuth');
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    }
+
     if (!driveToken) {
       // Token Drive hết hạn/chưa có — báo lỗi thay vì im lặng.
       setSaveError('gdErrAuth');

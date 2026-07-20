@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FileManagerMenu } from './FileManagerMenu';
+import { LocalDesignImportButton } from './LocalDesignImportButton';
 import { DriveConnectPanel } from './DriveConnectPanel';
 import { buildBlankFlow, FlowStructureBadge, isValidFlowYaml } from './flowShared';
 import { useT, type TKey } from '../ui/i18n';
@@ -345,7 +346,10 @@ function DriveReal() {
       <div className="relative flex h-full flex-col bg-[var(--bk-bg)]">
         <header className="flex items-center justify-between border-b border-[var(--bk-border)] bg-[var(--bk-surface)] px-4 py-2.5">
           <BrandLockup logoClass="h-8 w-8" textClass="text-xl" />
-          <FileManagerMenu />
+          <div className="flex items-center gap-3">
+            <LocalDesignImportButton />
+            <FileManagerMenu />
+          </div>
         </header>
         <div className="relative flex flex-1 items-center justify-center overflow-hidden p-6">
           <div
@@ -664,6 +668,7 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
       const text = await getFileText(token, ver.fileId);
       await loadYaml(text);
       openFile({
+        source: 'drive',
         path: `${f.name}/${s.name}`,
         name: versionFileName(s.name, ver.v),
         driveFileId: ver.fileId,
@@ -761,6 +766,7 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
       );
       await loadYaml(content);
       openFile({
+        source: 'drive',
         path: `${facility}/${scenario}`,
         name: file.name,
         driveFileId: file.id,
@@ -1258,6 +1264,7 @@ function DriveInner({
       <header className="flex items-center justify-between border-b border-[var(--bk-border)] bg-[var(--bk-surface)] px-4 py-2.5">
         <BrandLockup logoClass="h-8 w-8" textClass="text-xl" />
         <div className="flex items-center gap-3">
+          <LocalDesignImportButton />
           <WorkspaceStamp />
           {/* Owner mới có mục "Quản lý quyền" + bộ chuyển màn CS/TS trong menu */}
           <FileManagerMenu
