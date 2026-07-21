@@ -96,7 +96,7 @@ export function FlowsPanel() {
         onClick={(e) => {
           if (e.detail === 0) setOpen(!open);
         }}
-        className={`flex h-8 w-8 items-center justify-center rounded-lg transition hover:bg-[var(--bk-surface-2)] ${
+        className={`flex h-6 w-6 items-center justify-center rounded-md transition hover:bg-[var(--bk-surface-2)] ${
           open ? 'text-[var(--bk-accent)]' : 'text-[var(--bk-text-muted)] hover:text-[var(--bk-accent)]'
         }`}
         aria-expanded={open}
@@ -104,11 +104,11 @@ export function FlowsPanel() {
         aria-label={t('openFlowSettings')}
         title={t('openFlowSettings')}
       >
-        {/* Mũi tên (mặc định hướng trái) — mở panel thì xoay xuống dưới. */}
+        {/* Chevron (mặc định hướng trái) — mở panel thì xoay xuống dưới. */}
         <Icon
-          icon="iconamoon:arrow-left-6-circle"
-          width={22}
-          height={22}
+          icon="system-uicons:chevron-left-circle"
+          width={19}
+          height={19}
           className={`transition-transform duration-200 ${open ? '-rotate-90' : ''}`}
         />
       </button>

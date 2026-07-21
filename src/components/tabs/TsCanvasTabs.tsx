@@ -20,17 +20,16 @@ export function TsCanvasTabs() {
 
   return (
     <div className="flex items-end gap-1 border-b border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-3 pt-1.5">
-      {/* Tab Flow Designer — luôn active (chưa có tab thứ 2). */}
-      <div className="-mb-px flex items-center rounded-t-lg border border-b-0 border-[var(--bk-border)] bg-[var(--bk-canvas)] text-[12.5px] font-semibold text-[var(--bk-accent)]">
-        <span className="flex items-center gap-2 py-2 pl-4 pr-4" aria-current="page">
-          <Icon icon="lucide:git-fork" width={14} height={14} />
-          <span>{t('tabFlowDesigner')}</span>
-        </span>
-      </div>
-
-      {/* Logo main/sub flow + nút mở panel flow settings — ngang hàng với tab. */}
-      <div className="mb-1 flex items-center gap-1.5 self-end pl-1">
-        <FlowGlyph isMain={isMain} size={18} />
+      {/* Tab Flow Designer — luôn active (chưa có tab thứ 2). Logo Main/Sub Flow +
+          nút mở panel flow settings nằm NGAY TRONG tab. */}
+      <div
+        className="-mb-px flex items-center gap-2 rounded-t-lg border border-b-0 border-[var(--bk-border)] bg-[var(--bk-canvas)] py-1.5 pl-3 pr-2 text-[12.5px] font-semibold text-[var(--bk-accent)]"
+        aria-current="page"
+      >
+        <Icon icon="hugeicons:workflow-square-05" width={15} height={15} />
+        <span>{t('tabFlowDesigner')}</span>
+        <span aria-hidden className="h-4 w-px bg-[var(--bk-border)]" />
+        <FlowGlyph isMain={isMain} size={16} />
         <FlowsPanel />
       </div>
 
