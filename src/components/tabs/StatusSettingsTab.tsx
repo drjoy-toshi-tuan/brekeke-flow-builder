@@ -466,43 +466,27 @@ function AuthPrioritySelect({ value, onChange }: { value: AuthPriority; onChange
   );
 }
 
-// Pulldown 確認画面表示: yes/no bằng icon (line-md:circle-to-confirm... / close-circle).
+// 確認画面表示: NÚT BẤM toggle yes<->no bằng icon (không còn pulldown).
+//   yes → line-md:circle-filled-to-confirm-circle-filled-transition (xanh lá)
+//   no  → line-md:minus-circle-filled (đỏ nhẹ)
 function DisplaySelect({ value, onChange }: { value: 'yes' | 'no'; onChange: (v: 'yes' | 'no') => void }) {
-  const opt = (v: 'yes' | 'no') =>
-    v === 'yes'
-      ? { icon: 'line-md:circle-to-confirm-circle-transition', cls: 'text-emerald-500', label: 'YES' }
-      : { icon: 'line-md:close-circle', cls: 'text-rose-500', label: 'NO' };
-  const face = opt(value);
+  const face =
+    value === 'yes'
+      ? { icon: 'line-md:circle-filled-to-confirm-circle-filled-transition', cls: 'text-emerald-500', label: 'YES' }
+      : { icon: 'line-md:minus-circle-filled', cls: 'text-rose-400', label: 'NO' };
   return (
-    <MiniDropdown trigger={() => (
-      <span className={`inline-flex items-center gap-1.5 text-sm font-semibold ${face.cls}`}>
-        <Icon icon={face.icon} width={18} height={18} />
+    <div className="flex justify-center">
+      <button
+        type="button"
+        onClick={() => onChange(value === 'yes' ? 'no' : 'yes')}
+        aria-label={face.label}
+        title={face.label}
+        className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition hover:bg-[var(--bk-surface-2)] ${face.cls}`}
+      >
+        {/* key theo value để icon re-mount, chạy lại animation vẽ nét khi toggle */}
+        <Icon key={value} icon={face.icon} width={20} height={20} />
         {face.label}
-      </span>
-    )}>
-      {(close) => (
-        <>
-          {(['yes', 'no'] as const).map((v) => {
-            const o = opt(v);
-            return (
-              <button
-                key={v}
-                type="button"
-                onClick={() => {
-                  onChange(v);
-                  close();
-                }}
-                className={`flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm font-semibold transition hover:bg-[var(--bk-surface-2)] ${o.cls} ${
-                  v === value ? 'bg-[var(--bk-accent-soft)]' : ''
-                }`}
-              >
-                <Icon icon={o.icon} width={18} height={18} />
-                {o.label}
-              </button>
-            );
-          })}
-        </>
-      )}
-    </MiniDropdown>
+      </button>
+    </div>
   );
 }
