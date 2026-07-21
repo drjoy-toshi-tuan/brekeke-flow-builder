@@ -68,6 +68,19 @@ export function StatusSettingsTab() {
     return [...byFlow].sort((a, b) => authRank(a.label) - authRank(b.label));
   }, [ir]);
 
+  // Ưu tiên xác thực 1/2/3 là UNIQUE trên toàn flow: mỗi mức chỉ 1 node giữ. Khi gán
+  // 1 mức cho node này, node khác đang giữ đúng mức đó bị đưa về 'none' (không xác thực).
+  const setAuthPriority = (nodeId: string, v: AuthPriority) => {
+    if (v !== 'none') {
+      for (const n of authNodes) {
+        if (n.id !== nodeId && ((n.data.smsAuthPriority as AuthPriority) ?? 'none') === v) {
+          setNodeData(n.id, { smsAuthPriority: 'none' });
+        }
+      }
+    }
+    setNodeData(nodeId, { smsAuthPriority: v });
+  };
+
   const setStatuses = (statuses: StatusEntry[]) => setSettings({ statuses });
   const setSmsFlags = (smsFlags: SmsFlagEntry[]) => setSettings({ smsFlags });
 
@@ -338,7 +351,7 @@ export function StatusSettingsTab() {
                       <td className="px-2 py-1.5">
                         <AuthPrioritySelect
                           value={priority}
-                          onChange={(v) => setNodeData(node.id, { smsAuthPriority: v })}
+                          onChange={(v) => setAuthPriority(node.id, v)}
                         />
                       </td>
                       <td className="px-2 py-1.5">
