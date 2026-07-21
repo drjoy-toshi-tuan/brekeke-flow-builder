@@ -85,6 +85,15 @@ addCollection({
     'close-small': {
       body: '<g fill="none" stroke="currentColor" stroke-dasharray="18" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M7 7l10 10"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.5s" values="18;0"/></path><path stroke-dashoffset="18" d="M17 7l-10 10"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.5s" dur="0.5s" to="0"/></path></g>',
     },
+    // Vòng tròn + dấu X (DISPLAY = no ở block SMS認証設定) — body chính chủ line-md:close-circle.
+    'close-circle': {
+      body: '<g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="60" d="M3 12c0 -4.97 4.03 -9 9 -9c4.97 0 9 4.03 9 9c0 4.97 -4.03 9 -9 9c-4.97 0 -9 -4.03 -9 -9Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="60;0"/></path><path stroke-dasharray="8" stroke-dashoffset="8" d="M12 12l4 4M12 12l-4 -4M12 12l-4 4M12 12l4 -4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.6s" dur="0.2s" to="0"/></path></g>',
+    },
+    // Vòng tròn + dấu check (DISPLAY = yes ở block SMS認証設定) — body chính chủ
+    // line-md:circle-to-confirm-circle-transition.
+    'circle-to-confirm-circle-transition': {
+      body: '<g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M3 12c0 -4.97 4.03 -9 9 -9c4.97 0 9 4.03 9 9c0 4.97 -4.03 9 -9 9c-4.97 0 -9 -4.03 -9 -9Z"/><path stroke-dasharray="14" d="M8 12l3 3l5 -5"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.2s" values="14;0"/></path></g>',
+    },
   },
 });
 
