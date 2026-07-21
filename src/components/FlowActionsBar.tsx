@@ -16,10 +16,12 @@ import { useSaveFlow } from './useSaveFlow';
 // Export: màn CS mở modal chọn YAML / XML Draw.io; màn TS tải YAML luôn.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Nút icon vuông, kích thước dễ bấm, không viền: icon màu cam (accent), hover hiện
-// nền xám giống mục trong panel menu (bk-menu-item).
+// Nút icon vuông, kích thước dễ bấm, không viền: icon màu cam (accent) ngay từ đầu.
+// Hover: nền phủ mix từ --bk-text (KHÔNG dùng --bk-surface-2 — trùng đúng màu nền
+// thanh bar nên vô hình ở cả 2 theme); icon sáng lên (brightness) + nút nảy nhẹ lên
+// trên, đồng bộ hiệu ứng nút xác nhận tạo/đổi tên sub flow (FlowsPanel).
 const ACTION_BTN =
-  'flex h-9 w-9 items-center justify-center rounded-lg text-[var(--bk-accent)] transition hover:bg-[var(--bk-surface-2)] disabled:pointer-events-none disabled:opacity-40';
+  'flex h-9 w-9 items-center justify-center rounded-lg text-[var(--bk-accent)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[color-mix(in_srgb,var(--bk-text)_12%,transparent)] hover:brightness-110 active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-40';
 
 export function FlowActionsBar() {
   const ir = useFlowStore((s) => s.ir);
