@@ -334,7 +334,7 @@ export function AnnounceListTab() {
                         <span className="relative inline-flex items-center justify-center">
                           {roundToggle(node, 'reconfirm', { tone: 'amber', icon: 'line-md:check-all' })}
                           {node.data.reconfirm === 'yes' && (
-                            <span className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2">
+                            <span className="absolute inset-y-0 left-full ml-1.5 flex items-center">
                               <RrHint kind="reconfirm" text={str(node.data.reconfirmAnnounce)} />
                             </span>
                           )}
@@ -360,7 +360,7 @@ export function AnnounceListTab() {
                             ))}
                           </select>
                           {retryOn(node.data) && (
-                            <span className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2">
+                            <span className="absolute inset-y-0 left-full ml-1.5 flex items-center">
                               <RrHint kind="retry" text={str(node.data.retryAnnounce)} />
                             </span>
                           )}
