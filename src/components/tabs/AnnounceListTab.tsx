@@ -111,28 +111,31 @@ export function AnnounceListTab() {
         text: str(n.data.reconfirmAnnounce),
       }));
 
-    // Retry — chia catch-all vs đã tách riêng.
+    // Retry — 1 catch-all DUY NHẤT (mọi node retry chưa tách riêng, không gộp theo
+    // câu) + các node đã tách riêng (retryBreakout) mỗi node 1 dòng.
     const retryNodes = interactions.filter((n) => retryOn(n.data));
     const brokenOut = retryNodes.filter((n) => n.data.retryBreakout === true);
     const catchAllNodes = retryNodes.filter((n) => n.data.retryBreakout !== true);
 
-    // Catch-all: gộp theo câu announce.
-    const catchAllBuckets = new Map<string, RrRow>();
-    for (const n of catchAllNodes) {
-      const text = str(n.data.retryAnnounce);
-      const row = catchAllBuckets.get(text);
-      if (row) row.nodes.push(n);
-      else catchAllBuckets.set(text, { key: `retry-ca:${text}`, kind: 'retry', nodes: [n], text, catchAll: true });
+    const retryRows: RrRow[] = [];
+    if (catchAllNodes.length > 0) {
+      // Text hiển thị = câu của node đầu; sửa 1 lần áp cho MỌI node trong catch-all.
+      retryRows.push({
+        key: 'retry-catchall',
+        kind: 'retry',
+        nodes: catchAllNodes,
+        text: str(catchAllNodes[0].data.retryAnnounce),
+        catchAll: true,
+      });
     }
-    const retryRows: RrRow[] = [
-      ...catchAllBuckets.values(),
+    retryRows.push(
       ...brokenOut.map((n) => ({
         key: `retry:${n.id}`,
         kind: 'retry' as const,
         nodes: [n],
         text: str(n.data.retryAnnounce),
       })),
-    ];
+    );
 
     return [...reconfirmRows, ...retryRows];
   }, [ir]);
@@ -175,27 +178,25 @@ export function AnnounceListTab() {
     }
   };
 
-  // Toggle TRÒN kiểu button (復唱 / FAQ) — border nét (border-2), icon theo yêu cầu:
-  // 復唱 dùng line-md:check-all tone amber (đồng bộ màu chip/stamp Re-confirm);
-  // FAQ dùng line-md:confirm tone emerald (giữ màu cũ).
+  // Toggle TRÒN nhỏ (復唱 / FAQ):
+  //  - TẮT: vòng tròn rỗng + ー, viền đậm hơn cho dễ nhìn.
+  //  - BẬT: tô đặc màu + icon, KHÔNG viền. 復唱 dùng line-md:check-all tone amber
+  //    (đồng bộ chip/stamp Re-confirm); FAQ dùng line-md:confirm tone emerald.
   const roundToggle = (node: FlowNode, key: string, opts: { tone: 'amber' | 'emerald'; icon: string }) => {
     const on = node.data[key] === 'yes';
-    const onClass =
-      opts.tone === 'amber'
-        ? 'border-amber-500 bg-amber-400 text-white shadow-sm dark:border-amber-400 dark:bg-amber-400'
-        : 'border-emerald-500 bg-emerald-500 text-white shadow-sm dark:border-emerald-500 dark:bg-emerald-500';
+    const onClass = opts.tone === 'amber' ? 'bg-amber-400 text-white' : 'bg-emerald-500 text-white';
     return (
       <button
         type="button"
         onClick={() => setNodeData(node.id, { [key]: on ? 'no' : 'yes' })}
         aria-pressed={on}
-        className={`inline-flex h-8 w-8 items-center justify-center rounded-full border-2 transition ${
+        className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs transition ${
           on
             ? onClass
-            : 'border-[var(--bk-border)] text-[var(--bk-text-faint)] hover:border-[var(--bk-text-muted)] hover:text-[var(--bk-text)]'
+            : 'border border-[color-mix(in_srgb,var(--bk-text)_38%,transparent)] text-[var(--bk-text-muted)] hover:border-[var(--bk-text)] hover:text-[var(--bk-text)]'
         }`}
       >
-        <Icon icon={opts.icon} width={16} height={16} />
+        {on ? <Icon icon={opts.icon} width={13} height={13} /> : 'ー'}
       </button>
     );
   };
@@ -456,11 +457,6 @@ export function AnnounceListTab() {
                           <Icon icon={cfg.icon} width={13} height={13} />
                         </span>
                         <span className="font-semibold text-[var(--bk-text)]">{t(cfg.typeKey)}</span>
-                        {row.catchAll && (
-                          <span className="rounded-full bg-[color-mix(in_srgb,var(--bk-text)_10%,transparent)] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-[var(--bk-text-muted)]">
-                            {t('alCatchAll')}
-                          </span>
-                        )}
                       </div>
                     </td>
                     {/* 項目: tên node — chip tự wrap nhiều dòng. */}
