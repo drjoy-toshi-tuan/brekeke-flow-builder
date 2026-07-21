@@ -11,6 +11,7 @@ import { Toolbar } from './components/Toolbar';
 import { NodeSettingsPanel } from './components/NodeSettingsPanel';
 import { ConfirmDeleteModal } from './components/ConfirmDeleteModal';
 import { CanvasTabs } from './components/tabs/CanvasTabs';
+import { TsCanvasTabs } from './components/tabs/TsCanvasTabs';
 import { AnnounceListTab } from './components/tabs/AnnounceListTab';
 import { GeneralSettingsTab } from './components/tabs/GeneralSettingsTab';
 import { StatusSettingsTab } from './components/tabs/StatusSettingsTab';
@@ -58,7 +59,7 @@ function FlowApp() {
   return (
     <div className="flex h-full flex-col">
       <Toolbar />
-      {csMode && <CanvasTabs />}
+      {csMode ? <CanvasTabs /> : <TsCanvasTabs />}
       <main className="relative flex-1 overflow-hidden">
         {showCanvas && (
           <ReactFlowProvider>

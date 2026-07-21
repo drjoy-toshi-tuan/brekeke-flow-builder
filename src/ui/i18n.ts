@@ -388,6 +388,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     ctAnnounce: 'Announce List',
     ctGeneral: 'General Settings',
     ctStatus: 'Status Settings',
+    // ── Dải tab màn TS ──
+    tabFlowDesigner: 'Flow Designer',
+    openFlowSettings: 'Cài đặt flow',
     // ── Tab Announce List ──
     alColItem: 'Mục',
     alColReconfirm: 'Re-confirm',
@@ -894,6 +897,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     ctAnnounce: 'アナウンス一覧',
     ctGeneral: '基本設定',
     ctStatus: '通話状態設定',
+    // ── Dải tab màn TS ──
+    tabFlowDesigner: 'フローデザイナー',
+    openFlowSettings: 'フロー設定',
     // ── Tab Announce List ──
     alColItem: '聴取項目',
     alColReconfirm: '復唱',
