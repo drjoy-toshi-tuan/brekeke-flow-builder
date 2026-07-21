@@ -3,6 +3,7 @@ import { useFlowStore, type CanvasTab } from '../../store/flowStore';
 import { ensureSettings } from '../../ir/settings';
 import { Icon } from '../../ui/icons';
 import { useT, type TKey } from '../../ui/i18n';
+import { FlowActionsBar } from '../FlowActionsBar';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Dải tab của màn canvas (ngay dưới header) — kiểu tab browser/Google Sheets.
@@ -15,7 +16,7 @@ import { useT, type TKey } from '../../ui/i18n';
 const TABS: { id: CanvasTab; labelKey: TKey; icon: string }[] = [
   { id: 'flow', labelKey: 'ctFlow', icon: 'lucide:git-fork' },
   { id: 'announce', labelKey: 'ctAnnounce', icon: 'lucide:volume-2' },
-  { id: 'general', labelKey: 'ctGeneral', icon: 'lucide:layout-dashboard' },
+  { id: 'general', labelKey: 'ctGeneral', icon: 'ci:settings' },
   { id: 'status', labelKey: 'ctStatus', icon: 'gravity-ui:flag' },
 ];
 
@@ -124,9 +125,10 @@ export function CanvasTabs() {
 
       {/* Nút thêm trang (plus-circle-filled) -> menu chỉ liệt kê trang CHƯA tạo.
           Đã tạo đủ cả 2 trang -> ẩn hẳn nút "+"; xoá bớt 1 trang thì "+" hiện lại.
-          self-center: căn giữa theo trục dọc của dải tab (không dính đáy như tab). */}
+          self-end + mb-1: hạ xuống ngang hàng với các tab (trước đây self-center bị
+          lệch lên trên vì tab dính đáy). */}
       {addablePages.length > 0 && (
-        <div className="relative mb-1 self-center" ref={menuRef}>
+        <div className="relative mb-1 self-end" ref={menuRef}>
           <button
             type="button"
             onClick={() => setMenuOpen((v) => !v)}
@@ -160,6 +162,11 @@ export function CanvasTabs() {
           )}
         </div>
       )}
+
+      {/* Cụm thao tác flow (Auto Layout · Lưu · Export) — góc phải ngoài cùng. */}
+      <div className="mb-1 ml-auto self-end">
+        <FlowActionsBar />
+      </div>
 
       {/* Modal xác nhận xoá trang bảng phụ (thay cho one-click). */}
       {pendingRemove && (

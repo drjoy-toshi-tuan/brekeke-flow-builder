@@ -945,9 +945,9 @@ function DriveInner({
 
   // Modal tạo flow mới (chọn/tạo folder như modal import) / xác nhận xoá / đổi tên folder.
   const [showNew, setShowNew] = useState(false);
-  const [newFacSel, setNewFacSel] = useState<string>(NEW_OPTION);
+  const [newFacSel, setNewFacSel] = useState<string>('');
   const [newFacName, setNewFacName] = useState('');
-  const [newScenSel, setNewScenSel] = useState<string>(NEW_OPTION);
+  const [newScenSel, setNewScenSel] = useState<string>('');
   const [newScenName, setNewScenName] = useState('');
   const [createErrorKey, setCreateErrorKey] = useState<TKey | null>(null);
   // Môi trường chọn ở modal tạo mới / import (chỉ màn CS). Mặc định 本番 (master).
@@ -990,9 +990,9 @@ function DriveInner({
   // ── Import: đọc file YAML -> modal chọn/tạo folder bệnh viện + kịch bản ──
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importContent, setImportContent] = useState<string | null>(null); // != null -> modal mở
-  const [impFacSel, setImpFacSel] = useState<string>(NEW_OPTION); // id folder hoặc NEW_OPTION
+  const [impFacSel, setImpFacSel] = useState<string>(''); // id folder hoặc NEW_OPTION
   const [impFacName, setImpFacName] = useState('');
-  const [impScenSel, setImpScenSel] = useState<string>(NEW_OPTION);
+  const [impScenSel, setImpScenSel] = useState<string>('');
   const [impScenName, setImpScenName] = useState('');
   const [impEnv, setImpEnv] = useState<EnvKind>('master');
   const [importErrorKey, setImportErrorKey] = useState<TKey | null>(null);
@@ -1030,11 +1030,13 @@ function DriveInner({
     const meta = parseFlowMeta(content);
     const metaFac = facilities.find((f) => f.name === meta.facility) ?? null;
     const fac = facility ?? metaFac;
-    setImpFacSel(fac?.id ?? NEW_OPTION);
+    // Khớp folder có sẵn -> chọn luôn; không khớp -> để TRỐNG (chế độ chọn/lọc), tên
+    // trong metadata giữ sẵn ở ô tạo mới để prefill nếu người dùng bấm "Tạo mới".
+    setImpFacSel(fac?.id ?? '');
     setImpFacName(meta.facility ?? '');
     const metaScen = fac?.scenarios.find((s) => s.name === meta.name) ?? null;
     const presetScen = scenario ?? metaScen;
-    setImpScenSel(presetScen?.id ?? NEW_OPTION);
+    setImpScenSel(presetScen?.id ?? '');
     setImpScenName(meta.name ?? '');
     setImpEnv('master');
     setImportErrorKey(null);
@@ -1065,11 +1067,18 @@ function DriveInner({
   const newFacility = newFacSel === NEW_OPTION ? null : facilities.find((f) => f.id === newFacSel) ?? null;
 
   const openNewModal = () => {
+    // Tầng flow / file thiết kế (đã ở TRONG bệnh viện + kịch bản): tạo file MỚI luôn,
+    // KHÔNG mở modal chọn folder nữa (đích đến đã rõ). CS còn cần chọn môi trường
+    // thì vẫn mở modal.
+    if (facility && scenario && !(csMode && CS_SHOW_ENVIRONMENT)) {
+      actions.onCreateFlow?.(facility.name, scenario.name, undefined);
+      return;
+    }
     setCreateErrorKey(null);
-    // Đang đứng trong bệnh viện/kịch bản -> prefill đúng vị trí; ngoài ra về chế độ "tạo mới".
-    setNewFacSel(facility?.id ?? NEW_OPTION);
+    // Đang đứng trong bệnh viện -> prefill; ngoài ra để TRỐNG (chế độ chọn/lọc folder).
+    setNewFacSel(facility?.id ?? '');
     setNewFacName('');
-    setNewScenSel(scenario?.id ?? NEW_OPTION);
+    setNewScenSel(scenario?.id ?? '');
     setNewScenName('');
     setNewEnv('master');
     setShowNew(true);
@@ -1881,8 +1890,8 @@ function DriveInner({
                 selected={newFacSel}
                 onSelect={(id) => {
                   setNewFacSel(id);
-                  // Đổi bệnh viện -> danh sách kịch bản đổi theo, về chế độ "tạo mới".
-                  setNewScenSel(NEW_OPTION);
+                  // Đổi bệnh viện -> danh sách kịch bản đổi theo, về chế độ chọn/lọc.
+                  setNewScenSel('');
                 }}
                 name={newFacName}
                 onNameChange={setNewFacName}
@@ -1974,8 +1983,8 @@ function DriveInner({
                 selected={impFacSel}
                 onSelect={(id) => {
                   setImpFacSel(id);
-                  // Đổi bệnh viện -> danh sách kịch bản đổi theo, về chế độ "tạo mới".
-                  setImpScenSel(NEW_OPTION);
+                  // Đổi bệnh viện -> danh sách kịch bản đổi theo, về chế độ chọn/lọc.
+                  setImpScenSel('');
                 }}
                 name={impFacName}
                 onNameChange={setImpFacName}
@@ -2325,8 +2334,24 @@ function PickOrCreateField({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
+  // Chữ đang gõ để LỌC folder (chỉ ở chế độ chọn). Rỗng -> hiện toàn bộ.
+  const [filter, setFilter] = useState('');
+  const wrapRef = useRef<HTMLDivElement>(null);
+  // Click ra ngoài -> đóng list (thay cho lớp phủ full màn: lớp phủ + z-index từng
+  // gây "bóng ma" icon của field bên dưới đè lên dropdown).
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setFilter('');
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
 
-  // ── Chế độ TẠO MỚI: textbox nhập tên (icon + bên trái, ✕ để quay lại pulldown) ──
+  // ── Chế độ TẠO MỚI: textbox nhập tên (icon + bên trái, ✕ để quay lại chọn/lọc) ──
   if (selected === NEW_OPTION) {
     return (
       <div className={`relative ${className}`}>
@@ -2341,79 +2366,99 @@ function PickOrCreateField({
             if (e.key === 'Enter') onEnter?.();
           }}
           placeholder={placeholder}
-          className={`${FIELD_CLS} pl-9 ${options.length ? 'pr-9' : ''}`}
+          className={`${FIELD_CLS} pl-9 pr-9`}
         />
-        {options.length > 0 && (
-          <button
-            type="button"
-            onClick={() => onSelect(options[0].id)}
-            title={backLabel}
-            aria-label={backLabel}
-            className="absolute right-1.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-[var(--bk-text-faint)] transition hover:bg-[var(--bk-surface-2)] hover:text-[var(--bk-text)]"
-          >
-            <Icon icon="lucide:x" width={14} height={14} />
-          </button>
-        )}
+        {/* ✕ quay lại chế độ chọn/lọc folder (bỏ trạng thái "tạo mới"). */}
+        <button
+          type="button"
+          onClick={() => onSelect('')}
+          title={backLabel}
+          aria-label={backLabel}
+          className="absolute right-1.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-[var(--bk-text-faint)] transition hover:bg-[var(--bk-surface-2)] hover:text-[var(--bk-text)]"
+        >
+          <Icon icon="lucide:x" width={14} height={14} />
+        </button>
       </div>
     );
   }
 
-  // ── Chế độ CHỌN: pulldown custom (mục "Tạo mới…" luôn ở trên cùng) ──
+  // ── Chế độ CHỌN/LỌC: gõ text để lọc folder; mục "Tạo mới…" luôn ở trên cùng ──
   const current = options.find((o) => o.id === selected) ?? null;
+  const q = normalizeSearch(filter);
+  const filtered = q ? options.filter((o) => normalizeSearch(o.name).includes(q)) : options;
+
+  const closeList = () => {
+    setOpen(false);
+    setFilter('');
+  };
+  const pick = (id: string) => {
+    onSelect(id);
+    closeList();
+  };
+  // Bấm "Tạo mới": prefill tên đang gõ (nếu có) để khỏi gõ lại.
+  const chooseCreate = () => {
+    if (filter.trim()) onNameChange(filter.trim());
+    closeList();
+    onSelect(NEW_OPTION);
+  };
+
   return (
-    <div className={`relative ${className}`}>
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        className={`${FIELD_CLS} flex cursor-pointer items-center justify-between gap-2 text-left`}
-      >
-        <span className="flex min-w-0 items-center gap-2">
-          <Icon icon={optionIcon} width={15} height={15} className="shrink-0 text-[var(--bk-accent)]" />
-          <span className="truncate">{current?.name ?? ''}</span>
-        </span>
-        <Icon
-          icon="lucide:chevron-down"
-          width={14}
-          height={14}
-          className={`shrink-0 text-[var(--bk-text-muted)] transition ${open ? 'rotate-180' : ''}`}
-        />
-      </button>
+    <div className={`relative ${open ? 'z-20 ' : ''}${className}`} ref={wrapRef}>
+      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--bk-accent)]">
+        <Icon icon={optionIcon} width={15} height={15} />
+      </span>
+      <input
+        value={open ? filter : current?.name ?? ''}
+        onFocus={() => {
+          setFilter('');
+          setOpen(true);
+        }}
+        onChange={(e) => {
+          setFilter(e.target.value);
+          if (!open) setOpen(true);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            // Có kết quả lọc -> chọn folder đầu tiên; không có -> chuyển tiếp (tạo/confirm).
+            if (filtered.length) pick(filtered[0].id);
+            else onEnter?.();
+          }
+          if (e.key === 'Escape') closeList();
+        }}
+        placeholder={current ? current.name : placeholder}
+        className={`${FIELD_CLS} pl-9 pr-9`}
+      />
+      <Icon
+        icon="lucide:chevron-down"
+        width={14}
+        height={14}
+        className={`pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[var(--bk-text-muted)] transition ${open ? 'rotate-180' : ''}`}
+      />
       {open && (
-        <>
-          {/* Lớp phủ trong suốt để click ra ngoài là đóng list */}
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute inset-x-0 top-full z-20 mt-1 max-h-56 overflow-auto rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface)] py-1 shadow-lg">
+        <div className="absolute inset-x-0 top-full z-10 mt-1 max-h-56 overflow-auto rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface)] py-1 shadow-lg">
+          <button
+            type="button"
+            onClick={chooseCreate}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold text-[var(--bk-accent)] transition hover:bg-[var(--bk-accent-soft)]"
+          >
+            <Icon icon="line-md:plus" width={15} height={15} />
+            {createLabel}
+          </button>
+          <div className="mx-2 my-1 h-px bg-[var(--bk-border)]" aria-hidden />
+          {filtered.map((o) => (
             <button
+              key={o.id}
               type="button"
-              onClick={() => {
-                setOpen(false);
-                onSelect(NEW_OPTION);
-              }}
-              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold text-[var(--bk-accent)] transition hover:bg-[var(--bk-accent-soft)]"
+              onClick={() => pick(o.id)}
+              className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-[var(--bk-surface-2)] ${
+                o.id === selected ? 'font-semibold text-[var(--bk-accent)]' : 'text-[var(--bk-text)]'
+              }`}
             >
-              <Icon icon="line-md:plus" width={15} height={15} />
-              {createLabel}
+              <Icon icon={optionIcon} width={15} height={15} className="shrink-0 text-[var(--bk-accent)]" />
+              <span className="truncate">{o.name}</span>
             </button>
-            <div className="mx-2 my-1 h-px bg-[var(--bk-border)]" aria-hidden />
-            {options.map((o) => (
-              <button
-                key={o.id}
-                type="button"
-                onClick={() => {
-                  setOpen(false);
-                  onSelect(o.id);
-                }}
-                className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-[var(--bk-surface-2)] ${
-                  o.id === selected ? 'font-semibold text-[var(--bk-accent)]' : 'text-[var(--bk-text)]'
-                }`}
-              >
-                <Icon icon={optionIcon} width={15} height={15} className="shrink-0 text-[var(--bk-accent)]" />
-                <span className="truncate">{o.name}</span>
-              </button>
-            ))}
-          </div>
-        </>
+          ))}
+        </div>
       )}
     </div>
   );
