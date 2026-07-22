@@ -1,463 +1,406 @@
 import { useFlowStore } from '../store/flowStore';
-import type { FlowIR, FlowNode } from '../ir/types';
+import type { FlowNode } from '../ir/types';
+import { DAY_KEYS, type DayKey } from '../ir/types';
 import {
-  csBranchesToDataBranches,
-  csBranchSentence,
-  csDataCategory,
-  datetimeKindOf,
-  defaultConditionForCategory,
+  csProductBranches,
+  csSlotsToDataBranches,
+  dayRemainder,
+  defaultSlot,
+  hearingNodeLabel,
   hearingSourceOptions,
-  newCsCondition,
-  nextCsBranchId,
-  nextCsBranchName,
-  operatorOf,
-  operatorsFor,
-  phoneKindOf,
   phoneValuesFor,
-  readCsBranches,
-  CS_DAY_SETS,
+  readCsCount,
+  readCsSlots,
+  timeRemainderRanges,
+  CS_DAY_LABELS,
   CS_ELSE_LABEL,
-  type CsBranch,
-  type CsCondition,
-  type CsDataCategory,
+  MAX_CS_CONDITIONS,
+  type CsRange,
+  type CsSlot,
+  type CsSlotKind,
 } from '../ui/csLogic';
 import { Icon } from '../ui/icons';
+import { useLang, useT } from '../ui/i18n';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tab プロパティ設定 của node 分岐ロジック (màn CS): "câu điều kiện" có cấu trúc.
-// 1 nhánh = 1 thẻ. Trong thẻ:
-//   - 条件の数 (1/2/3): nút on/off chọn số điều kiện kết hợp.
-//   - mỗi điều kiện: chọn データ (聴取内容 / 電話番号 / 着信日時) → cascade riêng.
-//   - AND/OR chỉ hiện khi ≥ 2 điều kiện.
-// Đánh giá TỪ TRÊN xuống; else その他 cố định. Ghi vào DRAFT: csConditions +
-// data.branches (bản sync để handle/dây/commit dùng lại cơ chế sẵn có).
+// Node 分岐ロジック (CS). 2 tab:
+//   - プロパティ設定: CsLogicPropertyEditor — số điều kiện (1/2/3) + mỗi điều kiện
+//     (聴取内容 / 電話番号 / 着信日時) với tập giá trị.
+//   - 分岐設定: CsLogicBranchList — liệt kê nhánh = tích các tập giá trị.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const inputClass =
   'w-full rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-2.5 py-1.5 text-sm text-[var(--bk-text)] outline-none transition focus:border-[var(--bk-accent)]';
 
-const CATEGORY_META: { id: CsDataCategory; label: string; icon: string }[] = [
-  { id: 'hearing', label: '聴取内容', icon: 'lucide:headphones' },
-  { id: 'phone', label: '電話番号', icon: 'lucide:phone' },
-  { id: 'datetime', label: '着信日時', icon: 'lucide:calendar-clock' },
-];
-
-export function CsLogicBranchEditor({ node }: { node: FlowNode }) {
-  const ir = useFlowStore((s) => s.ir);
+function useCsState(node: FlowNode) {
   const draft = useFlowStore((s) => s.draft);
   const setDraftField = useFlowStore((s) => s.setDraftField);
-
   const data = draft?.data ?? node.data;
-  const branches = readCsBranches(data);
-
-  // Ghi cả 2 key trong 1 lượt: csConditions (nguồn sự thật CS) + branches (bản sync).
-  const apply = (next: CsBranch[]) => {
-    setDraftField('csConditions', next);
-    setDraftField('branches', csBranchesToDataBranches(next));
+  const count = readCsCount(data);
+  const slots = readCsSlots(data);
+  const commit = (nextSlots: CsSlot[], nextCount = nextSlots.length) => {
+    setDraftField('csCount', nextCount);
+    setDraftField('csSlots', nextSlots);
+    setDraftField('branches', csSlotsToDataBranches(nextSlots));
   };
+  return { count, slots, commit };
+}
 
-  const updateBranch = (index: number, patch: Partial<CsBranch>) =>
-    apply(branches.map((b, i) => (i === index ? { ...b, ...patch } : b)));
+export function CsLogicPropertyEditor({ node }: { node: FlowNode }) {
+  const t = useT();
+  const ir = useFlowStore((s) => s.ir);
+  const { count, slots, commit } = useCsState(node);
 
-  const moveBranch = (index: number, delta: -1 | 1) => {
-    const to = index + delta;
-    if (to < 0 || to >= branches.length) return;
-    const next = [...branches];
-    [next[index], next[to]] = [next[to], next[index]];
-    apply(next);
+  const setCount = (n: number) => {
+    if (n === slots.length) return;
+    const next = slots.slice(0, n);
+    while (next.length < n) next.push(defaultSlot('hearing', ir, node.id));
+    commit(next, n);
   };
-
-  const addBranch = () =>
-    apply([
-      ...branches,
-      {
-        id: nextCsBranchId(branches),
-        name: nextCsBranchName(branches),
-        combinator: 'and',
-        conditions: [newCsCondition()],
-      },
-    ]);
-
-  const updateCond = (bi: number, ci: number, cond: CsCondition) =>
-    updateBranch(bi, {
-      conditions: branches[bi].conditions.map((c, i) => (i === ci ? cond : c)),
-    });
-
-  // 条件の数 (1/2/3): thêm/bớt số điều kiện của nhánh cho khớp N.
-  const setConditionCount = (bi: number, count: number) => {
-    const cur = branches[bi].conditions;
-    let next: CsCondition[];
-    if (count <= cur.length) next = cur.slice(0, count);
-    else next = [...cur, ...Array.from({ length: count - cur.length }, () => newCsCondition())];
-    updateBranch(bi, { conditions: next });
-  };
+  const updateSlot = (i: number, slot: CsSlot) => commit(slots.map((s, j) => (j === i ? slot : s)), count);
 
   return (
     <div className="space-y-3">
-      {/* Thứ tự thẻ = thứ tự đánh giá — nhắc ngay trên đầu để CS không bất ngờ. */}
-      <div className="flex items-center gap-2 rounded-lg border border-dashed border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-3 py-2 text-xs text-[var(--bk-text-muted)]">
-        <Icon icon="lucide:arrow-down-narrow-wide" width={14} height={14} className="shrink-0 text-[var(--bk-accent)]" />
-        分岐は上から順に判定され、最初に当てはまった分岐へ進みます
+      {/* 条件の数 — nút on/off, to. */}
+      <div>
+        <span className="mb-1.5 block text-xs font-semibold text-[var(--bk-text-muted)]">{t('clCondCount')}</span>
+        <div className="flex gap-2">
+          {Array.from({ length: MAX_CS_CONDITIONS }, (_, k) => k + 1).map((n) => (
+            <button
+              key={n}
+              type="button"
+              onClick={() => setCount(n)}
+              className={[
+                'flex-1 rounded-xl border px-3 py-2.5 text-sm font-bold transition',
+                count === n
+                  ? 'border-[var(--bk-accent)] bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]'
+                  : 'border-[var(--bk-border)] text-[var(--bk-text-muted)] hover:border-[var(--bk-accent)]',
+              ].join(' ')}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {branches.map((branch, bi) => (
-        <div key={branch.id} className="overflow-hidden rounded-xl border border-[var(--bk-border)]">
-          {/* Header thẻ: số thứ tự + tên nhánh + đổi thứ tự + xoá. */}
-          <div className="flex items-center gap-2 border-b border-[var(--bk-border)] bg-[var(--bk-surface-2)] py-1.5 pl-2.5 pr-1.5">
-            <span className="flex h-6 w-6 flex-none items-center justify-center rounded-md bg-[var(--bk-accent-soft)] text-[11px] font-bold text-[var(--bk-accent)]">
-              {bi + 1}
+      {slots.map((slot, i) => (
+        <div key={i} className="overflow-hidden rounded-xl border border-[var(--bk-border)]">
+          <div className="border-b border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-3 py-2 text-sm font-bold text-[var(--bk-text)]">
+            <span className="mr-1.5 inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-[var(--bk-accent-soft)] px-1.5 text-[11px] font-bold text-[var(--bk-accent)]">
+              {i + 1}
             </span>
-            <input
-              type="text"
-              className={`${inputClass} !border-transparent !bg-transparent font-semibold hover:!border-[var(--bk-border)]`}
-              value={branch.name}
-              placeholder="分岐名"
-              aria-label="分岐名"
-              onChange={(e) => updateBranch(bi, { name: e.target.value.replace(/[\r\n]+/g, ' ') })}
-            />
-            <IconBtn icon="lucide:arrow-up" title="上へ" disabled={bi === 0} onClick={() => moveBranch(bi, -1)} />
-            <IconBtn
-              icon="lucide:arrow-down"
-              title="下へ"
-              disabled={bi === branches.length - 1}
-              onClick={() => moveBranch(bi, 1)}
-            />
-            <IconBtn
-              icon="lucide:trash-2"
-              title="分岐を削除"
-              danger
-              onClick={() => apply(branches.filter((_, i) => i !== bi))}
-            />
+            {t('clCondition')} {i + 1}
           </div>
-
-          <div className="space-y-2 p-2.5">
-            {/* 条件の数 — nút on/off 1/2/3. */}
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-semibold text-[var(--bk-text-muted)]">条件の数</span>
-              <span className="flex overflow-hidden rounded-full border border-[var(--bk-border)]">
-                {[1, 2, 3].map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => setConditionCount(bi, n)}
-                    className={[
-                      'px-3 py-1 text-[11px] font-bold transition',
-                      branch.conditions.length === n
-                        ? 'bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]'
-                        : 'text-[var(--bk-text-faint)] hover:text-[var(--bk-text)]',
-                    ].join(' ')}
-                  >
-                    {n}条件
-                  </button>
-                ))}
-              </span>
-            </div>
-
-            {branch.conditions.map((cond, ci) => (
-              <ConditionRow
-                key={ci}
-                ir={ir}
-                selfId={node.id}
-                branch={branch}
-                cond={cond}
-                index={ci}
-                onChange={(cnext) => updateCond(bi, ci, cnext)}
-                onRemove={
-                  branch.conditions.length > 1
-                    ? () => updateBranch(bi, { conditions: branch.conditions.filter((_, i) => i !== ci) })
-                    : undefined
-                }
-              />
-            ))}
-
-            {/* AND/OR chỉ có nghĩa khi ≥ 2 điều kiện. */}
-            {branch.conditions.length > 1 && (
-              <div className="flex justify-end">
-                <span className="flex overflow-hidden rounded-full border border-[var(--bk-border)]">
-                  <CombButton
-                    label="すべて満たす"
-                    on={branch.combinator === 'and'}
-                    onClick={() => updateBranch(bi, { combinator: 'and' })}
-                  />
-                  <CombButton
-                    label="いずれか満たす"
-                    on={branch.combinator === 'or'}
-                    onClick={() => updateBranch(bi, { combinator: 'or' })}
-                  />
-                </span>
-              </div>
-            )}
-
-            {/* Câu tóm tắt tự sinh — CS đọc để tự kiểm tra, TS đọc như spec. */}
-            <div className="rounded-lg border border-[color-mix(in_srgb,#16a34a_30%,var(--bk-border))] bg-[color-mix(in_srgb,#16a34a_8%,var(--bk-surface))] px-2.5 py-1.5 text-xs leading-relaxed text-[var(--bk-text)]">
-              {csBranchSentence(branch, ir)}
-              <span className="mx-1 font-bold text-[#16a34a]">→</span>
-              <span className="font-semibold">「{branch.name || '（無題）'}」へ進む</span>
-            </div>
+          <div className="space-y-2.5 p-3">
+            <SlotEditor node={node} slot={slot} onChange={(s) => updateSlot(i, s)} />
           </div>
         </div>
       ))}
-
-      {/* Nhánh else その他 — luôn CUỐI, không sửa/không xoá (catch-all). */}
-      <div className="overflow-hidden rounded-xl border border-dashed border-[var(--bk-border)]">
-        <div className="flex items-center gap-2 px-2.5 py-2">
-          <span className="flex h-6 w-6 flex-none items-center justify-center rounded-md bg-[var(--bk-surface-2)] text-[11px] font-bold text-[var(--bk-text-faint)]">
-            {branches.length + 1}
-          </span>
-          <span className="text-sm font-semibold text-[var(--bk-text-muted)]">{CS_ELSE_LABEL}（上記以外）</span>
-        </div>
-        <p className="px-3 pb-2.5 text-xs text-[var(--bk-text-faint)]">
-          上のどの分岐にも当てはまらなかった場合に進む分岐です（削除できません）。
-        </p>
-      </div>
-
-      <button
-        type="button"
-        onClick={addBranch}
-        className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--bk-border)] px-3 py-2.5 text-sm font-semibold text-[var(--bk-text-muted)] transition hover:border-[var(--bk-accent)] hover:bg-[var(--bk-accent-soft)] hover:text-[var(--bk-accent)]"
-      >
-        <Icon icon="lucide:plus" width={16} height={16} />
-        分岐を追加
-      </button>
     </div>
   );
 }
 
-// 1 điều kiện: [lead] [データ nhóm] → cascade theo nhóm.
-function ConditionRow({
-  ir,
-  selfId,
-  branch,
-  cond,
-  index,
-  onChange,
-  onRemove,
-}: {
-  ir: FlowIR | null;
-  selfId: string;
-  branch: CsBranch;
-  cond: CsCondition;
-  index: number;
-  onChange: (cond: CsCondition) => void;
-  onRemove?: () => void;
-}) {
-  const lead = index === 0 ? 'もし' : branch.combinator === 'and' ? 'かつ' : 'または';
-  const category = csDataCategory(cond.source);
+const CATEGORY_META: { id: CsSlotKind; key: 'clHearing' | 'clPhone' | 'clDatetime'; icon: string }[] = [
+  { id: 'hearing', key: 'clHearing', icon: 'lucide:headphones' },
+  { id: 'phone', key: 'clPhone', icon: 'lucide:phone' },
+  { id: 'datetime', key: 'clDatetime', icon: 'lucide:calendar-clock' },
+];
 
-  const changeCategory = (next: CsDataCategory) => {
-    if (next === category) return;
-    onChange(defaultConditionForCategory(next, ir, selfId));
+function SlotEditor({ node, slot, onChange }: { node: FlowNode; slot: CsSlot; onChange: (s: CsSlot) => void }) {
+  const t = useT();
+  const ir = useFlowStore((s) => s.ir);
+  const changeKind = (kind: CsSlotKind) => {
+    if (kind === slot.kind) return;
+    onChange(defaultSlot(kind, ir, node.id));
   };
-
   return (
-    <div className="rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface)] p-2">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span
-          className={`text-[11px] font-bold ${index === 0 ? 'text-[var(--bk-text-faint)]' : 'text-[var(--bk-accent)]'}`}
-        >
-          {lead}
-        </span>
-        {onRemove ? <IconBtn icon="lucide:x" title="条件を削除" danger onClick={onRemove} /> : null}
-      </div>
-
-      {/* データ nhóm — 3 nút chọn. */}
-      <div className="mb-2 flex gap-1.5">
+    <>
+      <div className="flex gap-1.5">
         {CATEGORY_META.map((c) => (
           <button
             key={c.id}
             type="button"
-            onClick={() => changeCategory(c.id)}
+            onClick={() => changeKind(c.id)}
             className={[
               'flex flex-1 items-center justify-center gap-1.5 rounded-lg border px-2 py-1.5 text-[11.5px] font-semibold transition',
-              category === c.id
+              slot.kind === c.id
                 ? 'border-[var(--bk-accent)] bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]'
                 : 'border-[var(--bk-border)] text-[var(--bk-text-muted)] hover:border-[var(--bk-accent)]',
             ].join(' ')}
           >
             <Icon icon={c.icon} width={13} height={13} />
-            {c.label}
+            {t(c.key)}
           </button>
         ))}
       </div>
-
-      {category === 'hearing' && <HearingCascade ir={ir} selfId={selfId} cond={cond} onChange={onChange} />}
-      {category === 'phone' && <PhoneCascade cond={cond} onChange={onChange} />}
-      {category === 'datetime' && <DatetimeCascade cond={cond} onChange={onChange} />}
-    </div>
+      {slot.kind === 'hearing' && <HearingSlot node={node} slot={slot} onChange={onChange} />}
+      {slot.kind === 'phone' && <PhoneSlot slot={slot} onChange={onChange} />}
+      {slot.kind === 'datetime' && <DatetimeSlot slot={slot} onChange={onChange} />}
+    </>
   );
 }
 
-// 聴取内容: chọn node 聴取 → toán tử → giá trị.
-function HearingCascade({
-  ir,
-  selfId,
-  cond,
-  onChange,
-}: {
-  ir: FlowIR | null;
-  selfId: string;
-  cond: CsCondition;
-  onChange: (cond: CsCondition) => void;
-}) {
-  const options = hearingSourceOptions(ir, selfId);
-  const ops = operatorsFor(cond.source);
-  const op = operatorOf(cond);
+// 聴取内容: node + danh sách giá trị tự nhập (thêm/bớt, không toán tử).
+function HearingSlot({ node, slot, onChange }: { node: FlowNode; slot: CsSlot; onChange: (s: CsSlot) => void }) {
+  const t = useT();
+  const ir = useFlowStore((s) => s.ir);
+  const options = hearingSourceOptions(ir, node.id);
+  const values = slot.values ?? [''];
+  const setValues = (v: string[]) => onChange({ ...slot, values: v });
   return (
-    <div className="space-y-1.5">
-      <select
-        className={inputClass}
-        value={cond.source}
-        aria-label="どの聴取の回答"
-        onChange={(e) => onChange({ ...cond, source: e.target.value })}
-      >
-        {options.length === 0 && <option value={cond.source}>（聴取ノードがありません）</option>}
-        {options.map((o) => (
-          <option key={o.id} value={o.id}>
-            聴取「{o.label}」の結果
-          </option>
-        ))}
-      </select>
-      <div className="flex gap-1.5">
+    <div className="space-y-2">
+      <div>
+        <span className="mb-1 block text-[11px] font-semibold text-[var(--bk-text-muted)]">{t('clWhichHearing')}</span>
         <select
-          className={`${inputClass} flex-1`}
-          value={op.id}
-          aria-label="比較"
-          onChange={(e) => onChange({ ...cond, operator: e.target.value, value: '' })}
+          className={inputClass}
+          value={slot.nodeId ?? ''}
+          aria-label={t('clWhichHearing')}
+          onChange={(e) => onChange({ ...slot, nodeId: e.target.value })}
         >
-          {ops.map((o) => (
+          {options.length === 0 && <option value="">—</option>}
+          {options.map((o) => (
             <option key={o.id} value={o.id}>
               {o.label}
             </option>
           ))}
         </select>
-        {op.value !== 'none' ? (
-          <input
-            type="text"
-            className={`${inputClass} flex-1`}
-            value={cond.value}
-            placeholder="値を入力（例: 予約）"
-            aria-label="値"
-            onChange={(e) => onChange({ ...cond, value: e.target.value })}
-          />
-        ) : (
-          <span className="flex-1 rounded-lg border border-dashed border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-2 py-1.5 text-center text-xs text-[var(--bk-text-faint)]">
-            値の入力は不要
-          </span>
-        )}
+      </div>
+      <div>
+        <span className="mb-1 block text-[11px] font-semibold text-[var(--bk-text-muted)]">{t('clValues')}</span>
+        <div className="space-y-1.5">
+          {values.map((v, i) => (
+            <div key={i} className="flex items-center gap-1.5">
+              <input
+                type="text"
+                className={inputClass}
+                value={v}
+                placeholder={t('clValues')}
+                aria-label={`${t('clValues')} ${i + 1}`}
+                onChange={(e) => setValues(values.map((x, j) => (j === i ? e.target.value : x)))}
+              />
+              <IconBtn
+                icon="lucide:x"
+                title="×"
+                danger
+                disabled={values.length <= 1}
+                onClick={() => setValues(values.filter((_, j) => j !== i))}
+              />
+            </div>
+          ))}
+          <AddButton label={t('clAddValue')} onClick={() => setValues([...values, ''])} />
+        </div>
       </div>
     </div>
   );
 }
 
-// 電話番号: 着信 / 聴取 → 種別 CỐ ĐỊNH (enum, không thêm/sửa/xoá).
-function PhoneCascade({ cond, onChange }: { cond: CsCondition; onChange: (cond: CsCondition) => void }) {
-  const kind = phoneKindOf(cond.source);
-  const values = phoneValuesFor(cond.source);
-  const setKind = (next: 'incoming' | 'answered') => {
-    const source = next === 'answered' ? 'answeredPhone' : 'incomingPhone';
-    const list = phoneValuesFor(source);
-    const value = list.includes(cond.value) ? cond.value : list[list.length - 1];
-    onChange({ source, operator: 'is', value, value2: '' });
-  };
+// 電話番号: 着信/聴取 → liệt kê TẤT CẢ 種別 (cố định, read-only).
+function PhoneSlot({ slot, onChange }: { slot: CsSlot; onChange: (s: CsSlot) => void }) {
+  const t = useT();
+  const kind = slot.phoneKind ?? 'incoming';
+  const values = phoneValuesFor(kind);
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
       <div className="flex gap-1.5">
-        <SubToggle label="着信電話番号" on={kind === 'incoming'} onClick={() => setKind('incoming')} />
-        <SubToggle label="聴取電話番号" on={kind === 'answered'} onClick={() => setKind('answered')} />
+        <SubToggle label={t('clIncoming')} on={kind === 'incoming'} onClick={() => onChange({ ...slot, phoneKind: 'incoming' })} />
+        <SubToggle label={t('clAnswered')} on={kind === 'answered'} onClick={() => onChange({ ...slot, phoneKind: 'answered' })} />
       </div>
       <div className="flex items-center gap-1.5 text-[10.5px] font-semibold text-[var(--bk-text-faint)]">
         <Icon icon="lucide:lock" width={11} height={11} />
-        種別は固定（選択・編集・削除できません）
+        {t('clPhoneAllNote')}
       </div>
-      <select
-        className={inputClass}
-        value={cond.value}
-        aria-label="種別"
-        onChange={(e) => onChange({ ...cond, value: e.target.value })}
-      >
+      <div className="flex flex-wrap gap-1.5">
         {values.map((v) => (
-          <option key={v} value={v}>
+          <span
+            key={v}
+            className="rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-2.5 py-1 text-xs font-semibold text-[var(--bk-text)]"
+          >
             {v}
-          </option>
+          </span>
         ))}
-      </select>
-    </div>
-  );
-}
-
-// 着信日時: 日付(range) / 曜日(dayset) / 時間(range).
-function DatetimeCascade({ cond, onChange }: { cond: CsCondition; onChange: (cond: CsCondition) => void }) {
-  const kind = datetimeKindOf(cond.source);
-  const setKind = (next: 'date' | 'day' | 'time') => {
-    if (next === 'date') onChange({ source: 'callDate', operator: 'between', value: '', value2: '' });
-    else if (next === 'day') onChange({ source: 'callDay', operator: 'is', value: CS_DAY_SETS[0], value2: '' });
-    else onChange({ source: 'callTime', operator: 'between', value: '09:00', value2: '17:00' });
-  };
-  return (
-    <div className="space-y-1.5">
-      <div className="flex gap-1.5">
-        <SubToggle label="日付" on={kind === 'date'} onClick={() => setKind('date')} />
-        <SubToggle label="曜日" on={kind === 'day'} onClick={() => setKind('day')} />
-        <SubToggle label="時間" on={kind === 'time'} onClick={() => setKind('time')} />
       </div>
-      {kind === 'date' && (
-        <div className="flex items-center gap-1.5">
-          <input
-            type="date"
-            className={`${inputClass} min-w-0 flex-1`}
-            value={cond.value}
-            aria-label="開始日"
-            onChange={(e) => onChange({ ...cond, value: e.target.value })}
-          />
-          <span className="flex-none text-xs text-[var(--bk-text-faint)]">〜</span>
-          <input
-            type="date"
-            className={`${inputClass} min-w-0 flex-1`}
-            value={cond.value2}
-            aria-label="終了日"
-            onChange={(e) => onChange({ ...cond, value2: e.target.value })}
-          />
+    </div>
+  );
+}
+
+// 着信日時: 日付 / 曜日 / 時間.
+function DatetimeSlot({ slot, onChange }: { slot: CsSlot; onChange: (s: CsSlot) => void }) {
+  const t = useT();
+  const lang = useLang((s) => s.lang);
+  const dtKind = slot.dtKind ?? 'time';
+  const ranges = slot.ranges ?? [];
+  const days = slot.days ?? [];
+
+  const setRanges = (r: CsRange[]) => onChange({ ...slot, ranges: r });
+  const setDays = (d: DayKey[]) => onChange({ ...slot, days: d });
+
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-1.5">
+        <SubToggle label={t('clDate')} on={dtKind === 'date'} onClick={() => onChange({ kind: 'datetime', dtKind: 'date', ranges: [{ from: '', to: '' }], days: [] })} />
+        <SubToggle label={t('clDay')} on={dtKind === 'day'} onClick={() => onChange({ kind: 'datetime', dtKind: 'day', ranges: [], days: [] })} />
+        <SubToggle label={t('clTime')} on={dtKind === 'time'} onClick={() => onChange({ kind: 'datetime', dtKind: 'time', ranges: [{ from: '09:00', to: '17:00' }], days: [] })} />
+      </div>
+
+      {dtKind === 'date' && (
+        <div className="space-y-1.5">
+          {ranges.map((r, i) => (
+            <div key={i} className="flex items-center gap-1.5">
+              <Icon icon="lucide:clock" width={14} height={14} className="shrink-0 text-[var(--bk-text-faint)]" />
+              <input
+                type="date"
+                className={`${inputClass} min-w-0 flex-1`}
+                value={r.from}
+                aria-label="from"
+                onChange={(e) => setRanges(ranges.map((x, j) => (j === i ? { ...x, from: e.target.value } : x)))}
+              />
+              <span className="shrink-0 text-xs text-[var(--bk-text-faint)]">〜</span>
+              <input
+                type="date"
+                className={`${inputClass} min-w-0 flex-1`}
+                value={r.to}
+                aria-label="to"
+                onChange={(e) => setRanges(ranges.map((x, j) => (j === i ? { ...x, to: e.target.value } : x)))}
+              />
+              <IconBtn icon="lucide:x" title="×" danger onClick={() => setRanges(ranges.filter((_, j) => j !== i))} />
+            </div>
+          ))}
+          <AddButton label={t('clAddRange')} onClick={() => setRanges([...ranges, { from: '', to: '' }])} />
         </div>
       )}
-      {kind === 'day' && (
-        <select
-          className={inputClass}
-          value={cond.value || CS_DAY_SETS[0]}
-          aria-label="曜日"
-          onChange={(e) => onChange({ ...cond, value: e.target.value })}
-        >
-          {CS_DAY_SETS.map((d) => (
-            <option key={d} value={d}>
-              {d}
-            </option>
-          ))}
-        </select>
+
+      {dtKind === 'day' && (
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-1.5">
+            {DAY_KEYS.map((d) => {
+              const on = days.includes(d);
+              return (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setDays(on ? days.filter((x) => x !== d) : [...days, d])}
+                  className={[
+                    'h-8 w-9 rounded-lg border text-xs font-bold transition',
+                    on
+                      ? 'border-[var(--bk-accent)] bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]'
+                      : 'border-[var(--bk-border)] text-[var(--bk-text-muted)] hover:border-[var(--bk-accent)]',
+                  ].join(' ')}
+                >
+                  {CS_DAY_LABELS[d][lang]}
+                </button>
+              );
+            })}
+          </div>
+          <RemainderRow label={t('clRemainder')} text={dayRemainder(days).map((d) => CS_DAY_LABELS[d][lang]).join('・') || '—'} />
+        </div>
       )}
-      {kind === 'time' && (
-        <div className="flex items-center gap-1.5">
-          <input
-            type="text"
-            className={`${inputClass} min-w-0 flex-1`}
-            value={cond.value}
-            placeholder="09:00"
-            aria-label="開始時刻"
-            onChange={(e) => onChange({ ...cond, value: e.target.value })}
-          />
-          <span className="flex-none text-xs text-[var(--bk-text-faint)]">〜</span>
-          <input
-            type="text"
-            className={`${inputClass} min-w-0 flex-1`}
-            value={cond.value2}
-            placeholder="17:00"
-            aria-label="終了時刻"
-            onChange={(e) => onChange({ ...cond, value2: e.target.value })}
-          />
+
+      {dtKind === 'time' && (
+        <div className="space-y-1.5">
+          {ranges.map((r, i) => (
+            <div key={i} className="flex items-center gap-1.5">
+              <input
+                type="time"
+                className={`${inputClass} min-w-0 flex-1`}
+                value={r.from}
+                aria-label="from"
+                onChange={(e) => setRanges(ranges.map((x, j) => (j === i ? { ...x, from: e.target.value } : x)))}
+              />
+              <span className="shrink-0 text-xs text-[var(--bk-text-faint)]">〜</span>
+              <input
+                type="time"
+                className={`${inputClass} min-w-0 flex-1`}
+                value={r.to}
+                aria-label="to"
+                onChange={(e) => setRanges(ranges.map((x, j) => (j === i ? { ...x, to: e.target.value } : x)))}
+              />
+              <IconBtn icon="lucide:x" title="×" danger onClick={() => setRanges(ranges.filter((_, j) => j !== i))} />
+            </div>
+          ))}
+          <AddButton label={t('clAddRange')} onClick={() => setRanges([...ranges, { from: '', to: '' }])} />
+          {timeRemainderRanges(ranges).map((r, i) => (
+            <RemainderRow key={i} label={t('clRemainder')} text={`${r.from} 〜 ${r.to}`} />
+          ))}
         </div>
       )}
     </div>
   );
 }
 
+function RemainderRow({ label, text }: { label: string; text: string }) {
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-dashed border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-2.5 py-1.5 text-xs text-[var(--bk-text-faint)]">
+      <span className="rounded bg-[var(--bk-border)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--bk-text-muted)]">
+        {label}
+      </span>
+      <span className="text-[var(--bk-text)]">{text}</span>
+    </div>
+  );
+}
+
+// ── Tab 分岐設定: danh sách nhánh = tích các điều kiện ────────────────────────
+export function CsLogicBranchList({ node }: { node: FlowNode }) {
+  const t = useT();
+  const draft = useFlowStore((s) => s.draft);
+  const ir = useFlowStore((s) => s.ir);
+  const data = draft?.data ?? node.data;
+  const slots = readCsSlots(data);
+  const branches = csProductBranches(slots);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 rounded-lg border border-dashed border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-3 py-2 text-xs text-[var(--bk-text-muted)]">
+        <Icon icon="lucide:git-fork" width={14} height={14} className="shrink-0 text-[var(--bk-accent)]" />
+        {t('clBranchAuto')}
+      </div>
+
+      {branches.length === 0 ? (
+        <p className="px-1 text-sm text-[var(--bk-text-faint)]">{t('clNoValue')}</p>
+      ) : (
+        <div className="space-y-1.5">
+          {branches.map((b, i) => (
+            <div
+              key={b.id}
+              className="flex items-start gap-2 rounded-lg border border-[var(--bk-border)] bg-[var(--bk-surface)] px-2.5 py-2"
+            >
+              <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-md bg-[var(--bk-accent-soft)] px-1 text-[11px] font-bold text-[var(--bk-accent)]">
+                {i + 1}
+              </span>
+              <span className="flex flex-wrap items-center gap-1.5 text-sm text-[var(--bk-text)]">
+                {b.parts.map((p, j) => (
+                  <span key={j} className="inline-flex items-center gap-1.5">
+                    {j > 0 && <span className="text-[var(--bk-text-faint)]">×</span>}
+                    <span className="rounded-md border border-[var(--bk-border)] bg-[var(--bk-surface-2)] px-2 py-0.5 text-xs font-semibold">
+                      {p}
+                    </span>
+                  </span>
+                ))}
+              </span>
+            </div>
+          ))}
+          <div className="flex items-center gap-2 rounded-lg border border-dashed border-[var(--bk-border)] px-2.5 py-2 text-sm text-[var(--bk-text-muted)]">
+            <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-md bg-[var(--bk-surface-2)] px-1 text-[11px] font-bold text-[var(--bk-text-faint)]">
+              {branches.length + 1}
+            </span>
+            {CS_ELSE_LABEL}
+          </div>
+        </div>
+      )}
+
+      {/* Nhắc: 聴取ノード đã bị xoá → tên node trong điều kiện có thể lệch. */}
+      {slots.some((s) => s.kind === 'hearing' && s.nodeId && !ir?.nodes.some((n) => n.id === s.nodeId)) && (
+        <p className="px-1 text-xs text-rose-500">
+          {slots
+            .filter((s) => s.kind === 'hearing' && s.nodeId)
+            .map((s) => hearingNodeLabel(s.nodeId ?? '', ir))
+            .join(', ')}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── UI phụ ───────────────────────────────────────────────────────────────────
 function SubToggle({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) {
   return (
     <button
@@ -475,25 +418,19 @@ function SubToggle({ label, on, onClick }: { label: string; on: boolean; onClick
   );
 }
 
-// Nút toggle すべて満たす (AND) / いずれか満たす (OR) trong thẻ nhánh.
-function CombButton({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) {
+function AddButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={[
-        'px-2.5 py-1 text-[11px] font-bold transition',
-        on
-          ? 'bg-[var(--bk-accent-soft)] text-[var(--bk-accent)]'
-          : 'text-[var(--bk-text-faint)] hover:text-[var(--bk-text)]',
-      ].join(' ')}
+      className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[var(--bk-border)] px-3 py-1.5 text-xs font-semibold text-[var(--bk-text-muted)] transition hover:border-[var(--bk-accent)] hover:text-[var(--bk-accent)]"
     >
+      <Icon icon="lucide:plus" width={12} height={12} />
       {label}
     </button>
   );
 }
 
-// Nút icon nhỏ dùng chung trong thẻ nhánh (đổi thứ tự / xoá).
 function IconBtn({
   icon,
   title,
@@ -515,7 +452,7 @@ function IconBtn({
       title={title}
       aria-label={title}
       className={[
-        'flex h-7 w-7 flex-none items-center justify-center rounded-lg text-[var(--bk-text-faint)] transition',
+        'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--bk-text-faint)] transition',
         disabled
           ? 'cursor-not-allowed opacity-30'
           : danger

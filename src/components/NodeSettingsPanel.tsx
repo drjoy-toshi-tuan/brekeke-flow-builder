@@ -3,7 +3,7 @@ import { useFlowStore } from '../store/flowStore';
 import { useWorkspaceStore } from '../store/workspaceStore';
 import type { FlowNode, NodeType } from '../ir/types';
 import { NODE_CONFIG, nodeTypeLabel } from '../ui/nodeConfig';
-import { CsLogicBranchEditor } from './CsLogicBranchEditor';
+import { CsLogicPropertyEditor, CsLogicBranchList } from './CsLogicBranchEditor';
 import { ensureSettings, STATUS_FLAG_PICKABLE } from '../ir/settings';
 import { computeInheritedFlags } from '../ir/statusFlow';
 import { FlagSelect } from '../ui/FlagSelect';
@@ -123,8 +123,8 @@ function PanelContent({ node, onClose }: { node: FlowNode; onClose: () => void }
   // Màn CS: KHÔNG còn tab Property riêng — field property hiển thị ngay trong
   // tab General (gộp làm 1); TS giữ 3 tab như cũ.
   const hasProperty = !csMode && !csLogic && PROPERTY_FIELDS[node.type].length > 0;
-  // CS 分岐ロジック: bộ điều kiện chuyển vào tab プロパティ設定 -> KHÔNG còn tab 分岐設定 riêng.
-  const hasBranch = BRANCH_SCHEMA[node.type].mode !== 'none' && !csLogic;
+  // CS 分岐ロジック giữ CẢ 2 tab: điều kiện đặt ở プロパティ設定, danh sách nhánh ở 分岐設定.
+  const hasBranch = BRANCH_SCHEMA[node.type].mode !== 'none';
 
   const [tab, setTab] = useState<Tab>('general');
   useEffect(() => {
@@ -219,15 +219,12 @@ function PanelContent({ node, onClose }: { node: FlowNode; onClose: () => void }
               onClick={() => setTab('property')}
             />
           )}
-          {/* CS 分岐ロジック: điều kiện nằm trong tab プロパティ設定 -> ẩn tab 分岐設定. */}
-          {!csLogic && (
-            <TabButton
-              label={t('tabBranch')}
-              active={tab === 'branch'}
-              disabled={!hasBranch}
-              onClick={() => setTab('branch')}
-            />
-          )}
+          <TabButton
+            label={t('tabBranch')}
+            active={tab === 'branch'}
+            disabled={!hasBranch}
+            onClick={() => setTab('branch')}
+          />
         </div>
       </header>
 
@@ -238,12 +235,14 @@ function PanelContent({ node, onClose }: { node: FlowNode; onClose: () => void }
             <GeneralTab label={editing.label} nameError={nameError} showDescription={!csMode} />
             {csMode && !csLogic && <PropertyTab node={node} data={editing.data} />}
             {/* CS 分岐ロジック: bộ điều kiện (聴取内容 / 電話番号 / 着信日時) ngay trong プロパティ設定. */}
-            {csLogic && <CsLogicBranchEditor node={node} />}
+            {csLogic && <CsLogicPropertyEditor node={node} />}
           </>
         )}
         {tab === 'property' && <PropertyTab node={node} data={editing.data} />}
         {tab === 'branch' &&
-          (csMode && csEditableBranchNode(node.type) ? (
+          (csLogic ? (
+            <CsLogicBranchList node={node} />
+          ) : csMode && csEditableBranchNode(node.type) ? (
             <CsBranchTab node={node} data={editing.data} />
           ) : csMode ? (
             // CS: node có nhánh cố định (announce/transfer…) -> hiển thị read-only.
