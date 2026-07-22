@@ -4,7 +4,7 @@ import type { RFNodeData } from '../irAdapter';
 import type { NodeType } from '../../ir/types';
 import { NODE_CONFIG } from '../../ui/nodeConfig';
 import { propertyFieldsFor, type PropertyField } from '../../ui/nodeSchema';
-import { csBranchSentence, readCsBranches } from '../../ui/csLogic';
+import { csProductBranches, readCsSlots } from '../../ui/csLogic';
 import { ensureSettings } from '../../ir/settings';
 import { computeInheritedFlags } from '../../ir/statusFlow';
 import { FlagInheritStamp } from '../../ui/FlagInheritStamp';
@@ -306,14 +306,14 @@ function CsIndicators({ type, data }: { type: NodeType; data: Record<string, unk
       title: str(data.transferNumber),
       color: '#38bdf8',
     });
-  // 分岐ロジック (CS): icon rẽ nhánh + số nhánh đã tạo (chưa tính else その他).
+  // 分岐ロジック (CS): icon rẽ nhánh + số nhánh (tích các điều kiện, chưa tính else その他).
   if (type === 'logic') {
-    const branches = readCsBranches(data);
+    const branches = csProductBranches(readCsSlots(data));
     if (branches.length > 0)
       icons.push({
         key: 'branches',
         icon: 'lucide:git-fork',
-        title: branches.map((b) => b.name || '（無題）').join(' / '),
+        title: branches.map((b) => b.label).join(' / '),
         color: '#fbbf24',
         text: String(branches.length),
       });
@@ -346,7 +346,7 @@ function pickDescription(data: Record<string, unknown>): string | null {
 // Module/Script) — chỉ hiện khi đã tạo nhánh hoặc có mô tả.
 function hasPreviewContent(type: NodeType, data: Record<string, unknown>, cs = false): boolean {
   if (cs && type === 'logic') {
-    return readCsBranches(data).length > 0 || pickDescription(data) !== null;
+    return csProductBranches(readCsSlots(data)).length > 0 || pickDescription(data) !== null;
   }
   const fields = propertyFieldsFor(type, cs).filter((f) => !f.showIf || f.showIf(data));
   return fields.length > 0 || pickDescription(data) !== null;
@@ -374,8 +374,8 @@ function NodePreview({
   const ir = useFlowStore((s) => s.ir);
   const fields = cs && type === 'logic' ? [] : propertyFieldsFor(type, cs).filter((f) => !f.showIf || f.showIf(data));
   const description = pickDescription(data);
-  // 分岐ロジック (CS): mỗi nhánh 1 dòng "tên nhánh — câu điều kiện tự sinh".
-  const csBranches = cs && type === 'logic' ? readCsBranches(data) : [];
+  // 分岐ロジック (CS): mỗi nhánh (tích các điều kiện) 1 dòng.
+  const csBranches = cs && type === 'logic' ? csProductBranches(readCsSlots(data)) : [];
   // Status/SMS flag KẾ THỪA (tự fill từ node phía trên): chỉ tính khi card đang hiện
   // (active) để tránh chạy BFS cho MỌI node — preview luôn mount trong NodeToolbar.
   const settings = ensureSettings(ir?.settings);
@@ -392,11 +392,11 @@ function NodePreview({
           </HoverTip>
         </div>
       )}
-      {csBranches.map((b) => {
-        const sentence = csBranchSentence(b, ir);
+      {csBranches.map((b, i) => {
+        const sentence = b.label;
         return (
           <div key={b.id} className="bk-node-preview-row">
-            <span className="bk-node-preview-key">{b.name || '（無題）'}</span>
+            <span className="bk-node-preview-key">{i + 1}</span>
             <HoverTip className="bk-node-preview-val" content={sentence}>
               {sentence}
             </HoverTip>
