@@ -412,7 +412,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     flagInheritHint: 'Giá trị kế thừa từ node phía trên (đang tự fill)',
     alEmpty: 'Flow chưa có node nào có announce.',
     // ── Announce List: màn phụ (Retry / Re-confirm) + nút chuyển màn ──
-    alSubTitle: 'Retry & Re-confirm Announce',
     alViewMain: 'Main',
     alViewSub: 'Re-confirm / Retry',
     alColType: 'Phân loại',
@@ -545,9 +544,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     clValues: 'Value',
     clAddValue: 'Thêm giá trị',
     clAddRange: 'Thêm khung',
-    clRemainder: 'Còn lại (tự động)',
-    clPhoneAllNote: 'Tất cả loại được liệt kê (cố định)',
-    clBranchAuto: 'Danh sách nhánh tự sinh từ điều kiện đã đặt ở プロパティ設定.',
     clNoValue: '(chưa có giá trị)',
   },
   ja: {
@@ -944,7 +940,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     flagInheritHint: '上流ノードから継承した値（自動フィル）',
     alEmpty: 'アナウンスを持つノードがまだありません。',
     // ── Announce List: màn phụ (Retry / Re-confirm) + nút chuyển màn ──
-    alSubTitle: 'リトライ・復唱アナウンス一覧',
     alViewMain: 'メイン',
     alViewSub: '復唱・リトライ',
     alColType: '分類',
@@ -1077,9 +1072,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     clValues: '値',
     clAddValue: '値を追加',
     clAddRange: '追加',
-    clRemainder: '残り（自動）',
-    clPhoneAllNote: '全種別を自動列挙（固定）',
-    clBranchAuto: 'プロパティ設定の条件から自動生成された分岐一覧です。',
     clNoValue: '（値がありません）',
   },
 };
