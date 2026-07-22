@@ -327,10 +327,12 @@ function DatetimeSlot({ slot, onChange }: { slot: CsSlot; onChange: (s: CsSlot) 
             <RemainderFrame>
               <div className="space-y-1.5">
                 {remainderRanges.map((r, i) => (
+                  // Ô read-only trông như input giờ; dùng span (không <input type=time>) vì
+                  // biên cuối ngày là "24:00" — input time không hiển thị được (thành trống).
                   <div key={i} className="flex items-center gap-1.5">
-                    <input type="time" readOnly tabIndex={-1} className={`${inputClass} min-w-0 flex-1`} value={r.from} aria-label="remainder from" />
+                    <span className={`${inputClass} block min-w-0 flex-1`}>{r.from}</span>
                     <span className="shrink-0 text-xs text-[var(--bk-text-faint)]">〜</span>
-                    <input type="time" readOnly tabIndex={-1} className={`${inputClass} min-w-0 flex-1`} value={r.to} aria-label="remainder to" />
+                    <span className={`${inputClass} block min-w-0 flex-1`}>{r.to}</span>
                   </div>
                 ))}
               </div>
