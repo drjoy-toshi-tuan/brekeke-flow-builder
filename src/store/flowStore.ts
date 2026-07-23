@@ -344,7 +344,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
       // Sub flow đọc từ YAML chưa có toạ độ (0,0 hết) -> auto-layout lần đầu mở.
       const needsLayout =
         next.nodes.length > 1 && next.nodes.every((n) => n.position.x === 0 && n.position.y === 0);
-      if (needsLayout) next = await layout(next);
+      if (needsLayout) next = await layout(next, { cs: useWorkspaceStore.getState().mode === 'cs' });
 
       set({
         ir: next,
@@ -494,7 +494,9 @@ export const useFlowStore = create<FlowState>((set, get) => {
       const needsLayout =
         parsed.nodes.length > 1 &&
         parsed.nodes.every((n) => n.position.x === 0 && n.position.y === 0);
-      const laidOut = needsLayout ? await layout(parsed) : parsed;
+      const laidOut = needsLayout
+        ? await layout(parsed, { cs: useWorkspaceStore.getState().mode === 'cs' })
+        : parsed;
       // Seed 施設名 từ meta.facility nếu người dùng chưa nhập.
       const { ivr } = get();
       const nextIvr =
@@ -523,7 +525,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
     autoLayout: async () => {
       const { ir } = get();
       if (!ir) return;
-      const laidOut = await layout(ir);
+      const laidOut = await layout(ir, { cs: useWorkspaceStore.getState().mode === 'cs' });
       set({ ...snapshot(), ir: laidOut });
     },
 

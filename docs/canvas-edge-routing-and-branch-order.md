@@ -102,7 +102,26 @@ Offset waypoint lưu ở **node nguồn** (`data.edgeShapes[<handle>] = {x,y}`),
 qua YAML như `labelOffsets`. Vì vậy sau khi convert + chỉnh tay vài dây, bản chỉnh được
 giữ nguyên khi lưu/mở lại. (Kéo node cũng lưu `position`, không auto-layout đè lại.)
 
-## 6. Checklist convert "đẹp & chuẩn"
+## 6. Auto-layout màn CS (bố cục "thoáng" kiểu PDF)
+
+Khi mở/auto-layout ở **màn CS**, canvas nắn bố cục cho giống bản thiết kế PDF
+(`layout.ts` → `airifyCs`, chỉ chạy khi `cs`):
+
+- **Nhánh hợp lưu (merge) CHÌM xuống DƯỚI mọi nhánh nuôi nó**: node mà nhiều nhánh
+  cùng chảy vào (vd 質問 sau khi các route 予約/変更/キャンセル/問い合わせ gặp nhau) được
+  xếp ở tầng SÂU HƠN tầng sâu nhất trong các nhánh — nên phần đuôi chung
+  (質問→氏名→…→終話) nằm hẳn dưới các nhánh, đọc như **1 cột dọc ở giữa**, thay vì bị
+  kéo lên ngang hàng nửa chừng theo nhánh đầu tiên chạm tới.
+- **Merge được CĂN GIỮA** theo tâm các node cha (đuôi nằm dưới mọi nhánh nên dịch ngang
+  không đụng nhánh nào).
+- Rank tính theo **đường dài nhất** (longest path); cạnh vòng ngược (retry/loop) không
+  tính vào rank.
+
+> Màn **TS giữ nguyên** bố cục cây cũ (không áp airify) — thay đổi này CHỈ cho CS.
+> Hệ quả cho convert: **KHÔNG cần set `position`** cho file CS — để trống (0,0), canvas
+> tự xếp thoáng. Chỉ giữ `position` khi đã chỉnh tay và muốn cố định bố cục đó.
+
+## 7. Checklist convert "đẹp & chuẩn"
 
 - [ ] `failed` để ở field `failed:`, KHÔNG nhét vào `branches[]`.
 - [ ] `branches[]` sort theo vị trí X của node đích (trái → phải) để dây không chéo.
