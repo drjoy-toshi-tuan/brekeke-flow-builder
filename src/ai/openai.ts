@@ -29,13 +29,22 @@ function isReasoningModel(model: string): boolean {
   return /^o\d/.test(model) || /^gpt-5/.test(model);
 }
 
-export async function chatComplete(messages: ChatMessage[]): Promise<string> {
+// Tuỳ chọn cho 1 lời gọi:
+//   - signal: AbortSignal để DỪNG giữa chừng (nút "Dừng" của AI Chat).
+//   - json: true -> yêu cầu model trả JSON object (response_format) — dùng cho edit-ops.
+export interface ChatOptions {
+  signal?: AbortSignal;
+  json?: boolean;
+}
+
+export async function chatComplete(messages: ChatMessage[], opts: ChatOptions = {}): Promise<string> {
   if (!AI_PROXY_URL) throw new AiError('AI proxy chưa được cấu hình.', 'no-config');
   const idToken = getStoredIdToken();
   if (!idToken) throw new AiError('Chưa đăng nhập — không thể gọi AI.', 'no-auth');
 
   const payload: Record<string, unknown> = { model: OPENAI_MODEL, messages };
   if (!isReasoningModel(OPENAI_MODEL)) payload.temperature = 0.2;
+  if (opts.json) payload.response_format = { type: 'json_object' };
 
   let res: Response;
   try {
@@ -46,8 +55,11 @@ export async function chatComplete(messages: ChatMessage[]): Promise<string> {
         Authorization: `Bearer ${idToken}`,
       },
       body: JSON.stringify(payload),
+      signal: opts.signal,
     });
-  } catch {
+  } catch (e) {
+    // Người dùng bấm "Dừng" -> AbortError: ném lại để caller phân biệt (không phải lỗi mạng).
+    if (e instanceof DOMException && e.name === 'AbortError') throw e;
     throw new AiError('Không kết nối được AI proxy.', 'network');
   }
   // 401: proxy từ chối token (thường do ID token Google hết hạn ~1 giờ) — mời đăng nhập lại.

@@ -12,6 +12,7 @@ import { NodeSettingsPanel } from './components/NodeSettingsPanel';
 import { ConfirmDeleteModal } from './components/ConfirmDeleteModal';
 import { CanvasTabs } from './components/tabs/CanvasTabs';
 import { TsCanvasTabs } from './components/tabs/TsCanvasTabs';
+import { AiChatPanel } from './components/AiChatPanel';
 import { AnnounceListTab } from './components/tabs/AnnounceListTab';
 import { GeneralSettingsTab } from './components/tabs/GeneralSettingsTab';
 import { StatusSettingsTab } from './components/tabs/StatusSettingsTab';
@@ -60,20 +61,24 @@ function FlowApp() {
     <div className="flex h-full flex-col">
       <Toolbar />
       {csMode ? <CanvasTabs /> : <TsCanvasTabs />}
-      <main className="relative flex-1 overflow-hidden">
-        {showCanvas && (
-          <ReactFlowProvider>
-            <FlowCanvas />
-            <NodeSettingsPanel />
-            <ConfirmDeleteModal />
-          </ReactFlowProvider>
-        )}
-        {csMode && tab === 'announce' && <AnnounceListTab />}
-        {csMode && tab === 'general' && <GeneralSettingsTab />}
-        {csMode && tab === 'status' && <StatusSettingsTab />}
-        {csMode && tab === 'clinicalDept' && <SynonymTableTab kind="clinicalDept" />}
-        {csMode && tab === 'courseList' && <SynonymTableTab kind="courseList" />}
-      </main>
+      {/* Vùng nội dung + panel AI Chat dock phải (mở panel -> canvas co lại). */}
+      <div className="flex flex-1 overflow-hidden">
+        <main className="relative min-w-0 flex-1 overflow-hidden">
+          {showCanvas && (
+            <ReactFlowProvider>
+              <FlowCanvas />
+              <NodeSettingsPanel />
+              <ConfirmDeleteModal />
+            </ReactFlowProvider>
+          )}
+          {csMode && tab === 'announce' && <AnnounceListTab />}
+          {csMode && tab === 'general' && <GeneralSettingsTab />}
+          {csMode && tab === 'status' && <StatusSettingsTab />}
+          {csMode && tab === 'clinicalDept' && <SynonymTableTab kind="clinicalDept" />}
+          {csMode && tab === 'courseList' && <SynonymTableTab kind="courseList" />}
+        </main>
+        <AiChatPanel />
+      </div>
     </div>
   );
 }

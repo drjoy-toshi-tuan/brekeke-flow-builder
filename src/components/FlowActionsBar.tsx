@@ -2,9 +2,12 @@ import { useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
 import { useFileStore } from '../store/fileStore';
 import { useWorkspaceStore } from '../store/workspaceStore';
+import { useAiChatStore } from '../store/aiChatStore';
+import { isAiConfigured } from '../ai/config';
 import { useT } from '../ui/i18n';
 import { Icon } from '../ui/icons';
 import { HoverLabelButton } from './HoverTip';
+import { AiSparkleIcon } from './AiSparkleIcon';
 import { useSaveFlow } from './useSaveFlow';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -34,6 +37,11 @@ export function FlowActionsBar() {
   const t = useT();
 
   const { saving, saveError, canSave, saveToRepo } = useSaveFlow();
+
+  // Nút ✨ AI Chat (mở/đóng panel trợ lý). Bật khi có flow + AI đã cấu hình proxy.
+  const aiOpen = useAiChatStore((s) => s.open);
+  const toggleAi = useAiChatStore((s) => s.togglePanel);
+  const aiDisabled = !ir || !isAiConfigured();
 
   // Auto Layout thao tác trên canvas -> màn CS chỉ bật ở tab Flow Diagram.
   // Không đổi icon/nhãn khi bấm: trước đây swap sang icon loading + spin nhưng
@@ -86,6 +94,17 @@ export function FlowActionsBar() {
 
   return (
     <div className="flex items-center gap-0.5">
+      {/* Nút AI Chat (✨) — NGAY TRƯỚC Auto Layout, dùng chung CS/TS. Màu tím; có
+          nền tím nhạt khi panel đang mở. Ẩn hiệu ứng hover-bg mix --bk-text mặc định. */}
+      <HoverLabelButton
+        label={t('aiChatOpen')}
+        className={`${ACTION_BTN} !text-[#d946ef] ${aiOpen ? 'bg-[color-mix(in_srgb,#d946ef_16%,transparent)]' : ''}`}
+        disabled={aiDisabled}
+        onClick={toggleAi}
+      >
+        <AiSparkleIcon size={20} />
+      </HoverLabelButton>
+
       <HoverLabelButton
         label={t('autoLayout')}
         className={ACTION_BTN}
