@@ -1,6 +1,6 @@
-import { useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
 import { useFileStore } from '../store/fileStore';
+import { useWorkspaceStore } from '../store/workspaceStore';
 import { useDriveToken, validDriveToken } from '../drive/token';
 import { updateYamlContent } from '../drive/api';
 import { gdErrorKey } from '../drive/errors';
@@ -14,22 +14,26 @@ import { useToast } from '../ui/toast';
 // file version đang mở — 更新日時 (modifiedTime) tự nhảy; tạo version MỚI là
 // thao tác riêng ở màn quản lý.
 // Dùng chung cho HeaderMenu (nút Lưu + Ctrl/⌘+Shift+S) và FlowsPanel.
-// Mỗi component gọi hook có state saving/savedAt/saveError riêng — độc lập nhau.
+// State saving/savedAt/saveError nằm trong fileStore (zustand) — CHUNG cho mọi
+// nơi gọi hook, để phím tắt ở HeaderMenu cũng làm nút Lưu trên dải tab hiện icon
+// loading (trước đây mỗi nơi giữ state riêng nên bấm tắt không đồng bộ UI).
 // ─────────────────────────────────────────────────────────────────────────────
 export function useSaveFlow() {
   const ir = useFlowStore((s) => s.ir);
   const exportYaml = useFlowStore((s) => s.exportYaml);
   const setMeta = useFlowStore((s) => s.setMeta);
   const currentFile = useFileStore((s) => s.current);
+  const saving = useFileStore((s) => s.saving);
+  const setSaving = useFileStore((s) => s.setSaving);
+  const savedAt = useFileStore((s) => s.savedAt);
+  const setSavedAt = useFileStore((s) => s.setSavedAt);
+  const saveError = useFileStore((s) => s.saveError);
+  const setSaveError = useFileStore((s) => s.setSaveError);
+  const csMode = useWorkspaceStore((s) => s.mode === 'cs');
   const driveTokenState = useDriveToken();
   const { user } = useAuth();
   const t = useT();
   const showToast = useToast((s) => s.show);
-  const [saving, setSaving] = useState(false);
-  // Thời điểm lưu thành công gần nhất (yyyy-MM-dd HH:mm) — hiện cạnh dấu tích.
-  const [savedAt, setSavedAt] = useState<string | null>(null);
-  // Key lỗi i18n nếu lưu thất bại (null = không lỗi).
-  const [saveError, setSaveError] = useState<string | null>(null);
 
   const driveToken = validDriveToken(driveTokenState);
 
@@ -57,7 +61,7 @@ export function useSaveFlow() {
       const yaml = exportYaml();
       await updateYamlContent(driveToken, currentFile.driveFileId, yaml);
       setSavedAt(now);
-      showToast(t('fmSaved')); // thông báo nổi, tự biến mất
+      showToast(t(csMode ? 'csSaved' : 'fmSaved')); // thông báo nổi, tự biến mất
       return true;
     } catch (e) {
       setSaveError(gdErrorKey(e));
