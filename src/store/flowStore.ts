@@ -34,6 +34,7 @@ import {
   type DataBranch,
 } from '../ui/nodeSchema';
 import { DEFAULT_IVR_SETTINGS, formatDateTime, type IvrSettings } from '../ir/ivrProperty';
+import type { EditOp } from '../ai/editOps';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Zustand store: giữ FlowIR (source of truth) + các action cập nhật IR.
@@ -110,6 +111,9 @@ interface FlowState {
   loadYaml: (text: string) => Promise<void>;
   // Chạy lại auto-layout trên IR hiện tại.
   autoLayout: () => Promise<void>;
+  // Áp danh sách edit-ops do AI Chat đề xuất vào flow ĐANG MỞ (1 bước Undo cho cả lô).
+  // Có node thêm/xoá hoặc dây đổi -> tự auto-layout lại cho gọn. Trả true nếu đã áp.
+  applyAiOps: (ops: EditOp[]) => Promise<boolean>;
   // Xuất IR hiện tại ra chuỗi YAML (round-trip).
   exportYaml: () => string;
   // Xuất IR hiện tại ra XML Draw.io (mở được bằng diagrams.net) — export màn CS.
@@ -527,6 +531,110 @@ export const useFlowStore = create<FlowState>((set, get) => {
       if (!ir) return;
       const laidOut = await layout(ir, { cs: useWorkspaceStore.getState().mode === 'cs' });
       set({ ...snapshot(), ir: laidOut });
+    },
+
+    applyAiOps: async (ops) => {
+      const { ir } = get();
+      if (!ir || ops.length === 0) return false;
+      const csMode = useWorkspaceStore.getState().mode === 'cs';
+
+      const usedIds = new Set(ir.nodes.map((n) => n.id));
+      const usedLabels = new Set(ir.nodes.map((n) => n.label));
+      const usedEdgeIds = new Set(ir.edges.map((e) => e.id));
+      // tempId (node AI mới tạo) -> id thật, để addEdge nối lại được.
+      const tempMap = new Map<string, string>();
+      const resolveRef = (ref: string) => tempMap.get(ref) ?? ref;
+
+      let nodes = [...ir.nodes];
+      let edges = [...ir.edges];
+      let structureChanged = false;
+
+      const newEdgeId = (source: string, target: string) => {
+        let seq = 0;
+        let id = `${source}->${target}#ai${seq}`;
+        while (usedEdgeIds.has(id)) id = `${source}->${target}#ai${++seq}`;
+        usedEdgeIds.add(id);
+        return id;
+      };
+
+      for (const op of ops) {
+        if (op.op === 'addNode') {
+          if (op.nodeType === 'start') continue; // Start là duy nhất, không thêm qua AI
+          const id = uniqueId(op.nodeType, usedIds);
+          usedIds.add(id);
+          // Giữ nguyên nhãn AI đặt nếu chưa trùng; ngược lại sinh "<stem>_<k>" duy nhất.
+          const wanted = op.label?.trim();
+          const label =
+            wanted && !usedLabels.has(wanted)
+              ? wanted
+              : uniqueLabel(labelStem(wanted || nodeTypeLabel(op.nodeType, csMode)), usedLabels);
+          usedLabels.add(label);
+          const base = defaultDataFor(op.nodeType);
+          const data =
+            op.data && typeof op.data === 'object' ? { ...base, ...op.data } : base;
+          nodes.push({ id, type: op.nodeType, label, position: { x: 0, y: 0 }, data });
+          if (op.tempId) tempMap.set(op.tempId, id);
+          structureChanged = true;
+        } else if (op.op === 'updateNode') {
+          const id = resolveRef(op.id);
+          nodes = nodes.map((n) =>
+            n.id === id
+              ? {
+                  ...n,
+                  label: op.label?.trim() || n.label,
+                  data: op.data && typeof op.data === 'object' ? { ...n.data, ...op.data } : n.data,
+                }
+              : n,
+          );
+        } else if (op.op === 'removeNode') {
+          const id = resolveRef(op.id);
+          const target = nodes.find((n) => n.id === id);
+          if (!target || target.type === 'start') continue; // không xoá Start
+          const before = nodes.length;
+          nodes = nodes.filter((n) => n.id !== id);
+          edges = edges.filter((e) => e.source !== id && e.target !== id);
+          if (nodes.length !== before) structureChanged = true;
+        } else if (op.op === 'addEdge') {
+          const source = resolveRef(op.source);
+          const target = resolveRef(op.target);
+          if (!nodes.some((n) => n.id === source) || !nodes.some((n) => n.id === target)) continue;
+          const handle = op.sourceHandle;
+          // 1 output chỉ 1 dây: thay dây cũ cùng source+handle (giống action addEdge).
+          edges = edges.filter(
+            (e) => !(e.source === source && (e.sourceHandle ?? 'default') === (handle ?? 'default')),
+          );
+          const edge: FlowEdge = { id: newEdgeId(source, target), source, target };
+          if (handle) edge.sourceHandle = handle;
+          if (op.condition) edge.condition = op.condition;
+          if (op.label) edge.label = op.label;
+          edges.push(edge);
+          structureChanged = true;
+        } else if (op.op === 'removeEdge') {
+          const source = resolveRef(op.source);
+          const target = resolveRef(op.target);
+          const before = edges.length;
+          edges = edges.filter((e) => !(e.source === source && e.target === target));
+          if (edges.length !== before) structureChanged = true;
+        }
+      }
+
+      let next: FlowIR = {
+        ...ir,
+        meta: { ...ir.meta, updatedAt: new Date().toISOString() },
+        nodes,
+        edges,
+      };
+      // Thêm/xoá node hoặc đổi dây -> node mới chưa có toạ độ; auto-layout lại cho gọn.
+      if (structureChanged) next = await layout(next, { cs: csMode });
+
+      set({
+        ...snapshot(),
+        ir: next,
+        selectedNodeId: null,
+        draft: null,
+        pendingSelect: null,
+      });
+      return true;
     },
 
     exportYaml: () => {
