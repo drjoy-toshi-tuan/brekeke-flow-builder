@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 import { AiError, chatRaw } from '../ai/openai';
 import { buildChatMessages } from '../ai/chatPrompt';
-import { buildFlowDigest } from '../ai/flowDigest';
-import { FLOW_TOOLS, toolCallToOp } from '../ai/tools';
+import { buildScreenContext } from '../ai/screens';
+import { toolCallToOp } from '../ai/tools';
 import type { EditOp } from '../ai/editOps';
 import { useFlowStore } from './flowStore';
 import { useWorkspaceStore } from './workspaceStore';
@@ -66,26 +66,6 @@ function activeFlowName(): string {
   return (ir?.subflows ?? []).find((s) => s.id === activeFlowId)?.name ?? activeFlowId;
 }
 
-// Tên màn hình (tiếng Anh, cho AI biết bối cảnh) — CS có nhiều tab, TS là Flow Designer.
-const TAB_EN: Record<string, string> = {
-  flow: 'Flow Diagram',
-  announce: 'Announce List',
-  general: 'General Settings',
-  status: 'Status Settings',
-  clinicalDept: 'Clinical Department List',
-  courseList: 'Course List',
-};
-function screenDescriptor(): string {
-  const mode = useWorkspaceStore.getState().mode;
-  const { canvasTab } = useFlowStore.getState();
-  const flow = activeFlowName();
-  if (mode === 'cs') {
-    const tab = TAB_EN[canvasTab] ?? canvasTab;
-    return canvasTab === 'flow' ? `CS screen · ${tab} · ${flow}` : `CS screen · ${tab}`;
-  }
-  return `TS screen · Flow Designer · ${flow}`;
-}
-
 export const useAiChatStore = create<AiChatState>((set, get) => {
   const patchMsg = (id: string, patch: Partial<ChatMsg>) =>
     set({ messages: get().messages.map((m) => (m.id === id ? { ...m, ...patch } : m)) });
@@ -140,8 +120,14 @@ export const useAiChatStore = create<AiChatState>((set, get) => {
         .messages.filter((m) => !m.errorKey && (m.role === 'user' || m.role === 'assistant'))
         .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.text }));
 
-      const digest = buildFlowDigest(ir, activeFlowName());
-      const msgs = buildChatMessages(digest, screenDescriptor(), history);
+      // Bối cảnh RIÊNG theo màn đang mở (spec + context + tool khác nhau mỗi màn).
+      const screen = buildScreenContext(
+        useWorkspaceStore.getState().mode,
+        useFlowStore.getState().canvasTab,
+        ir,
+        activeFlowName(),
+      );
+      const msgs = buildChatMessages(screen.spec, screen.context, screen.screenName, history);
 
       activeController = new AbortController();
       const signal = activeController.signal;
@@ -150,7 +136,7 @@ export const useAiChatStore = create<AiChatState>((set, get) => {
 
       try {
         for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-          const res = await chatRaw(msgs, { tools: FLOW_TOOLS, signal });
+          const res = await chatRaw(msgs, { tools: screen.tools, signal });
           if (res.toolCalls.length === 0) {
             finalReply = res.content;
             break;

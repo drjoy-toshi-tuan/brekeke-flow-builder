@@ -2,95 +2,95 @@ import { NODE_TYPES, type NodeType } from '../ir/types';
 import type { EditOp } from './editOps';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tool-calling (Option 3): khai báo "công cụ" cho OpenAI. Model tự gọi tool (có
-// thể NHIỀU tool 1 lượt, nhiều vòng) để dựng thay đổi — schema do OpenAI ép nên
-// đáng tin hơn JSON tự do (xử lý được nối dây + nhiều node). App KHÔNG áp ngay: mỗi
-// lần model gọi tool, ta gom thành 1 op vào "giỏ" và trả về "queued" để giữ
-// human-in-the-loop (người dùng vẫn bấm Áp dụng/Bỏ sau).
+// Tool-calling (Option 3): khai báo "công cụ" cho OpenAI theo TỪNG MÀN (mỗi màn có
+// spec/thao tác khác nhau). Model tự gọi tool (nhiều tool/nhiều vòng) để dựng thay
+// đổi; tool chỉ GOM edit-ops vào giỏ (queued) để người dùng duyệt (human-in-the-loop).
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Các loại node AI được phép tạo (bỏ 'start' — điểm bắt đầu duy nhất).
-const CREATABLE_TYPES = NODE_TYPES.filter((t) => t !== 'start');
+const CREATABLE_TYPES = NODE_TYPES.filter((t) => t !== 'start') as unknown as string[];
 
-export const FLOW_TOOLS = [
-  {
-    type: 'function',
-    function: {
-      name: 'add_node',
-      description:
-        'Add a new node to the current flow. Use `ref` as a temporary id to connect this node in add_edge within the same turn. Put wording in data (announce node: {"text":"..."}, interaction node: {"announce":"..."}, openai node: {"prompt":"..."}).',
-      parameters: {
-        type: 'object',
-        properties: {
-          ref: { type: 'string', description: 'temporary reference id (e.g. "n1") to use in add_edge' },
-          nodeType: { type: 'string', enum: CREATABLE_TYPES as unknown as string[] },
-          label: { type: 'string', description: 'display name of the node' },
-          data: { type: 'object', description: 'node fields (text/announce/prompt/...)', additionalProperties: true },
-        },
-        required: ['ref', 'nodeType'],
+const TOOL_ADD_NODE = {
+  type: 'function',
+  function: {
+    name: 'add_node',
+    description:
+      'Add a new node to the current flow. Use `ref` as a temporary id to connect this node in add_edge within the same turn. Put wording in data (announce node: {"text":"..."}, interaction node: {"announce":"..."}, openai node: {"prompt":"..."}).',
+    parameters: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'temporary reference id (e.g. "n1") to use in add_edge' },
+        nodeType: { type: 'string', enum: CREATABLE_TYPES },
+        label: { type: 'string' },
+        data: { type: 'object', additionalProperties: true },
       },
+      required: ['ref', 'nodeType'],
     },
   },
-  {
-    type: 'function',
-    function: {
-      name: 'update_node',
-      description: 'Update an existing node (by its id from the flow digest). data is merged into current data.',
-      parameters: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-          label: { type: 'string' },
-          data: { type: 'object', additionalProperties: true },
-        },
-        required: ['id'],
+};
+
+const TOOL_UPDATE_NODE = {
+  type: 'function',
+  function: {
+    name: 'update_node',
+    description: 'Update an existing node (by its id from the context). data is merged into current data.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        label: { type: 'string' },
+        data: { type: 'object', additionalProperties: true },
       },
+      required: ['id'],
     },
   },
-  {
-    type: 'function',
-    function: {
-      name: 'remove_node',
-      description: 'Remove an existing node (by id). Its edges are removed too.',
-      parameters: {
-        type: 'object',
-        properties: { id: { type: 'string' } },
-        required: ['id'],
+};
+
+const TOOL_REMOVE_NODE = {
+  type: 'function',
+  function: {
+    name: 'remove_node',
+    description: 'Remove an existing node (by id). Its edges are removed too.',
+    parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+  },
+};
+
+const TOOL_ADD_EDGE = {
+  type: 'function',
+  function: {
+    name: 'add_edge',
+    description:
+      'Connect two nodes. source/target are existing node ids OR the `ref` of a node created by add_node in this turn. condition/label optional.',
+    parameters: {
+      type: 'object',
+      properties: {
+        source: { type: 'string' },
+        target: { type: 'string' },
+        sourceHandle: { type: 'string' },
+        condition: { type: 'string' },
+        label: { type: 'string' },
       },
+      required: ['source', 'target'],
     },
   },
-  {
-    type: 'function',
-    function: {
-      name: 'add_edge',
-      description:
-        'Connect two nodes. source/target are existing node ids OR the `ref` of a node created by add_edge in this turn. condition/label are optional (branch value/label).',
-      parameters: {
-        type: 'object',
-        properties: {
-          source: { type: 'string' },
-          target: { type: 'string' },
-          sourceHandle: { type: 'string', description: 'branch output id, e.g. "yes"/"no" (optional)' },
-          condition: { type: 'string' },
-          label: { type: 'string' },
-        },
-        required: ['source', 'target'],
-      },
+};
+
+const TOOL_REMOVE_EDGE = {
+  type: 'function',
+  function: {
+    name: 'remove_edge',
+    description: 'Remove the connection between two nodes (by source and target ids).',
+    parameters: {
+      type: 'object',
+      properties: { source: { type: 'string' }, target: { type: 'string' } },
+      required: ['source', 'target'],
     },
   },
-  {
-    type: 'function',
-    function: {
-      name: 'remove_edge',
-      description: 'Remove the connection between two nodes (by source and target ids).',
-      parameters: {
-        type: 'object',
-        properties: { source: { type: 'string' }, target: { type: 'string' } },
-        required: ['source', 'target'],
-      },
-    },
-  },
-];
+};
+
+// Bộ tool theo màn.
+export const FLOW_TOOLS = [TOOL_ADD_NODE, TOOL_UPDATE_NODE, TOOL_REMOVE_NODE, TOOL_ADD_EDGE, TOOL_REMOVE_EDGE];
+// Màn Announce List: CHỈ sửa văn lời (wording) của node có sẵn.
+export const ANNOUNCE_TOOLS = [TOOL_UPDATE_NODE];
 
 const asStr = (v: unknown): string | undefined =>
   typeof v === 'string' && v.trim() ? v.trim() : undefined;
