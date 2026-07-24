@@ -40,6 +40,7 @@ import { PermissionsModal } from './PermissionsModal';
 import { useWorkspaceStore } from '../store/workspaceStore';
 import { usePermStore } from '../store/permStore';
 import { HoverLabelButton } from '../components/HoverTip';
+import { NewBadgeIcon } from '../components/NewBadgeIcon';
 import { gdErrorKey } from '../drive/errors';
 import { driveRootFolderId, parseVersionFromName, versionFileName } from '../drive/config';
 import { parseFlowMeta, updateFlowMeta } from '../ir/flowMeta';
@@ -1740,10 +1741,10 @@ function DriveInner({
                               )}
                               {isLatest && (
                                 <span
-                                  className="inline-flex shrink-0 items-center text-[#38bdf8]"
+                                  className="inline-flex shrink-0 items-center text-amber-600 dark:text-amber-300"
                                   title={t('dmLatestBadge')}
                                 >
-                                  <Icon icon="mdi:new-box" width={20} height={20} />
+                                  <NewBadgeIcon width={20} height={20} />
                                 </span>
                               )}
                             </div>

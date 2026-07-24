@@ -89,8 +89,15 @@ export function FlowActionsBar() {
     else setShowTsExportConfirm(true);
   };
 
-  // Nhãn nút Lưu đổi theo trạng thái (đang lưu / bình thường).
-  const saveLabel = saving ? t('fmSaving') : t('fmSaveToRepo');
+  // Nhãn nút Lưu đổi theo trạng thái (đang lưu / bình thường) — màn CS lưu là lưu
+  // file thiết kế (設計書), không phải flow, nên dùng bộ nhãn csSave* riêng.
+  const saveLabel = csMode
+    ? saving
+      ? t('csSaving')
+      : t('csSaveToRepo')
+    : saving
+      ? t('fmSaving')
+      : t('fmSaveToRepo');
 
   return (
     <div className="flex items-center gap-0.5">
