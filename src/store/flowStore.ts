@@ -56,6 +56,20 @@ export interface NodeDraft {
 // là UI bảng/form thường (Announce List / General Settings / Status Settings).
 export type CanvasTab = 'flow' | 'announce' | 'general' | 'status' | 'clinicalDept' | 'courseList';
 
+// Danh sách tab hợp lệ + chuẩn hoá 1 chuỗi bất kỳ (vd đọc từ URL) về CanvasTab;
+// giá trị lạ/rỗng -> 'flow'. Dùng cho routing (#/cs/file/{id}/{tab}).
+export const CANVAS_TABS: readonly CanvasTab[] = [
+  'flow',
+  'announce',
+  'general',
+  'status',
+  'clinicalDept',
+  'courseList',
+];
+export function normalizeCanvasTab(x: string | null | undefined): CanvasTab {
+  return (CANVAS_TABS as readonly string[]).includes(x ?? '') ? (x as CanvasTab) : 'flow';
+}
+
 interface FlowState {
   // ir.nodes/edges là graph ĐANG MỞ (main flow hoặc 1 sub flow — xem activeFlowId).
   // Khi đang ở sub flow: graph main tạm cất ở mainStash; slot của sub flow trong

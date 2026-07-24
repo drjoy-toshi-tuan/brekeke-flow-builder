@@ -9,7 +9,7 @@ import { WorkspaceStamp } from '../ui/WorkspaceStamp';
 import { useToast } from '../ui/toast';
 import { useAuth } from '../auth/useAuth';
 import { GOOGLE_CLIENT_ID } from '../auth/config';
-import { useFlowStore } from '../store/flowStore';
+import { useFlowStore, normalizeCanvasTab } from '../store/flowStore';
 import { useFileStore } from '../store/fileStore';
 import { useDriveAuth } from '../drive/useDriveAuth';
 import {
@@ -439,6 +439,8 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
 
   const [facilities, setFacilities] = useState<FacilityNode[]>([]);
   const [loading, setLoading] = useState(false);
+  // Đã nạp xong cây ít nhất 1 lần (để deep-link mở file không hiểu nhầm "chưa tải" là "không thấy").
+  const [loadedOnce, setLoadedOnce] = useState(false);
   const [listErrorKey, setListErrorKey] = useState<TKey | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -502,6 +504,7 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
       if (!handledAsExpired(e)) setListErrorKey(gdErrorKey(e));
     } finally {
       setLoading(false);
+      setLoadedOnce(true);
     }
     // onAuthInvalid là action zustand ổn định — giữ deps [token, rootFolderId]
     // (đổi bộ phận CS/TS -> đổi kho -> load lại cây). (xem FileManagerScreen).
@@ -656,13 +659,23 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
   };
 
   // Mở 1 version lên canvas. Giữ busy=true khi thành công (đang điều hướng đi).
-  const openVersion = async (f: FacilityNode, s: ScenarioNode, ver: VersionNode) => {
+  // tab: chỉ dùng cho deep-link (#/…/file/{id}/{tab}) — mở thẳng vào đúng tab (CS).
+  const openVersion = async (
+    f: FacilityNode,
+    s: ScenarioNode,
+    ver: VersionNode,
+    tab?: string | null,
+  ) => {
     if (busy) return;
     setBusy(true);
     setActionError(null);
     try {
       const text = await getFileText(token, ver.fileId);
-      await loadYaml(text);
+      await loadYaml(text); // loadYaml reset canvasTab về 'flow'
+      // Áp tab deep-link TRƯỚC openFile để tránh nhấp nháy (RouteSync thấy khớp là thôi).
+      // TS không có tab -> luôn 'flow'.
+      const nt = csMode ? normalizeCanvasTab(tab) : 'flow';
+      if (csMode && nt !== 'flow') useFlowStore.getState().setCanvasTab(nt);
       openFile({
         path: `${f.name}/${s.name}`,
         name: versionFileName(s.name, ver.v),
@@ -670,12 +683,41 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
         driveFolderId: s.id,
         version: ver.v,
       });
+      // Phản chiếu vào URL: #/{mode}/file/{id}[/tab].
+      useWorkspaceStore
+        .getState()
+        .navigate({ screen: 'file', fileId: ver.fileId, tab: nt === 'flow' ? null : nt });
     } catch (e) {
       setBusy(false);
       if (handledAsExpired(e)) return;
       setActionError(e instanceof DriveApiError ? t(gdErrorKey(e)) : t('fmUploadInvalid'));
     }
   };
+
+  // Deep-link: URL #/{mode}/file/{id}[/tab] -> tự mở version tương ứng sau khi cây
+  // đã nạp xong (màn này chỉ hiện khi CHƯA mở file nào). Không thấy id -> báo lỗi
+  // và về flow-management. Ref chặn mở lặp; keyed theo fileId.
+  const deepLinkTriedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!loadedOnce || listErrorKey) return;
+    const { screen, fileId, tab } = useWorkspaceStore.getState();
+    if (screen !== 'file' || !fileId) return;
+    if (deepLinkTriedRef.current === fileId) return;
+    deepLinkTriedRef.current = fileId;
+    for (const f of facilities) {
+      for (const s of f.scenarios) {
+        const ver = s.versions.find((v) => v.fileId === fileId);
+        if (ver) {
+          void openVersion(f, s, ver, tab);
+          return;
+        }
+      }
+    }
+    showToast(t('gdErrNotFound'));
+    useWorkspaceStore.getState().navigate({ screen: 'flow-management', fileId: null, tab: null });
+    // openVersion/showToast/t ổn định trong vòng đời màn; theo dõi cây + trạng thái nạp.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [facilities, loadedOnce, listErrorKey]);
 
   // Duplicate = tạo version MỚI (V{max+1}) với nội dung bản được chọn — không sửa
   // lịch sử (cũng là cách "khôi phục" một bản cũ).
@@ -767,6 +809,7 @@ function DriveLoaded({ token, onAuthInvalid }: { token: string; onAuthInvalid: (
         driveFolderId: scen.id,
         version: maxV + 1,
       });
+      useWorkspaceStore.getState().navigate({ screen: 'file', fileId: file.id, tab: null });
     } catch (e) {
       setBusy(false);
       if (handledAsExpired(e)) return;

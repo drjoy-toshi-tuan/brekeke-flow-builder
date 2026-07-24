@@ -13,6 +13,7 @@ import { ConfirmDeleteModal } from './components/ConfirmDeleteModal';
 import { CanvasTabs } from './components/tabs/CanvasTabs';
 import { TsCanvasTabs } from './components/tabs/TsCanvasTabs';
 import { AiChatPanel } from './components/AiChatPanel';
+import { RouteSync } from './components/RouteSync';
 import { AnnounceListTab } from './components/tabs/AnnounceListTab';
 import { GeneralSettingsTab } from './components/tabs/GeneralSettingsTab';
 import { StatusSettingsTab } from './components/tabs/StatusSettingsTab';
@@ -43,6 +44,8 @@ function Gate() {
       {/* Tự gia hạn token Drive chạy nền (cấp quyền 1 lần là đủ) — cần GIS provider
           nên chỉ mount khi có Client ID và không phải chế độ demo. */}
       {GOOGLE_CLIENT_ID && !user.demo && <DriveTokenKeeper />}
+      {/* Đồng bộ URL ↔ file/tab đang mở (đóng/chuyển file + tab khi hash đổi). */}
+      <RouteSync />
       {!currentFile ? <DriveManagerScreen /> : <FlowApp />}
     </>
   );

@@ -78,6 +78,7 @@ export function HeaderMenu() {
       if (!ok) return;
     }
     closeFile();
+    useWorkspaceStore.getState().navigate({ screen: 'flow-management', fileId: null, tab: null });
     setOpen(false);
   };
 
